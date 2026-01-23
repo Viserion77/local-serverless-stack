@@ -1,5 +1,7 @@
 # Serverless Orchestrator Plugin
 
+[![npm version](https://img.shields.io/npm/v/lss-serverless-plugin.svg)](https://www.npmjs.com/package/lss-serverless-plugin)
+
 Automatically register your Serverless microservices with the Local Serverless Stack Local Orchestrator.
 
 ## Installation

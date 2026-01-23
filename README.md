@@ -1,5 +1,7 @@
 # Local Serverless Stack (LSS)
 
+[![npm version](https://img.shields.io/npm/v/local-serverless-stack.svg)](https://www.npmjs.com/package/local-serverless-stack)
+
 **Local control plane for serverless development with LocalStack orchestration**
 
 LSS provides a unified local development environment for serverless microservices, eliminating the need to run separate LocalStack instances for each service.
@@ -53,6 +55,12 @@ local-serverless-stack/
 ### Installation
 
 ```bash
+npm install -g local-serverless-stack
+```
+
+Or install locally:
+
+```bash
 cd /path/to/local-serverless-stack
 npm install
 npm run build
@@ -60,6 +68,16 @@ npm link
 ```
 
 The `npm link` command makes the `lss` CLI available globally via `npx`.
+
+### Serverless Framework Plugin
+
+To automatically register your microservices with LSS, install the Serverless plugin:
+
+```bash
+npm install --save-dev lss-serverless-plugin
+```
+
+See the [plugin documentation](packages/serverless-plugin/README.md) for configuration details.
 
 ## CLI Commands
 
