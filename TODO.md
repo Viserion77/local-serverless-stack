@@ -74,7 +74,6 @@
 ## 📝 Notes
 
 - Current version is private (not published to npm)
-- Used primarily in SimplificaMais project
 - Breaking changes may occur before v1.0.0
 - Contributions welcome via pull requests
 

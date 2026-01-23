@@ -520,14 +520,14 @@ This project is currently in active development and is being used internally. It
 - ✅ Web dashboard (Vue 3)
 - ✅ npm link support for local development
 
-## Use Case: SimplificaMais
+## Use Case Example
 
-LSS is currently being used in the SimplificaMais monorepo to manage 15+ microservices with a single LocalStack instance. This eliminates the complexity of running multiple LocalStack containers and provides a unified development experience.
+LSS can be used in monorepo setups to manage 15+ microservices with a single LocalStack instance. This eliminates the complexity of running multiple LocalStack containers and provides a unified development experience.
 
-Integration details:
-- Located at `/workspaces/local-serverless-stack` (sibling to `/workspaces/app`)
-- Linked via `npm link` for seamless updates during development
-- Plugin installed in microservices like `auth`, `app`, `financial`, etc.
+Integration approach:
+- Place LSS in a dedicated directory (e.g., `/workspaces/local-serverless-stack`)
+- Use `npm link` for local development and seamless updates
+- Install the plugin in each microservice that needs AWS resource orchestration
 - Orchestrator managed via `npx lss start/stop` commands
 
 ## Contributing

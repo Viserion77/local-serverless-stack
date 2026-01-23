@@ -19,7 +19,7 @@ coverage/
 .nyc_output/
 
 # LocalStack persistence
-simplificamais-localstack-data/
+localstack-data/
 
 # Build outputs
 packages/*/dist/
