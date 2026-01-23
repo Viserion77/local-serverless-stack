@@ -1,0 +1,89 @@
+{
+  "name": "local-serverless-stack",
+  "version": "0.0.1",
+  "description": "Local control plane for serverless development with LocalStack orchestration",
+  "author": "LSS Contributors",
+  "license": "MIT",
+  "bin": {
+    "lss": "./bin/cli.js"
+  },
+  "keywords": [
+    "serverless",
+    "localstack",
+    "lambda",
+    "development",
+    "orchestrator",
+    "aws",
+    "local"
+  ],
+  "files": [
+    "bin/",
+    "dist/",
+    "packages/serverless-plugin/dist/",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run server:build && npm run ui:build && npm run plugin:build",
+    "server:dev": "tsx watch src/server/index.ts",
+    "server:build": "tsc --project src/server/tsconfig.json",
+    "ui:dev": "cd src/ui && npm run dev",
+    "ui:build": "cd src/ui && npm run build",
+    "plugin:build": "npm run build -w packages/serverless-plugin",
+    "dev": "concurrently \"npm run server:dev\" \"npm run ui:dev\"",
+    "setup": "npm install && cd src/ui && npm install",
+    "prepublishOnly": "npm run build",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:integration": "jest tests/integration",
+    "test:cli": "jest tests/integration/cli.test.ts",
+    "test:orchestrator": "jest tests/integration/orchestrator.test.ts",
+    "test:plugin": "jest tests/integration/plugin.test.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.709.0",
+    "@aws-sdk/client-lambda": "^3.709.0",
+    "@aws-sdk/client-sns": "^3.709.0",
+    "@aws-sdk/client-sqs": "^3.709.0",
+    "@aws-sdk/lib-dynamodb": "^3.709.0",
+    "adm-zip": "^0.5.16",
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.2",
+    "@types/adm-zip": "^0.5.7",
+    "@types/cors": "^2.8.17",
+    "@types/express": "^5.0.0",
+    "@types/jest": "^29.5.14",
+    "@types/node": "^20.19.30",
+    "@typescript-eslint/eslint-plugin": "^8.53.1",
+    "@typescript-eslint/parser": "^8.53.1",
+    "concurrently": "^9.1.2",
+    "eslint": "^9.39.2",
+    "eslint-plugin-vue": "^10.7.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.4.6",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.7.3",
+    "typescript-eslint": "^8.53.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/your-org/local-serverless-stack.git"
+  },
+  "bugs": {
+    "url": "https://github.com/your-org/local-serverless-stack/issues"
+  },
+  "homepage": "https://github.com/your-org/local-serverless-stack#readme"
+}

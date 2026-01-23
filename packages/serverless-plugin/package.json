@@ -1,0 +1,35 @@
+{
+  "name": "lss-serverless-plugin",
+  "version": "0.0.1",
+  "description": "Serverless plugin to auto-register services with Local Serverless Stack (LSS) Orchestrator",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "prepublishOnly": "npm run build"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "peerDependencies": {
+    "serverless": ">=3.0.0"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.5",
+    "typescript": "^5.7.3"
+  },
+  "keywords": [
+    "serverless",
+    "plugin",
+    "orchestrator",
+    "localstack",
+    "local-serverless-stack",
+    "lss"
+  ],
+  "author": "LSS Contributors",
+  "license": "MIT"
+}

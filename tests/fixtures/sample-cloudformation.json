@@ -1,0 +1,70 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Test CloudFormation template for LSS integration tests",
+  "Resources": {
+    "TestDynamoTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": "Test.Users",
+        "KeySchema": [
+          {
+            "AttributeName": "userId",
+            "KeyType": "HASH"
+          }
+        ],
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "userId",
+            "AttributeType": "S"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "StreamSpecification": {
+          "StreamEnabled": true,
+          "StreamViewType": "NEW_AND_OLD_IMAGES"
+        }
+      }
+    },
+    "TestSQSQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "QueueName": "test-integration-queue",
+        "VisibilityTimeout": 300
+      }
+    },
+    "TestSQSQueueDLQ": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "QueueName": "test-integration-queue-dlq"
+      }
+    },
+    "TestSNSTopic": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {
+        "TopicName": "test-integration-topic"
+      }
+    },
+    "TestLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "test-integration-handler",
+        "Handler": "index.handler",
+        "Runtime": "nodejs20.x",
+        "Role": "arn:aws:iam::000000000000:role/test-role"
+      }
+    },
+    "TestEventSourceMapping": {
+      "Type": "AWS::Lambda::EventSourceMapping",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "TestLambdaFunction"
+        },
+        "EventSourceArn": {
+          "Fn::GetAtt": ["TestSQSQueue", "Arn"]
+        },
+        "BatchSize": 10,
+        "Enabled": true
+      }
+    }
+  }
+}

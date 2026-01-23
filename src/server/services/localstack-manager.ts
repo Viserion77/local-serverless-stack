@@ -1,0 +1,157 @@
+import { spawn, ChildProcess, exec } from 'child_process';
+import { promisify } from 'util';
+
+const execAsync = promisify(exec);
+
+export class LocalStackManager {
+  private static instance: LocalStackManager;
+  private process: ChildProcess | null = null;
+  private _isRunning = false;
+  private endpoint = 'http://localhost:4566';
+  private readonly containerName = 'lss-localstack';
+
+  private constructor() {}
+
+  static getInstance(): LocalStackManager {
+    if (!LocalStackManager.instance) {
+      LocalStackManager.instance = new LocalStackManager();
+    }
+    return LocalStackManager.instance;
+  }
+
+  async start(): Promise<void> {
+    if (this._isRunning) {
+      console.log('⚠️  LocalStack already running');
+      return;
+    }
+
+    try {
+      // Check if docker is available
+      await execAsync('docker ps -q', { timeout: 5000 });
+    } catch {
+      throw new Error('Docker is not available or not running. Please start Docker first.');
+    }
+
+    return new Promise((resolve, reject) => {
+      console.log('🔄 Starting LocalStack...');
+
+      // Start LocalStack via Docker
+      this.process = spawn('docker', [
+        'run',
+        '--rm',
+        '-p',
+        '4566:4566',
+        '-p',
+        '4571:4571',
+        '-v',
+        'lss-localstack-data:/var/lib/localstack',
+        '-v',
+        '/var/run/docker.sock:/var/run/docker.sock',
+        '--name',
+        this.containerName,
+        '-e',
+        'SERVICES=dynamodb,sqs,sns,lambda',
+        '-e',
+        'LAMBDA_EXECUTOR=local',
+        '-e',
+        'PERSISTENCE=1',
+        '-e',
+        'DEBUG=0',
+        'localstack/localstack:latest',
+      ]);
+
+      let stderr = '';
+      let stdout = '';
+      this.process.stderr?.on('data', data => {
+        stderr += data.toString();
+        console.log(`[LocalStack stderr] ${data.toString().trim()}`);
+      });
+      this.process.stdout?.on('data', data => {
+        stdout += data.toString();
+        console.log(`[LocalStack stdout] ${data.toString().trim()}`);
+      });
+
+      this.process.on('error', error => {
+        console.error('❌ Failed to start LocalStack process:', error);
+        reject(error);
+      });
+
+      this.process.on('close', code => {
+        if (code !== 0) {
+          console.error(`Container exited with code ${code}`);
+          console.error('stderr:', stderr);
+          console.error('stdout:', stdout);
+        }
+      });
+
+      // Wait for LocalStack to be ready
+      this.waitForReady()
+        .then(() => {
+          this._isRunning = true;
+          console.log('✅ LocalStack ready');
+          resolve();
+        })
+        .catch(err => {
+          console.error('LocalStack startup error:', err.message);
+          this.process?.kill();
+          reject(err);
+        });
+    });
+  }
+
+  async stop(): Promise<void> {
+    if (!this._isRunning) {
+      return;
+    }
+
+    console.log('🛑 Stopping LocalStack...');
+
+    try {
+      await execAsync(`docker stop ${this.containerName}`, { timeout: 10000 });
+      this._isRunning = false;
+      this.process = null;
+      console.log('✅ LocalStack stopped');
+    } catch (error) {
+      console.error('⚠️  Error stopping LocalStack:', error instanceof Error ? error.message : 'Unknown error');
+      this._isRunning = false;
+    }
+  }
+
+  private async waitForReady(maxAttempts = 120): Promise<void> {
+    for (let i = 0; i < maxAttempts; i++) {
+      try {
+        const response = await fetch(`${this.endpoint}/_localstack/health`);
+        if (response.ok) {
+          console.log(`✓ LocalStack is responsive (attempt ${i + 1}/${maxAttempts})`);
+          return;
+        }
+      } catch {
+        // Ignore fetch errors during startup
+        if (i % 20 === 0) {
+          console.log(`⏳ Waiting for LocalStack... (attempt ${i + 1}/${maxAttempts})`);
+        }
+      }
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+    throw new Error('LocalStack failed to start in time (120s timeout). Check Docker and container logs.');
+  }
+
+  isRunning(): boolean {
+    return this._isRunning;
+  }
+
+  getEndpoint(): string {
+    return this.endpoint;
+  }
+
+  getConfig() {
+    return {
+      endpoint: this.endpoint,
+      region: process.env.AWS_REGION || 'us-east-1',
+      credentials: {
+        accessKeyId: process.env.LOCALSTACK_ACCESS_KEY_ID || 'test',
+        secretAccessKey: process.env.LOCALSTACK_SECRET_ACCESS_KEY || 'test',
+      },
+    };
+  }
+}
