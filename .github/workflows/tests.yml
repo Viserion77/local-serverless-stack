@@ -78,8 +78,14 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Check TypeScript
-        run: npx tsc --noEmit
+      - name: Run ESLint
+        run: npm run lint
+
+      - name: Check TypeScript (server)
+        run: npx tsc --project src/server/tsconfig.json --noEmit
+
+      - name: Check TypeScript (plugin)
+        run: npx tsc --project packages/serverless-plugin/tsconfig.json --noEmit
 
   build:
     name: Build Check
