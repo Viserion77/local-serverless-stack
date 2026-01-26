@@ -140,6 +140,7 @@ export class ResourceProvisioner {
   } catch (error) {
     const errorName = error instanceof Error && 'name' in error ? (error as {name: string}).name : '';
     if (errorName === 'ResourceInUseException') {
+        // Table already exists, ignore
       } else {
         throw error;
       }
@@ -413,7 +414,7 @@ export const handler = async (event, context) => {
           return queueArn;
         }
       }
-    } catch (error) {
+    } catch {
       // Continue to try other resource types
     }
 
@@ -429,7 +430,7 @@ export const handler = async (event, context) => {
         // For now, we'll construct a generic stream ARN
         return `arn:aws:dynamodb:us-east-1:000000000000:table/${tableMatch}/stream/NEW_AND_OLD_IMAGES`;
       }
-    } catch (error) {
+    } catch (_error) {
       // Continue to try other resource types
     }
 
@@ -444,7 +445,7 @@ export const handler = async (event, context) => {
       if (topicMatch?.TopicArn) {
         return topicMatch.TopicArn;
       }
-    } catch (error) {
+    } catch (_error) {
       // Continue
     }
 

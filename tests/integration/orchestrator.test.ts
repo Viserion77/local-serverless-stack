@@ -1,6 +1,5 @@
-import { get, post, del, FetchError } from './fetch-helpers';
+import { get, post, del } from './fetch-helpers';
 import { TestUtils } from '../helpers/test-utils';
-import * as fs from 'fs/promises';
 
 const ORCHESTRATOR_URL = 'http://localhost:3100';
 

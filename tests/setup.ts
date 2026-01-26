@@ -14,7 +14,7 @@ beforeAll(async () => {
   // Ensure orchestrator is stopped before tests
   try {
     await execAsync('npx lss stop 2>/dev/null || true');
-  } catch (error) {
+  } catch {
     // Ignore errors - orchestrator might not be running
   }
   
@@ -29,14 +29,14 @@ afterAll(async () => {
   // Stop orchestrator if running
   try {
     await execAsync('npx lss stop 2>/dev/null || true');
-  } catch (error) {
+  } catch {
     // Ignore errors
   }
   
   // Cleanup any test files
   try {
     await execAsync('rm -f /tmp/lss-test-*.json 2>/dev/null || true');
-  } catch (error) {
+  } catch {
     // Ignore errors
   }
 });
