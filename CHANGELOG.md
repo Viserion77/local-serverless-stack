@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.3] - 2026-02-01
+
+### Fixed
+- Removed `postinstall` script that caused installation errors in consuming projects
+- The script attempted to access `src/ui` directory which doesn't exist in published package
+
+### Changed
+- Simplified Lambda proxy code (removed verbose logging)
+- Updated CI workflow to skip Docker-dependent tests in GitHub Actions
+- CI now properly checks version changes for both root and plugin packages independently
+
+### Added
+- Development guide (DEVELOPMENT.md)
+- awpaki dependency for future use in JSON parsing and parameter validation
+
+## [0.0.2] - 2026-02-01
+
+### Added
+- TypeScript support with tsx for development mode
+- Lint and build check in CI workflow
+- NPM badges in README
+- Plugin documentation reference in main README
+
+### Fixed
+- Top-level await issue in routes/services.ts (lazy cache initialization)
+- ESLint warnings (unused variables, empty blocks)
+- TypeScript compilation errors
+
 ## [0.0.1] - 2026-01-23
 
 ### Added
@@ -90,6 +118,51 @@ None (initial release)
 
 ### Migration Guide
 Not applicable (initial release)
+
+---
+
+## [0.0.3] - 2026-02-01
+
+### Changed
+
+- **Dependency Update**: Upgraded `awpaki` to version 1.3.2 for improved performance and compatibility
+- **Enhanced CI/CD**: Improved version change logging in publish workflow for better release visibility
+- **Workflow Optimization**: Simplified job dependencies in publish workflow for faster pipeline execution
+
+### Fixed
+
+- Bug fixes and stability improvements
+
+---
+
+## [0.0.2] - 2026-02-01
+
+### Added
+
+- **Lazy Cache Initialization**: Services router now implements lazy cache initialization for better resource management
+- **ESLint Integration**: Added ESLint checks to CI pipeline for code quality assurance
+- **TypeScript Validation**: Enhanced TypeScript type checking in CI/CD workflow
+- **DevContainer Support**: Added .devcontainer configuration for consistent development environment
+- **Dependabot Configuration**: Automated dependency updates and security patch management
+
+### Changed
+
+- **Build Pipeline**: Updated build script for improved compilation process
+- **TypeScript Configuration**: Adjusted TypeScript settings for stricter type checking
+- **Error Handling**: Simplified error handling in resource provisioner for better debugging
+- **Documentation**: Enhanced README and plugin documentation for clarity
+
+### Improved
+
+- Project references and documentation clarity
+- Integration test prerequisites documentation
+- Overall code organization and maintainability
+
+### Refactored
+
+- Removed unused imports throughout the codebase
+- Simplified test setup for better maintainability
+- Updated CI workflow configuration and naming
 
 ---
 

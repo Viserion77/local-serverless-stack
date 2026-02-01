@@ -28,7 +28,6 @@
     "packages/*"
   ],
   "scripts": {
-    "postinstall": "cd src/ui && npm install",
     "build": "npm run ui:build && npm run server:build && npm run plugin:build",
     "server:dev": "tsx watch src/server/index.ts",
     "server:build": "tsc --project src/server/tsconfig.json",
