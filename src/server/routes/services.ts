@@ -12,12 +12,20 @@ const cache = new CacheManager();
 const provisioner = new ResourceProvisioner();
 const processManager = new ProcessManager();
 
-// Initialize cache
-await cache.init();
+// Initialize cache on first request (lazy init)
+let cacheInitialized = false;
+async function ensureCacheInit() {
+  if (!cacheInitialized) {
+    await cache.init();
+    cacheInitialized = true;
+  }
+}
 
 // Register a service
 router.post('/register', async (req: Request, res: Response) => {
   try {
+    await ensureCacheInit();
+    
     const { servicePath, invokePort } = req.body;
 
     if (!servicePath) {
@@ -80,6 +88,7 @@ router.post('/register', async (req: Request, res: Response) => {
 // List all services
 router.get('/', async (_req: Request, res: Response) => {
   try {
+    await ensureCacheInit();
     const services = await cache.listServices();
     return res.json(services);
   } catch (error) {
@@ -91,6 +100,7 @@ router.get('/', async (_req: Request, res: Response) => {
 // Get service details
 router.get('/:name', async (req: Request, res: Response) => {
   try {
+    await ensureCacheInit();
     const serviceName = req.params.name;
     if (!serviceName || typeof serviceName !== 'string' || serviceName.includes('/') || serviceName.includes('..')) {
       return res.status(400).json({ error: 'Invalid service name' });
@@ -120,6 +130,7 @@ router.get('/:name', async (req: Request, res: Response) => {
 // Delete service
 router.delete('/:name', async (req: Request, res: Response) => {
   try {
+    await ensureCacheInit();
     const serviceName = req.params.name;
     if (!serviceName || typeof serviceName !== 'string' || serviceName.includes('/') || serviceName.includes('..')) {
       return res.status(400).json({ error: 'Invalid service name' });
@@ -169,6 +180,7 @@ router.patch('/:name/status', async (req: Request, res: Response) => {
 // Start a service process (serverless offline / npm start)
 router.post('/:name/start', async (req: Request, res: Response) => {
   try {
+    await ensureCacheInit();
     const serviceName = req.params.name;
     if (!serviceName || typeof serviceName !== 'string' || serviceName.includes('/') || serviceName.includes('..')) {
       return res.status(400).json({ error: 'Invalid service name' });
@@ -208,6 +220,7 @@ router.post('/:name/start', async (req: Request, res: Response) => {
 // Stop a service process
 router.post('/:name/stop', async (req: Request, res: Response) => {
   try {
+    await ensureCacheInit();
     const serviceName = req.params.name;
     if (!serviceName || typeof serviceName !== 'string' || serviceName.includes('/') || serviceName.includes('..')) {
       return res.status(400).json({ error: 'Invalid service name' });
@@ -231,6 +244,7 @@ router.post('/:name/stop', async (req: Request, res: Response) => {
 // Fetch logs for a running service
 router.get('/:name/logs', async (req: Request, res: Response) => {
   try {
+    await ensureCacheInit();
     const serviceName = req.params.name;
     if (!serviceName || typeof serviceName !== 'string' || serviceName.includes('/') || serviceName.includes('..')) {
       return res.status(400).json({ error: 'Invalid service name' });
