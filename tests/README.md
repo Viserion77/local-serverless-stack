@@ -65,10 +65,12 @@ npm run test:coverage
 
 Before running tests:
 
-1. **Docker must be running** (for LocalStack)
+1. **Docker must be running** (for LocalStack) - Required only for orchestrator.test.ts
 2. **Ports 3100 and 4566 must be available**
 3. **Build the project**: `npm run build`
 4. **Install dependencies**: `npm install`
+
+**Note**: By default, `orchestrator.test.ts` is skipped because it requires LocalStack/Docker. To enable it, remove `.skip` from the describe block.
 
 ## Test Suites
 
@@ -85,7 +87,14 @@ Tests all CLI commands:
 - ✅ PID file management
 - ✅ Process lifecycle
 
-### 2. Orchestrator API Tests (`orchestrator.test.ts`)
+### 2. Orchestrator API Tests (`orchestrator.test.ts`) - **SKIPPED BY DEFAULT**
+
+**⚠️ Requires Docker/LocalStack running**
+
+To run these tests:
+1. Ensure Docker is running
+2. Remove `.skip` from `describe.skip` in orchestrator.test.ts
+3. Run `npm test`
 
 Tests the orchestrator REST API:
 
