@@ -5,13 +5,15 @@ import { fileURLToPath } from 'url';
 import { servicesRouter, processManager } from './routes/services.js';
 import { resourcesRouter } from './routes/resources.js';
 import { LocalStackManager } from './services/localstack-manager.js';
+import { ConfigManager } from './services/config-manager.js';
 import { startDynamoProxy } from './dev/dynamo-proxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
-const PORT = process.env.PORT || 3100;
+const configManager = ConfigManager.getInstance();
+const PORT = configManager.getDashboardPort();
 
 // Middleware
 app.use(cors());
@@ -51,14 +53,14 @@ async function start() {
       console.log(`✅ LocalStack running on ${localstack.getEndpoint()}`);
     });
 
-    // Optional temporary DynamoDB proxy (port 8000) -> LocalStack (4566)
-    // Enable by setting ENABLE_DYNAMO_PROXY=true|1
-    const DYNAMO_PROXY_ENABLED =
-      String(process.env.ENABLE_DYNAMO_PROXY || '').toLowerCase() === 'true' || process.env.ENABLE_DYNAMO_PROXY === '1';
-    if (DYNAMO_PROXY_ENABLED) {
-      const port = Number(process.env.DYNAMO_PROXY_PORT || 8000);
-      startDynamoProxy(localstack.getEndpoint(), port);
+    // Optional DynamoDB proxy
+    if (configManager.isEnableDynamoProxy()) {
+      const proxyPort = configManager.getDynamoProxyPort();
+      startDynamoProxy(localstack.getEndpoint(), proxyPort);
     }
+
+    // Print configuration summary
+    configManager.printSummary();
   } catch (error) {
     console.error('❌ Failed to start server:', error);
     process.exit(1);

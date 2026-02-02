@@ -22,11 +22,6 @@
 
 ### Medium Priority
 
-- [ ] **Configuration File Support**
-  - `lss.config.json` or `.lssrc` for project settings
-  - Custom ports, LocalStack endpoint, etc.
-  - Per-service configuration overrides
-
 - [ ] **Enhanced CLI**
   - `npx lss restart` command
   - `npx lss list` to show registered services

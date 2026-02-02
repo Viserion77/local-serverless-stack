@@ -8,6 +8,9 @@ interface ServerlessInstance {
   service?: {
     service?: string;
     custom?: Record<string, any>;
+    provider?: {
+      region?: string;
+    };
   };
   utils?: {
     log?: {
@@ -83,12 +86,17 @@ class ServerlessOrchestratorPlugin {
 
     const servicePath = this.serverless.config.servicePath;
     const serviceName = this.serverless.service?.service || this.serverless.config.service || 'unknown';
+    const region = this.serverless.service?.provider?.region; // Don't use fallback, let orchestrator handle it
 
     // Extract invoke port from serverless-offline configuration
     const serverlessOfflineConfig = this.serverless.service?.custom?.['serverless-offline'];
     const invokePort = serverlessOfflineConfig?.lambdaPort;
 
-    this.log(`Registering service "${serviceName}" with orchestrator at ${this.orchestratorUrl}...`, 'info');
+    if (region) {
+      this.log(`Registering service "${serviceName}" (region: ${region} from Serverless Framework) with orchestrator at ${this.orchestratorUrl}...`, 'info');
+    } else {
+      this.log(`Registering service "${serviceName}" (region will use orchestrator configuration) with orchestrator at ${this.orchestratorUrl}...`, 'info');
+    }
 
     try {
       const response = await fetch(`${this.orchestratorUrl}/api/services/register`, {
@@ -99,6 +107,7 @@ class ServerlessOrchestratorPlugin {
         body: JSON.stringify({
           servicePath,
           invokePort,
+          ...(region && { region }), // Only include region if defined in Serverless Framework
         }),
       });
 

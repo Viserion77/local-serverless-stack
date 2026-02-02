@@ -1,5 +1,6 @@
 import { spawn, ChildProcess, exec } from 'child_process';
 import { promisify } from 'util';
+import { ConfigManager } from './config-manager.js';
 
 const execAsync = promisify(exec);
 
@@ -7,10 +8,14 @@ export class LocalStackManager {
   private static instance: LocalStackManager;
   private process: ChildProcess | null = null;
   private _isRunning = false;
-  private endpoint = 'http://localhost:4566';
+  private endpoint: string;
   private readonly containerName = 'lss-localstack';
+  private readonly configManager: ConfigManager;
 
-  private constructor() {}
+  private constructor() {
+    this.configManager = ConfigManager.getInstance();
+    this.endpoint = this.configManager.getLocalStackEndpoint();
+  }
 
   static getInstance(): LocalStackManager {
     if (!LocalStackManager.instance) {
@@ -35,12 +40,17 @@ export class LocalStackManager {
     return new Promise((resolve, reject) => {
       console.log('🔄 Starting LocalStack...');
 
+      const port = this.configManager.getLocalStackPort();
+      const services = this.configManager.getServices().join(',');
+      const persistence = this.configManager.isPersistence() ? '1' : '0';
+      const debug = this.configManager.isDebug() ? '1' : '0';
+
       // Start LocalStack via Docker
       this.process = spawn('docker', [
         'run',
         '--rm',
         '-p',
-        '4566:4566',
+        `${port}:4566`,
         '-p',
         '4571:4571',
         '-v',
@@ -50,13 +60,13 @@ export class LocalStackManager {
         '--name',
         this.containerName,
         '-e',
-        'SERVICES=dynamodb,sqs,sns,lambda',
+        `SERVICES=${services}`,
         '-e',
         'LAMBDA_EXECUTOR=local',
         '-e',
-        'PERSISTENCE=1',
+        `PERSISTENCE=${persistence}`,
         '-e',
-        'DEBUG=0',
+        `DEBUG=${debug}`,
         'localstack/localstack:latest',
       ]);
 
@@ -147,7 +157,7 @@ export class LocalStackManager {
   getConfig() {
     return {
       endpoint: this.endpoint,
-      region: process.env.AWS_REGION || 'us-east-1',
+      region: this.configManager.getRegion(),
       credentials: {
         accessKeyId: process.env.LOCALSTACK_ACCESS_KEY_ID || 'test',
         secretAccessKey: process.env.LOCALSTACK_SECRET_ACCESS_KEY || 'test',

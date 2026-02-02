@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.4] - 2026-02-02
+
+### Added
+- **Region Priority System**: Plugin now respects region configuration from Serverless Framework with intelligent fallback
+  - Priority 1: Region from `provider.region` in Serverless Framework configuration
+  - Priority 2: Region from `lss.config.json` configuration
+  - Priority 3: Default `us-east-1` if no region is specified
+- Detailed logging showing which region source is being used during service registration
+- `region` field to `ServiceMetadata` interface for tracking region per service
+
+### Changed
+- Serverless plugin now only sends region to orchestrator when explicitly defined in `serverless.yml`
+- Orchestrator intelligently applies region priorities when provisioning resources
+- Enhanced console output with region source indicators
+
+### Fixed
+- AWS SDK clients now properly recreate with correct region when provisioning services in different regions
+
 ## [0.0.3] - 2026-02-01
 
 ### Fixed

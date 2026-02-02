@@ -8,6 +8,43 @@ const os = require('os');
 const PID_FILE = path.join(os.tmpdir(), 'lss-orchestrator.pid');
 const LOG_FILE = path.join(os.tmpdir(), 'lss-orchestrator.log');
 
+/**
+ * Load configuration from lss.config.json or .lssrc
+ */
+function loadConfig() {
+  const candidates = [
+    path.join(process.cwd(), 'lss.config.json'),
+    path.join(process.cwd(), '.lssrc'),
+    path.join(process.env.HOME || '~', 'lss.config.json'),
+    path.join(process.env.HOME || '~', '.lssrc'),
+  ];
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      try {
+        const content = fs.readFileSync(candidate, 'utf-8');
+        return JSON.parse(content);
+      } catch (error) {
+        console.warn(`⚠️  Failed to parse config file ${candidate}`);
+      }
+    }
+  }
+
+  return {};
+}
+
+/**
+ * Get configuration values with defaults
+ */
+function getConfig(config) {
+  return {
+    serverPort: config.serverPort || 3100,
+    localstackPort: config.localstackPort || 4566,
+    enableDynamoProxy: config.enableDynamoProxy || false,
+    dynamoProxyPort: config.dynamoProxyPort || 8000,
+  };
+}
+
 // Resolve orchestrator path - works both in development and when installed via npm
 function getOrchestratorPath() {
   // Try to find the orchestrator relative to this script
@@ -34,9 +71,14 @@ function startOrchestrator() {
     const pid = fs.readFileSync(PID_FILE, 'utf8').trim();
     try {
       process.kill(pid, 0);
+      const config = loadConfig();
+      const cfg = getConfig(config);
       console.log('✅ LSS Orchestrator already running (PID:', pid + ')');
-      console.log('📊 Dashboard: http://localhost:3100');
-      console.log('🔧 LocalStack: http://localhost:4566');
+      console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
+      console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort}`);
+      if (cfg.enableDynamoProxy) {
+        console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
+      }
       return;
     } catch (e) {
       fs.unlinkSync(PID_FILE);
@@ -57,13 +99,26 @@ function startOrchestrator() {
 
   const logFd = fs.openSync(LOG_FILE, 'a');
   
-  // Check for flags
-  const enableDynamoProxy = process.argv.includes('--enable-dynamo-proxy');
+  // Load config
+  const config = loadConfig();
+  const cfg = getConfig(config);
   
-  // Build environment variables
+  // Check for flags
+  const enableDynamoProxy = process.argv.includes('--enable-dynamo-proxy') || cfg.enableDynamoProxy;
+  
+  // Build environment variables from config
   const env = { ...process.env };
+  if (cfg.serverPort) {
+    env.PORT = cfg.serverPort;
+  }
+  if (cfg.localstackPort) {
+    env.LSS_LOCALSTACK_PORT = cfg.localstackPort;
+  }
   if (enableDynamoProxy) {
-    env.ENABLE_DYNAMO_PROXY = 'true';
+    env.LSS_ENABLE_DYNAMO_PROXY = 'true';
+  }
+  if (cfg.dynamoProxyPort) {
+    env.LSS_DYNAMO_PROXY_PORT = cfg.dynamoProxyPort;
   }
   
   const child = spawn('node', [orchestratorPath], {
@@ -78,10 +133,10 @@ function startOrchestrator() {
   fs.writeFileSync(PID_FILE, child.pid.toString());
   
   console.log('🚀 LSS Orchestrator started (PID:', child.pid + ')');
-  console.log('📊 Dashboard: http://localhost:3100');
-  console.log('🔧 LocalStack: http://localhost:4566');
+  console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
+  console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort}`);
   if (enableDynamoProxy) {
-    console.log('🔄 DynamoDB Proxy: http://localhost:8000 (enabled)');
+    console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
   }
   console.log('📝 Logs:', LOG_FILE);
   
@@ -128,9 +183,14 @@ function showStatus() {
   
   try {
     process.kill(pid, 0);
+    const config = loadConfig();
+    const cfg = getConfig(config);
     console.log('🟢 LSS Orchestrator: RUNNING (PID:', pid + ')');
-    console.log('📊 Dashboard: http://localhost:3100');
-    console.log('🔧 LocalStack: http://localhost:4566');
+    console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
+    console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort}`);
+    if (cfg.enableDynamoProxy) {
+      console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
+    }
     console.log('📝 Logs:', LOG_FILE);
   } catch (e) {
     console.log('⚪ LSS Orchestrator: NOT RUNNING (stale PID file)');
@@ -153,6 +213,27 @@ Commands:
 
 Options:
   --enable-dynamo-proxy    Enable DynamoDB proxy on port 8000 (for start command)
+
+Configuration:
+  Create a lss.config.json or .lssrc file in your project root to customize:
+  
+  Example lss.config.json:
+  {
+    "serverPort": 3100,
+    "localstackPort": 4566,
+    "enableDynamoProxy": false,
+    "dynamoProxyPort": 8000,
+    "region": "us-east-1",
+    "services": ["dynamodb", "sqs", "sns", "lambda"],
+    "persistence": true,
+    "debug": false
+  }
+
+  For the Serverless Plugin, add to serverless.yml:
+  custom:
+    orchestrator:
+      enabled: true
+      orchestratorUrl: http://localhost:3100
 
 Examples:
   npx lss start                      # Start the orchestrator

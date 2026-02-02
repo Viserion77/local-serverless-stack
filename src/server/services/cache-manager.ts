@@ -10,6 +10,7 @@ export interface ServiceMetadata {
   pid?: number;
   status: 'registered' | 'running' | 'stopped';
   invokePort?: number;
+  region?: string;
 }
 
 export class CacheManager {

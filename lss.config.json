@@ -1,0 +1,11 @@
+{
+  "serverPort": 3101,
+  "localstackPort": 4567,
+  "localstackEndpoint": "http://localhost:4567",
+  "enableDynamoProxy": false,
+  "dynamoProxyPort": 8001,
+  "region": "us-east-1",
+  "services": ["dynamodb", "sqs", "sns", "lambda"],
+  "persistence": true,
+  "debug": true
+}

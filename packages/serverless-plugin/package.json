@@ -1,6 +1,6 @@
 {
   "name": "lss-serverless-plugin",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Serverless plugin to auto-register services with Local Serverless Stack (LSS) Orchestrator",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

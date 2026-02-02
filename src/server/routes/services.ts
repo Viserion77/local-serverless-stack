@@ -5,12 +5,14 @@ import { CloudFormationParser } from '../services/cloudformation-parser.js';
 import { CacheManager } from '../services/cache-manager.js';
 import { ResourceProvisioner } from '../services/resource-provisioner.js';
 import { ProcessManager } from '../services/process-manager.js';
+import { ConfigManager } from '../services/config-manager.js';
 
 const router = Router();
 const parser = new CloudFormationParser();
 const cache = new CacheManager();
 const provisioner = new ResourceProvisioner();
 const processManager = new ProcessManager();
+const configManager = ConfigManager.getInstance();
 
 // Initialize cache on first request (lazy init)
 let cacheInitialized = false;
@@ -26,10 +28,24 @@ router.post('/register', async (req: Request, res: Response) => {
   try {
     await ensureCacheInit();
     
-    const { servicePath, invokePort } = req.body;
+    const { servicePath, invokePort, region } = req.body;
 
     if (!servicePath) {
       return res.status(400).json({ error: 'servicePath is required' });
+    }
+
+    // Region priority: Serverless Framework > lss.config.json > default
+    const effectiveRegion = region || configManager.getConfig().region || 'us-east-1';
+    
+    console.log(`📝 Registering service from ${servicePath}`);
+    console.log(`   Invoke port: ${invokePort || 'not specified'}`);
+    console.log(`   Region: ${effectiveRegion}`);
+    if (region) {
+      console.log(`   Region source: Serverless Framework configuration`);
+    } else if (configManager.getConfig().region) {
+      console.log(`   Region source: lss.config.json`);
+    } else {
+      console.log(`   Region source: default`);
     }
 
     // Validate servicePath to prevent path traversal
@@ -62,11 +78,13 @@ router.post('/register', async (req: Request, res: Response) => {
       lastUpdated: Date.now(),
       status: 'registered',
       invokePort,
+      region: effectiveRegion,
     });
 
     // Provision resources to LocalStack
     await provisioner.provisionResources(serviceName, resources, {
       invokePort,
+      region: effectiveRegion,
     });
 
     return res.json({
@@ -80,7 +98,7 @@ router.post('/register', async (req: Request, res: Response) => {
     });
   } catch (error) {
     console.error('Registration error:', error);
-    const message = error instanceof Error ? 'Failed to register service' : 'Unknown error';
+    const message = error instanceof Error ? error.message : 'Unknown error';
     return res.status(500).json({ error: message });
   }
 });

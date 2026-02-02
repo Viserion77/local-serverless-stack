@@ -14,15 +14,24 @@ import type {
 import AdmZip from 'adm-zip';
 
 export class ResourceProvisioner {
-  private dynamoClient: DynamoDBClient;
-  private sqsClient: SQSClient;
-  private snsClient: SNSClient;
-  private lambdaClient: LambdaClient;
+  private dynamoClient!: DynamoDBClient;
+  private sqsClient!: SQSClient;
+  private snsClient!: SNSClient;
+  private lambdaClient!: LambdaClient;
   private provisionedResources = new Map<string, Set<string>>();
   private serviceMetadata = new Map<string, { invokePort: number; invokeUrl: string }>();
+  private currentRegion: string = 'us-east-1';
 
   constructor() {
-    const config = LocalStackManager.getInstance().getConfig();
+    this.initializeClients(this.currentRegion);
+  }
+
+  private initializeClients(region: string): void {
+    const baseConfig = LocalStackManager.getInstance().getConfig();
+    const config = {
+      ...baseConfig,
+      region: region,
+    };
     this.dynamoClient = new DynamoDBClient(config);
     this.sqsClient = new SQSClient(config);
     this.snsClient = new SNSClient(config);
@@ -32,9 +41,15 @@ export class ResourceProvisioner {
   async provisionResources(
     serviceName: string,
     resources: Resource[],
-    metadata?: { invokePort?: number; invokeUrl?: string },
+    metadata?: { invokePort?: number; invokeUrl?: string; region?: string },
   ): Promise<void> {
     const provisioned = new Set<string>();
+
+    // Update clients if region has changed
+    if (metadata?.region && metadata.region !== this.currentRegion) {
+      this.currentRegion = metadata.region;
+      this.initializeClients(this.currentRegion);
+    }
 
     // Store service metadata for Lambda proxy creation
     if (metadata?.invokePort) {
