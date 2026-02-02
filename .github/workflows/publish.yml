@@ -138,10 +138,10 @@ jobs:
         run: npm ci
 
       - name: Build plugin
-        run: cd packages/serverless-plugin && npm run build
+        run: npm run build -w packages/serverless-plugin
 
       - name: Publish plugin to NPM
-        run: cd packages/serverless-plugin && npm publish --access public
+        run: npm publish -w packages/serverless-plugin --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 

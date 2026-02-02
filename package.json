@@ -25,7 +25,8 @@
     "CHANGELOG.md"
   ],
   "workspaces": [
-    "packages/*"
+    "packages/*",
+    "src/ui"
   ],
   "scripts": {
     "build": "npm run ui:build && npm run server:build && npm run plugin:build",
