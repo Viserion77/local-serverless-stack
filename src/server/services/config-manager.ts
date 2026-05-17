@@ -1,27 +1,48 @@
 import fs from 'fs';
 import path from 'path';
 
+export type LocalStackMode = 'managed' | 'external';
+export type LocalStackEdition = 'community' | 'pro';
+
 export interface LSSConfig {
   // Server port (dashboard + API)
   serverPort?: number;
-  
+
   // LocalStack endpoint and port
   localstackPort?: number;
   localstackEndpoint?: string;
-  
+
+  // LocalStack operation mode:
+  //   "managed" (default): LSS starts/stops a Docker container.
+  //   "external": LSS connects to an already-running LocalStack instance.
+  mode?: LocalStackMode;
+
+  // LocalStack edition: "community" (free) or "pro" (requires auth token).
+  localstackEdition?: LocalStackEdition;
+
+  // LocalStack image tag/version. Defaults to "latest".
+  localstackVersion?: string;
+
+  // Full image override. Wins over edition+version when set.
+  localstackImage?: string;
+
+  // Auth token for LocalStack Pro and recent (>=2026.5) community images.
+  // Prefer the LOCALSTACK_AUTH_TOKEN env var over committing this to a file.
+  localstackAuthToken?: string;
+
   // DynamoDB Proxy
   enableDynamoProxy?: boolean;
   dynamoProxyPort?: number;
-  
+
   // AWS Configuration
   region?: string;
-  
+
   // LocalStack services
   services?: string[];
-  
+
   // Persistence
   persistence?: boolean;
-  
+
   // Debug mode
   debug?: boolean;
 }
@@ -63,14 +84,15 @@ export class ConfigManager {
           this.config = JSON.parse(content);
           this.configPath = candidate;
           console.log(`✅ Configuration loaded from ${candidate}`);
-          return;
+          break;
         } catch (error) {
           console.warn(`⚠️  Failed to parse config file ${candidate}:`, error instanceof Error ? error.message : 'Unknown error');
         }
       }
     }
 
-    // Also load from environment variables if no file found
+    // Environment variables override file values so secrets like LOCALSTACK_AUTH_TOKEN
+    // can be injected without committing them to disk.
     this.loadFromEnv();
   }
 
@@ -84,6 +106,27 @@ export class ConfigManager {
     }
     if (process.env.LSS_LOCALSTACK_ENDPOINT) {
       this.config.localstackEndpoint = process.env.LSS_LOCALSTACK_ENDPOINT;
+    }
+    if (process.env.LSS_LOCALSTACK_MODE) {
+      const mode = process.env.LSS_LOCALSTACK_MODE.toLowerCase();
+      if (mode === 'managed' || mode === 'external') {
+        this.config.mode = mode;
+      }
+    }
+    if (process.env.LSS_LOCALSTACK_EDITION) {
+      const edition = process.env.LSS_LOCALSTACK_EDITION.toLowerCase();
+      if (edition === 'community' || edition === 'pro') {
+        this.config.localstackEdition = edition;
+      }
+    }
+    if (process.env.LSS_LOCALSTACK_VERSION) {
+      this.config.localstackVersion = process.env.LSS_LOCALSTACK_VERSION;
+    }
+    if (process.env.LSS_LOCALSTACK_IMAGE) {
+      this.config.localstackImage = process.env.LSS_LOCALSTACK_IMAGE;
+    }
+    if (process.env.LOCALSTACK_AUTH_TOKEN) {
+      this.config.localstackAuthToken = process.env.LOCALSTACK_AUTH_TOKEN;
     }
     if (process.env.LSS_ENABLE_DYNAMO_PROXY) {
       this.config.enableDynamoProxy = process.env.LSS_ENABLE_DYNAMO_PROXY === 'true' || process.env.LSS_ENABLE_DYNAMO_PROXY === '1';
@@ -130,6 +173,34 @@ export class ConfigManager {
     return `http://localhost:${port}`;
   }
 
+  getMode(): LocalStackMode {
+    return this.config.mode ?? 'managed';
+  }
+
+  isExternal(): boolean {
+    return this.getMode() === 'external';
+  }
+
+  getLocalStackEdition(): LocalStackEdition {
+    return this.config.localstackEdition ?? 'community';
+  }
+
+  getLocalStackVersion(): string {
+    return this.config.localstackVersion ?? 'latest';
+  }
+
+  getLocalStackImage(): string {
+    if (this.config.localstackImage) {
+      return this.config.localstackImage;
+    }
+    const repo = this.getLocalStackEdition() === 'pro' ? 'localstack/localstack-pro' : 'localstack/localstack';
+    return `${repo}:${this.getLocalStackVersion()}`;
+  }
+
+  getLocalStackAuthToken(): string | undefined {
+    return this.config.localstackAuthToken;
+  }
+
   isEnableDynamoProxy(): boolean {
     if (this.config.enableDynamoProxy !== undefined) {
       return this.config.enableDynamoProxy;
@@ -174,7 +245,12 @@ export class ConfigManager {
   printSummary(): void {
     console.log('\n📋 Configuration Summary:');
     console.log(`  Server Port: ${this.getServerPort()} (http://localhost:${this.getServerPort()})`);
+    console.log(`  LocalStack Mode: ${this.getMode()}`);
     console.log(`  LocalStack Port: ${this.getLocalStackPort()} (${this.getLocalStackEndpoint()})`);
+    if (!this.isExternal()) {
+      console.log(`  LocalStack Image: ${this.getLocalStackImage()} (${this.getLocalStackEdition()})`);
+      console.log(`  LocalStack Auth Token: ${this.getLocalStackAuthToken() ? 'set' : 'not set'}`);
+    }
     console.log(`  DynamoDB Proxy Enabled: ${this.isEnableDynamoProxy()}`);
     if (this.isEnableDynamoProxy()) {
       console.log(`  DynamoDB Proxy Port: ${this.getDynamoProxyPort()}`);

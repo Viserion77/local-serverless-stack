@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.6] - 2026-05-17
+
+### Added
+- **LocalStack operation modes**: new `mode` config (`managed` or `external`). In `external`, LSS only health-checks the configured endpoint and never touches Docker. CLI flag `--external`.
+- **LocalStack edition selection**: new `localstackEdition` config (`community` or `pro`). CLI flag `--pro` selects the Pro image.
+- **LocalStack image control**: new `localstackVersion` (image tag, default `latest`) and `localstackImage` (full override). Resolved image is shown in startup logs.
+- **Auth token forwarding**: new `localstackAuthToken` config and `LOCALSTACK_AUTH_TOKEN` env var are forwarded into the container. Required for `pro` and for community images `>= 2026.5`. CLI flag `--localstack-token <value>`.
+
+### Changed
+- `ConfigManager` now layers environment variables on top of the config file (instead of only when no file is found), so secrets can be injected without committing them.
+- Startup summary surfaces mode, edition, image, and whether an auth token is set.
+
 ## [0.0.5] - 2026-05-17
 
 ### Changed

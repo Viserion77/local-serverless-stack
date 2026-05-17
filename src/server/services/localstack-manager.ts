@@ -30,6 +30,14 @@ export class LocalStackManager {
       return;
     }
 
+    if (this.configManager.isExternal()) {
+      console.log(`🔗 Using external LocalStack at ${this.endpoint}`);
+      await this.waitForReady(30);
+      this._isRunning = true;
+      console.log('✅ Connected to external LocalStack');
+      return;
+    }
+
     try {
       // Check if docker is available
       await execAsync('docker ps -q', { timeout: 5000 });
@@ -37,16 +45,30 @@ export class LocalStackManager {
       throw new Error('Docker is not available or not running. Please start Docker first.');
     }
 
+    const edition = this.configManager.getLocalStackEdition();
+    const image = this.configManager.getLocalStackImage();
+    const authToken = this.configManager.getLocalStackAuthToken();
+
+    if (edition === 'pro' && !authToken) {
+      throw new Error(
+        'LocalStack Pro requires LOCALSTACK_AUTH_TOKEN. Set the env var or "localstackAuthToken" in your config.',
+      );
+    }
+    if (edition === 'community' && !authToken) {
+      console.warn(
+        '⚠️  LOCALSTACK_AUTH_TOKEN not set. Recent localstack/localstack images (>= 2026.5) require a token even for the community edition.',
+      );
+    }
+
     return new Promise((resolve, reject) => {
-      console.log('🔄 Starting LocalStack...');
+      console.log(`🔄 Starting LocalStack (${image})...`);
 
       const port = this.configManager.getLocalStackPort();
       const services = this.configManager.getServices().join(',');
       const persistence = this.configManager.isPersistence() ? '1' : '0';
       const debug = this.configManager.isDebug() ? '1' : '0';
 
-      // Start LocalStack via Docker
-      this.process = spawn('docker', [
+      const dockerArgs = [
         'run',
         '--rm',
         '-p',
@@ -67,8 +89,15 @@ export class LocalStackManager {
         `PERSISTENCE=${persistence}`,
         '-e',
         `DEBUG=${debug}`,
-        'localstack/localstack:latest',
-      ]);
+      ];
+
+      if (authToken) {
+        dockerArgs.push('-e', `LOCALSTACK_AUTH_TOKEN=${authToken}`);
+      }
+
+      dockerArgs.push(image);
+
+      this.process = spawn('docker', dockerArgs);
 
       let stderr = '';
       let stdout = '';
@@ -111,6 +140,12 @@ export class LocalStackManager {
 
   async stop(): Promise<void> {
     if (!this._isRunning) {
+      return;
+    }
+
+    if (this.configManager.isExternal()) {
+      console.log('🔗 External LocalStack — leaving container untouched');
+      this._isRunning = false;
       return;
     }
 

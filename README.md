@@ -223,6 +223,26 @@ LocalStack is configured with:
 - Lambda executor: `local` (no Docker-in-Docker required)
 - Docker socket: Mounted from host
 
+#### Managed vs external mode
+
+By default LSS spins up its own LocalStack container. To point at an already-running instance (e.g. one you're sharing across projects) set `mode: "external"` in `lss.config.json` or pass `--external`:
+
+```bash
+npx lss start --external                 # connect to whatever is on localstackEndpoint
+```
+
+#### Edition and auth token
+
+Recent LocalStack images (`>= 2026.5` for community, all `pro` builds) require `LOCALSTACK_AUTH_TOKEN`. Provide it via env var (preferred) or `--localstack-token`:
+
+```bash
+export LOCALSTACK_AUTH_TOKEN=ls-xxxxxxxx
+npx lss start                            # community image with token
+npx lss start --pro                      # pro image (token required)
+```
+
+See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for the full reference (`mode`, `localstackEdition`, `localstackVersion`, `localstackImage`, `localstackAuthToken`).
+
 ## Development
 
 ### Build All Packages

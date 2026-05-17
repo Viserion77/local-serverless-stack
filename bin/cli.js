@@ -42,7 +42,22 @@ function getConfig(config) {
     localstackPort: config.localstackPort || 4566,
     enableDynamoProxy: config.enableDynamoProxy || false,
     dynamoProxyPort: config.dynamoProxyPort || 8000,
+    mode: config.mode || 'managed',
+    localstackEdition: config.localstackEdition || 'community',
+    localstackVersion: config.localstackVersion || 'latest',
+    localstackImage: config.localstackImage,
+    localstackAuthToken: config.localstackAuthToken,
   };
+}
+
+function getArgValue(name) {
+  const idx = process.argv.indexOf(name);
+  if (idx >= 0 && idx + 1 < process.argv.length) {
+    return process.argv[idx + 1];
+  }
+  const prefix = `${name}=`;
+  const inline = process.argv.find(a => a.startsWith(prefix));
+  return inline ? inline.slice(prefix.length) : undefined;
 }
 
 // Resolve orchestrator path - works both in development and when installed via npm
@@ -105,7 +120,14 @@ function startOrchestrator() {
   
   // Check for flags
   const enableDynamoProxy = process.argv.includes('--enable-dynamo-proxy') || cfg.enableDynamoProxy;
-  
+  const useExternal = process.argv.includes('--external');
+  const usePro = process.argv.includes('--pro');
+  const cliToken = getArgValue('--localstack-token');
+
+  const mode = useExternal ? 'external' : cfg.mode;
+  const edition = usePro ? 'pro' : cfg.localstackEdition;
+  const authToken = cliToken || cfg.localstackAuthToken || process.env.LOCALSTACK_AUTH_TOKEN;
+
   // Build environment variables from config
   const env = { ...process.env };
   if (cfg.serverPort) {
@@ -119,6 +141,21 @@ function startOrchestrator() {
   }
   if (cfg.dynamoProxyPort) {
     env.LSS_DYNAMO_PROXY_PORT = cfg.dynamoProxyPort;
+  }
+  if (mode) {
+    env.LSS_LOCALSTACK_MODE = mode;
+  }
+  if (edition) {
+    env.LSS_LOCALSTACK_EDITION = edition;
+  }
+  if (cfg.localstackVersion) {
+    env.LSS_LOCALSTACK_VERSION = cfg.localstackVersion;
+  }
+  if (cfg.localstackImage) {
+    env.LSS_LOCALSTACK_IMAGE = cfg.localstackImage;
+  }
+  if (authToken) {
+    env.LOCALSTACK_AUTH_TOKEN = authToken;
   }
   
   const child = spawn('node', [orchestratorPath], {
@@ -134,7 +171,7 @@ function startOrchestrator() {
   
   console.log('🚀 LSS Orchestrator started (PID:', child.pid + ')');
   console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
-  console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort}`);
+  console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort} (mode: ${mode}, edition: ${edition})`);
   if (enableDynamoProxy) {
     console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
   }
@@ -212,15 +249,24 @@ Commands:
   help     Show this help message
 
 Options:
-  --enable-dynamo-proxy    Enable DynamoDB proxy on port 8000 (for start command)
+  --enable-dynamo-proxy        Enable DynamoDB proxy on port 8000 (for start command)
+  --external                   Connect to a LocalStack already running, do not spawn a container
+  --pro                        Use the LocalStack Pro image (requires LOCALSTACK_AUTH_TOKEN)
+  --localstack-token <token>   Pass a LOCALSTACK_AUTH_TOKEN to the container
+
+Environment:
+  LOCALSTACK_AUTH_TOKEN        Token forwarded to LocalStack (Pro and >=2026.5 community)
 
 Configuration:
   Create a lss.config.json or .lssrc file in your project root to customize:
-  
+
   Example lss.config.json:
   {
     "serverPort": 3100,
     "localstackPort": 4566,
+    "mode": "managed",
+    "localstackEdition": "community",
+    "localstackVersion": "latest",
     "enableDynamoProxy": false,
     "dynamoProxyPort": 8000,
     "region": "us-east-1",
@@ -236,11 +282,14 @@ Configuration:
       orchestratorUrl: http://localhost:3100
 
 Examples:
-  npx lss start                      # Start the orchestrator
-  npx lss start --enable-dynamo-proxy # Start with DynamoDB proxy enabled
-  npx lss stop                       # Stop the orchestrator
-  npx lss status                     # Check status
-  npx lss logs                       # View logs
+  npx lss start                              # Start the orchestrator (managed LocalStack)
+  npx lss start --enable-dynamo-proxy        # Start with DynamoDB proxy enabled
+  npx lss start --external                   # Connect to an external LocalStack
+  npx lss start --pro                        # Use LocalStack Pro (token required)
+  LOCALSTACK_AUTH_TOKEN=xxx npx lss start    # Inject a token via env var
+  npx lss stop                               # Stop the orchestrator
+  npx lss status                             # Check status
+  npx lss logs                               # View logs
 `);
 }
 

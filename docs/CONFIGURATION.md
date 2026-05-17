@@ -24,6 +24,9 @@ Both files should contain valid JSON with the following optional properties:
   "serverPort": 3100,
   "localstackPort": 4566,
   "localstackEndpoint": "http://localhost:4566",
+  "mode": "managed",
+  "localstackEdition": "community",
+  "localstackVersion": "latest",
   "enableDynamoProxy": false,
   "dynamoProxyPort": 8000,
   "region": "us-east-1",
@@ -48,6 +51,26 @@ Both files should contain valid JSON with the following optional properties:
 - **localstackEndpoint** (string, optional)
   - Custom endpoint for LocalStack
   - Example: `"http://localhost:4566"` or `"http://192.168.1.100:4566"`
+
+- **mode** (`"managed"` | `"external"`, default: `"managed"`)
+  - `managed`: LSS starts and stops a LocalStack container via Docker.
+  - `external`: LSS connects to a LocalStack instance you started yourself and never touches Docker.
+
+- **localstackEdition** (`"community"` | `"pro"`, default: `"community"`)
+  - Which LocalStack image to pull (community is free; pro requires a valid auth token).
+  - Ignored when `localstackImage` is set.
+
+- **localstackVersion** (string, default: `"latest"`)
+  - Tag appended to the resolved image (e.g. `4.0`, `stable`, `2026.4`).
+  - Ignored when `localstackImage` is set.
+
+- **localstackImage** (string, optional)
+  - Full image override (e.g. `"my-registry/localstack:custom"`). Takes precedence over edition + version.
+
+- **localstackAuthToken** (string, optional)
+  - Forwarded as `LOCALSTACK_AUTH_TOKEN` inside the container.
+  - Required for `pro` edition and for community images `>= 2026.5`.
+  - Prefer the `LOCALSTACK_AUTH_TOKEN` env var over writing the token to a config file.
 
 - **enableDynamoProxy** (boolean, default: false)
   - Enable a proxy for DynamoDB on a separate port
@@ -171,6 +194,11 @@ If no configuration file is found, you can use environment variables:
 - `PORT` or `LSS_DASHBOARD_PORT` - Server port
 - `LSS_LOCALSTACK_PORT` - LocalStack port
 - `LSS_LOCALSTACK_ENDPOINT` - LocalStack endpoint
+- `LSS_LOCALSTACK_MODE` - `managed` or `external`
+- `LSS_LOCALSTACK_EDITION` - `community` or `pro`
+- `LSS_LOCALSTACK_VERSION` - Image tag (e.g. `latest`, `4.0`)
+- `LSS_LOCALSTACK_IMAGE` - Full image override
+- `LOCALSTACK_AUTH_TOKEN` - Forwarded into the container
 - `LSS_ENABLE_DYNAMO_PROXY` - Enable DynamoDB proxy (true/false or 1/0)
 - `LSS_DYNAMO_PROXY_PORT` - DynamoDB proxy port
 - `AWS_REGION` - AWS region
@@ -196,11 +224,43 @@ npx lss start
 
 ## Priority Order
 
-Configuration is loaded in this order (first match wins):
+Configuration is resolved in this order (later values override earlier ones):
 
-1. Configuration file (`lss.config.json` or `.lssrc`)
-2. Environment variables
-3. Default values
+1. Default values
+2. Configuration file (`lss.config.json` or `.lssrc`)
+3. Environment variables (so secrets like `LOCALSTACK_AUTH_TOKEN` can be injected without touching the file)
+
+## LocalStack: managed vs external
+
+`mode: "managed"` is the default and works for most setups — LSS will `docker run` and `docker stop` the container for you.
+
+Use `mode: "external"` when you want to keep an already-running LocalStack across multiple `lss start` invocations, or when LocalStack is running in another container/host you own:
+
+```json
+{
+  "mode": "external",
+  "localstackEndpoint": "http://localhost:4566"
+}
+```
+
+In external mode, `lss start` only health-checks the endpoint and `lss stop` leaves the container running.
+
+## LocalStack Pro and auth tokens
+
+The `localstack/localstack-pro` image and recent `localstack/localstack` images (`>= 2026.5`) require `LOCALSTACK_AUTH_TOKEN`.
+
+Two ways to provide it:
+
+```bash
+# 1. Environment variable (preferred — never commit the token)
+export LOCALSTACK_AUTH_TOKEN=ls-xxxxxxxx
+npx lss start --pro
+
+# 2. CLI flag (handy for one-off runs)
+npx lss start --pro --localstack-token ls-xxxxxxxx
+```
+
+If `localstackEdition` is `pro` and no token is found, the orchestrator fails fast with a clear message. For `community`, it just warns and tries anyway (older images still work without a token).
 
 ## Getting Started
 
