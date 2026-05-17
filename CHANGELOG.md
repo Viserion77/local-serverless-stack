@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.5] - 2026-05-17
+
+### Changed
+- Upgraded `awpaki` to `^1.4.1`
+- Upgraded `vite` (UI) to `^6.4.2`
+- Bumped transitive dependencies via lockfile refresh: `axios` to 1.16.1, `path-to-regexp` to 0.1.13, `handlebars` to 4.7.9, `picomatch` to 2.3.2, `flatted` to 3.4.2, `qs` to 6.14.2, `follow-redirects` to 1.16.0, `brace-expansion` to 2.1.0, `minimatch` to 9.0.9
+
+### Security
+- Resolved Dependabot advisories #1, #4–#10, #12–#14 by updating affected transitive dependencies
+
 ## [0.0.4] - 2026-02-02
 
 ### Added
