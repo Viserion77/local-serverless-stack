@@ -4,6 +4,7 @@ import { SNSClient, CreateTopicCommand, ListTopicsCommand, DeleteTopicCommand } 
 import { LambdaClient, CreateFunctionCommand, GetFunctionCommand, DeleteFunctionCommand } from '@aws-sdk/client-lambda';
 import { CreateEventSourceMappingCommand, ListEventSourceMappingsCommand, DeleteEventSourceMappingCommand } from '@aws-sdk/client-lambda';
 import { LocalStackManager } from './localstack-manager.js';
+import { SeedManager } from './seed-manager.js';
 import type {
   Resource,
   DynamoDBResource,
@@ -54,6 +55,7 @@ export class ResourceProvisioner {
       this.currentRegion = metadata.region;
       this.initializeClients(this.currentRegion);
     }
+    SeedManager.getInstance().setRegion(this.currentRegion);
 
     const invokeUrl = metadata?.invokeUrl
       || (metadata?.invokePort ? `http://host.docker.internal:${metadata.invokePort}` : undefined);
@@ -152,6 +154,7 @@ export class ResourceProvisioner {
         }),
       );
       console.log(`  ✓ Created DynamoDB table: ${resource.name}`);
+      SeedManager.getInstance().seedOnTableCreated(resource.name);
   } catch (error) {
     const errorName = error instanceof Error && 'name' in error ? (error as {name: string}).name : '';
     if (errorName === 'ResourceInUseException') {

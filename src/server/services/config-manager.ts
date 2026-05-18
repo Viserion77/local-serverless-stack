@@ -45,6 +45,10 @@ export interface LSSConfig {
 
   // Debug mode
   debug?: boolean;
+
+  // Directory containing DynamoDB seed files ({tableName}.json).
+  // Seeds are auto-applied when a table is created; can also be run on demand.
+  seedsDir?: string;
 }
 
 export class ConfigManager {
@@ -146,6 +150,9 @@ export class ConfigManager {
     if (process.env.LSS_DEBUG) {
       this.config.debug = process.env.LSS_DEBUG === 'true' || process.env.LSS_DEBUG === '1';
     }
+    if (process.env.LSS_SEEDS_DIR) {
+      this.config.seedsDir = process.env.LSS_SEEDS_DIR;
+    }
   }
 
   getConfig(): LSSConfig {
@@ -235,6 +242,11 @@ export class ConfigManager {
     return false;
   }
 
+  getSeedsDir(): string {
+    const raw = this.config.seedsDir ?? './seeds';
+    return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
+  }
+
   getConfigPath(): string {
     return this.configPath;
   }
@@ -258,6 +270,7 @@ export class ConfigManager {
     console.log(`  AWS Region: ${this.getRegion()}`);
     console.log(`  Services: ${this.getServices().join(', ')}`);
     console.log(`  Persistence: ${this.isPersistence()}`);
+    console.log(`  Seeds Dir: ${this.getSeedsDir()}`);
     if (this.getConfigPath()) {
       console.log(`  Config File: ${this.getConfigPath()}`);
     }

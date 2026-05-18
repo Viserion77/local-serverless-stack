@@ -235,6 +235,97 @@ function showStatus() {
   }
 }
 
+function getServerPort() {
+  const cfg = getConfig(loadConfig());
+  return cfg.serverPort;
+}
+
+function postJson(path, body) {
+  return new Promise((resolve, reject) => {
+    const http = require('http');
+    const payload = JSON.stringify(body || {});
+    const req = http.request(
+      {
+        hostname: 'localhost',
+        port: getServerPort(),
+        path,
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Length': Buffer.byteLength(payload),
+        },
+      },
+      res => {
+        let data = '';
+        res.on('data', chunk => (data += chunk));
+        res.on('end', () => {
+          let parsed;
+          try { parsed = data ? JSON.parse(data) : {}; } catch { parsed = { raw: data }; }
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            resolve(parsed);
+          } else {
+            reject(new Error(parsed.error || `HTTP ${res.statusCode}`));
+          }
+        });
+      },
+    );
+    req.on('error', reject);
+    req.write(payload);
+    req.end();
+  });
+}
+
+function ensureRunningOrExit() {
+  if (!fs.existsSync(PID_FILE)) {
+    console.error('❌ LSS Orchestrator is not running. Start it with: npx lss start');
+    process.exit(1);
+  }
+}
+
+function printSeedRunResults(results) {
+  for (const r of results) {
+    if (r.skipped) {
+      console.log(`  ⚠ ${r.tableName}: skipped (${r.reason})`);
+    } else {
+      console.log(`  ✓ ${r.tableName}: ${r.inserted} item(s) inserted`);
+    }
+  }
+}
+
+function printSeedClearResults(results) {
+  for (const r of results) {
+    if (r.skipped) {
+      console.log(`  ⚠ ${r.tableName}: skipped (${r.reason})`);
+    } else {
+      console.log(`  ✓ ${r.tableName}: ${r.deleted} item(s) deleted`);
+    }
+  }
+}
+
+async function runSeed(tableName) {
+  ensureRunningOrExit();
+  try {
+    console.log(tableName ? `🌱 Seeding ${tableName}...` : '🌱 Seeding all tables with seed files...');
+    const res = await postJson('/api/seeds/run', tableName ? { tableName } : {});
+    printSeedRunResults(res.results || []);
+  } catch (e) {
+    console.error('❌ Seed failed:', e.message);
+    process.exit(1);
+  }
+}
+
+async function clearSeed(tableName) {
+  ensureRunningOrExit();
+  try {
+    console.log(tableName ? `🧹 Clearing ${tableName}...` : '🧹 Clearing all seeded tables...');
+    const res = await postJson('/api/seeds/clear', tableName ? { tableName } : {});
+    printSeedClearResults(res.results || []);
+  } catch (e) {
+    console.error('❌ Clear failed:', e.message);
+    process.exit(1);
+  }
+}
+
 function showHelp() {
   console.log(`
 Local Serverless Stack (LSS) CLI
@@ -242,11 +333,15 @@ Local Serverless Stack (LSS) CLI
 Usage: npx lss <command> [options]
 
 Commands:
-  start    Start the LSS Orchestrator in background
-  stop     Stop the LSS Orchestrator
-  status   Check if the orchestrator is running
-  logs     Show the logs
-  help     Show this help message
+  start              Start the LSS Orchestrator in background
+  stop               Stop the LSS Orchestrator
+  status             Check if the orchestrator is running
+  logs               Show the logs
+  seed [table]       Apply seed file(s) from seedsDir into DynamoDB
+                     (no args = all matching tables)
+  seed:clear [table] Delete all items from the given table (or all
+                     tables with a seed file when no arg is given)
+  help               Show this help message
 
 Options:
   --enable-dynamo-proxy        Enable DynamoDB proxy on port 8000 (for start command)
@@ -290,6 +385,9 @@ Examples:
   npx lss stop                               # Stop the orchestrator
   npx lss status                             # Check status
   npx lss logs                               # View logs
+  npx lss seed                               # Seed every table that has a {name}.json file
+  npx lss seed users                         # Seed only the "users" table
+  npx lss seed:clear users                   # Delete all items from "users"
 `);
 }
 
@@ -321,6 +419,12 @@ switch (command) {
     break;
   case 'logs':
     showLogs();
+    break;
+  case 'seed':
+    runSeed(process.argv[3]);
+    break;
+  case 'seed:clear':
+    clearSeed(process.argv[3]);
     break;
   case 'help':
   case '--help':

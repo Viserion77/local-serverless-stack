@@ -7,5 +7,6 @@
   "region": "us-east-1",
   "services": ["dynamodb", "sqs", "sns", "lambda"],
   "persistence": true,
-  "debug": false
+  "debug": false,
+  "seedsDir": "./seeds"
 }

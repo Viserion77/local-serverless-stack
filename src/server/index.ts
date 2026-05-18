@@ -5,6 +5,7 @@ import { fileURLToPath } from 'url';
 import { servicesRouter, processManager } from './routes/services.js';
 import { resourcesRouter } from './routes/resources.js';
 import { queuesRouter } from './routes/queues.js';
+import { seedsRouter } from './routes/seeds.js';
 import { LocalStackManager } from './services/localstack-manager.js';
 import { ConfigManager } from './services/config-manager.js';
 import { QueueInspector } from './services/queue-inspector.js';
@@ -25,6 +26,7 @@ app.use(express.json());
 app.use('/api/services', servicesRouter);
 app.use('/api/resources', resourcesRouter);
 app.use('/api/queues', queuesRouter);
+app.use('/api/seeds', seedsRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

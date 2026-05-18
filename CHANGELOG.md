@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.9] - 2026-05-18
+
+### Added
+- **DynamoDB seeding**: drop `{tableName}.json` files into the directory configured by the new `seedsDir` option (default `./seeds`) and items get marshalled and inserted into the matching DynamoDB table. Items are written as plain JSON (no AWS attribute-typed envelope) — `@aws-sdk/util-dynamodb`'s `marshall` infers types automatically.
+- **Auto-seed on table creation**: when `ResourceProvisioner` creates a DynamoDB table, the `SeedManager` checks for a matching seed file and applies it in the background. Idempotent — re-runs are a `PutItem` merge by primary key. Failures are logged and never break the provisioner.
+- **`/api/seeds` endpoints**: `GET /api/seeds` (list seed files + whether each target table exists), `POST /api/seeds/run` (apply one or all), `POST /api/seeds/clear` (delete every item from one table or from all tables that have a seed file).
+- **CLI commands**: `npx lss seed [tableName]` and `npx lss seed:clear [tableName]`. With no argument they operate on every table that has a corresponding seed file.
+- **Seeds dashboard tab**: new "Seeds" tab listing each seed file with its item count and whether the target table exists in LocalStack, plus per-row "Apply"/"Clear" buttons and global "Re-apply all"/"Clear all" actions.
+
+### Changed
+- `ConfigManager` accepts the new `seedsDir` option (and `LSS_SEEDS_DIR` env var). Relative paths are resolved against the current working directory. Surfaced in the startup summary.
+
 ## [0.0.8] - 2026-05-18
 
 ### Added

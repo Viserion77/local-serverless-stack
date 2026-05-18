@@ -7,6 +7,7 @@ import {
 import ServicesList from './components/ServicesList.vue';
 import ResourcesOverview from './components/ResourcesOverview.vue';
 import QueuesView from './components/QueuesView.vue';
+import SeedsPanel from './components/SeedsPanel.vue';
 import { api } from './services/api';
 
 const health = ref({ status: 'unknown', localstack: false });
@@ -73,6 +74,7 @@ onBeforeUnmount(() => {
               <TTab value="overview">Overview</TTab>
               <TTab value="services">Services</TTab>
               <TTab value="queues">Queues</TTab>
+              <TTab value="seeds">Seeds</TTab>
             </TTabList>
 
             <TTabPanel value="overview">
@@ -90,6 +92,12 @@ onBeforeUnmount(() => {
             <TTabPanel value="queues">
               <div style="padding-top: 1.25rem;">
                 <QueuesView />
+              </div>
+            </TTabPanel>
+
+            <TTabPanel value="seeds">
+              <div style="padding-top: 1.25rem;">
+                <SeedsPanel />
               </div>
             </TTabPanel>
           </TTabs>

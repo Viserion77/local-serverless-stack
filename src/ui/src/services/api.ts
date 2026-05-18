@@ -43,6 +43,32 @@ export interface QueueSnapshot {
   lastPolledAt: number;
 }
 
+export interface SeedFileEntry {
+  tableName: string;
+  file: string;
+  itemCount: number;
+  tableExists: boolean;
+}
+
+export interface SeedListResponse {
+  seedsDir: string;
+  entries: SeedFileEntry[];
+}
+
+export interface SeedRunResult {
+  tableName: string;
+  inserted: number;
+  skipped?: boolean;
+  reason?: string;
+}
+
+export interface SeedClearResult {
+  tableName: string;
+  deleted: number;
+  skipped?: boolean;
+  reason?: string;
+}
+
 export const api = {
   // Health
   checkHealth: () => request<{ status: string; localstack: boolean }>('/api/health'),
@@ -86,5 +112,18 @@ export const api = {
   resetQueueProcessed: (name: string) =>
     request<{ success: boolean }>(`/api/queues/${name}/reset-processed`, {
       method: 'POST',
+    }),
+
+  // Seeds
+  listSeeds: () => request<SeedListResponse>('/api/seeds'),
+  runSeed: (tableName?: string) =>
+    request<{ results: SeedRunResult[] }>('/api/seeds/run', {
+      method: 'POST',
+      body: JSON.stringify(tableName ? { tableName } : {}),
+    }),
+  clearSeed: (tableName?: string) =>
+    request<{ results: SeedClearResult[] }>('/api/seeds/clear', {
+      method: 'POST',
+      body: JSON.stringify(tableName ? { tableName } : {}),
     }),
 };
