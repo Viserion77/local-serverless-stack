@@ -8,6 +8,7 @@ import ServicesList from './components/ServicesList.vue';
 import ResourcesOverview from './components/ResourcesOverview.vue';
 import QueuesView from './components/QueuesView.vue';
 import SeedsPanel from './components/SeedsPanel.vue';
+import DynamoTab from './components/dynamo/DynamoTab.vue';
 import { api } from './services/api';
 
 const health = ref({ status: 'unknown', localstack: false });
@@ -74,6 +75,7 @@ onBeforeUnmount(() => {
               <TTab value="overview">Overview</TTab>
               <TTab value="services">Services</TTab>
               <TTab value="queues">Queues</TTab>
+              <TTab value="dynamodb">DynamoDB</TTab>
               <TTab value="seeds">Seeds</TTab>
             </TTabList>
 
@@ -92,6 +94,12 @@ onBeforeUnmount(() => {
             <TTabPanel value="queues">
               <div style="padding-top: 1.25rem;">
                 <QueuesView />
+              </div>
+            </TTabPanel>
+
+            <TTabPanel value="dynamodb">
+              <div style="padding-top: 1.25rem;">
+                <DynamoTab />
               </div>
             </TTabPanel>
 

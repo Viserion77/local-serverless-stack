@@ -43,6 +43,73 @@ export interface QueueSnapshot {
   lastPolledAt: number;
 }
 
+export interface DynamoKeyAttr {
+  AttributeName?: string;
+  KeyType?: string;
+}
+
+export interface DynamoAttrDef {
+  AttributeName?: string;
+  AttributeType?: string;
+}
+
+export interface DynamoTtlInfo {
+  enabled: boolean;
+  attributeName?: string;
+}
+
+export interface DynamoTableSummary {
+  name: string;
+  status?: string;
+  itemCount: number;
+  sizeBytes: number;
+  keySchema: DynamoKeyAttr[];
+  attributeDefinitions: DynamoAttrDef[];
+  hasGsi: boolean;
+  hasLsi: boolean;
+  streamEnabled: boolean;
+  ttl: DynamoTtlInfo;
+  billingMode?: string;
+  createdAt?: string;
+  warnings: string[];
+}
+
+export interface DynamoIndex {
+  IndexName?: string;
+  IndexStatus?: string;
+  KeySchema?: DynamoKeyAttr[];
+  Projection?: { ProjectionType?: string; NonKeyAttributes?: string[] };
+  IndexSizeBytes?: number;
+  ItemCount?: number;
+}
+
+export interface DynamoTableDetail extends DynamoTableSummary {
+  arn?: string;
+  gsis: DynamoIndex[];
+  lsis: DynamoIndex[];
+  streamArn?: string;
+  streamViewType?: string;
+}
+
+export interface DynamoScanQueryInput {
+  filterExpression?: string;
+  keyConditionExpression?: string;
+  projectionExpression?: string;
+  expressionAttributeNames?: Record<string, string>;
+  expressionAttributeValues?: Record<string, unknown>;
+  indexName?: string;
+  limit?: number;
+  exclusiveStartKey?: Record<string, unknown>;
+  scanIndexForward?: boolean;
+}
+
+export interface DynamoScanQueryOutput {
+  items: Record<string, unknown>[];
+  count: number;
+  scannedCount?: number;
+  lastEvaluatedKey?: Record<string, unknown>;
+}
+
 export interface SeedFileEntry {
   tableName: string;
   file: string;
@@ -113,6 +180,41 @@ export const api = {
     request<{ success: boolean }>(`/api/queues/${name}/reset-processed`, {
       method: 'POST',
     }),
+
+  // DynamoDB explorer
+  listDynamoTables: () => request<{ tables: DynamoTableSummary[] }>('/api/dynamo/tables'),
+  describeDynamoTable: (name: string) =>
+    request<DynamoTableDetail>(`/api/dynamo/tables/${encodeURIComponent(name)}`),
+  setDynamoTtl: (name: string, enabled: boolean, attributeName?: string) =>
+    request<DynamoTtlInfo>(`/api/dynamo/tables/${encodeURIComponent(name)}/ttl`, {
+      method: 'PUT',
+      body: JSON.stringify({ enabled, attributeName }),
+    }),
+  scanDynamoTable: (name: string, input: DynamoScanQueryInput) =>
+    request<DynamoScanQueryOutput>(`/api/dynamo/tables/${encodeURIComponent(name)}/scan`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  queryDynamoTable: (name: string, input: DynamoScanQueryInput) =>
+    request<DynamoScanQueryOutput>(`/api/dynamo/tables/${encodeURIComponent(name)}/query`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  getDynamoItem: (name: string, key: Record<string, unknown>) =>
+    request<{ item: Record<string, unknown> | null }>(
+      `/api/dynamo/tables/${encodeURIComponent(name)}/items/get`,
+      { method: 'POST', body: JSON.stringify({ key }) },
+    ),
+  putDynamoItem: (name: string, item: Record<string, unknown>) =>
+    request<{ success: boolean }>(`/api/dynamo/tables/${encodeURIComponent(name)}/items`, {
+      method: 'POST',
+      body: JSON.stringify({ item }),
+    }),
+  deleteDynamoItem: (name: string, key: Record<string, unknown>) =>
+    request<{ success: boolean }>(
+      `/api/dynamo/tables/${encodeURIComponent(name)}/items/delete`,
+      { method: 'POST', body: JSON.stringify({ key }) },
+    ),
 
   // Seeds
   listSeeds: () => request<SeedListResponse>('/api/seeds'),

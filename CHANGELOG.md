@@ -5,7 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.0.9] - 2026-05-18
+## [0.0.11] - 2026-05-18
+
+### Added
+- **DynamoDB explorer**: new "DynamoDB" tab inspired by the AWS Console. Lists every table with key schema, item count, billing mode, TTL/Streams status and per-table warnings (e.g. "TTL not configured"). Clicking a table opens a detail view with three sub-tabs.
+- **Explore items (Scan / Query)**: visual filter builder with attribute / operator / value rows (operators: `=`, `<>`, `<`, `<=`, `>`, `>=`, `begins_with`, `contains`, `attribute_exists`, `attribute_not_exists`). Values are auto-typed (number/boolean/null/JSON). Supports running on the table or any GSI/LSI, configurable limit, and "Load more" pagination via `LastEvaluatedKey`. Query mode requires key conditions (up to PK + SK) and reuses the same builder.
+- **Item CRUD**: per-row "View", "Edit" and "Delete" actions, plus a "Create item" button. Items are edited as plain JSON in a modal with format/validate. Edit performs a `PutItem` (full-replace); if any key attribute changed during edit, the original row is deleted first so it behaves like an update instead of producing a duplicate.
+- **Indexes sub-tab**: lists GSIs and LSIs with their key schema, projection type, item count and status.
+- **Settings sub-tab**: TTL toggle (`UpdateTimeToLive`), Streams view, table identifier (ARN + creation date), item count and size.
+- **`/api/dynamo` endpoints**: `GET /tables`, `GET /tables/:name`, `GET/PUT /tables/:name/ttl`, `POST /tables/:name/scan`, `POST /tables/:name/query`, `POST /tables/:name/items` (PutItem), `POST /tables/:name/items/get` (GetItem), `POST /tables/:name/items/delete`. Items and keys cross the wire as plain JSON — the server `marshall`s/`unmarshall`s.
+
+## [0.0.10] - 2026-05-18
 
 ### Added
 - **DynamoDB seeding**: drop `{tableName}.json` files into the directory configured by the new `seedsDir` option (default `./seeds`) and items get marshalled and inserted into the matching DynamoDB table. Items are written as plain JSON (no AWS attribute-typed envelope) — `@aws-sdk/util-dynamodb`'s `marshall` infers types automatically.
