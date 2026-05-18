@@ -1,6 +1,6 @@
 {
   "name": "local-serverless-stack",
-  "version": "0.0.9",
+  "version": "0.0.10",
   "description": "Local control plane for serverless development with LocalStack orchestration",
   "author": "LSS Contributors",
   "license": "MIT",
