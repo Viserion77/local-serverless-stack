@@ -10,7 +10,7 @@ import { ConfigManager } from '../services/config-manager.js';
 const router = Router();
 const parser = new CloudFormationParser();
 const cache = new CacheManager();
-const provisioner = new ResourceProvisioner();
+const provisioner = ResourceProvisioner.getInstance();
 const processManager = new ProcessManager();
 const configManager = ConfigManager.getInstance();
 
@@ -108,7 +108,14 @@ router.get('/', async (_req: Request, res: Response) => {
   try {
     await ensureCacheInit();
     const services = await cache.listServices();
-    return res.json(services);
+    const withCount = await Promise.all(
+      services.map(async (s) => {
+        const template = await cache.getTemplate(s.name);
+        const resourcesCount = template ? parser.parse(template).length : 0;
+        return { ...s, resourcesCount };
+      }),
+    );
+    return res.json(withCount);
   } catch (error) {
     console.error('Error listing services:', error);
     return res.status(500).json({ error: 'Failed to list services' });
@@ -154,9 +161,12 @@ router.delete('/:name', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid service name' });
     }
     
-    // Clean up resources from LocalStack
-    await provisioner.cleanupResources(serviceName);
-    
+    // Clean up resources from LocalStack — re-parse the cached template so the cleanup
+    // works even after an orchestrator restart (no in-memory state).
+    const template = await cache.getTemplate(serviceName);
+    const resources = template ? parser.parse(template) : [];
+    await provisioner.cleanupResources(serviceName, resources);
+
     // Delete from cache
     await cache.deleteService(serviceName);
     

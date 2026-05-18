@@ -1,6 +1,6 @@
 {
   "name": "local-serverless-stack",
-  "version": "0.0.6",
+  "version": "0.0.7",
   "description": "Local control plane for serverless development with LocalStack orchestration",
   "author": "LSS Contributors",
   "license": "MIT",
@@ -84,10 +84,10 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/your-org/local-serverless-stack.git"
+    "url": "https://github.com/viserion77/local-serverless-stack.git"
   },
   "bugs": {
-    "url": "https://github.com/your-org/local-serverless-stack/issues"
+    "url": "https://github.com/viserion77/local-serverless-stack/issues"
   },
-  "homepage": "https://github.com/your-org/local-serverless-stack#readme"
+  "homepage": "https://github.com/viserion77/local-serverless-stack#readme"
 }

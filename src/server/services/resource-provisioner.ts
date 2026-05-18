@@ -14,16 +14,22 @@ import type {
 import AdmZip from 'adm-zip';
 
 export class ResourceProvisioner {
+  private static instance: ResourceProvisioner;
   private dynamoClient!: DynamoDBClient;
   private sqsClient!: SQSClient;
   private snsClient!: SNSClient;
   private lambdaClient!: LambdaClient;
-  private provisionedResources = new Map<string, Set<string>>();
-  private serviceMetadata = new Map<string, { invokePort: number; invokeUrl: string }>();
   private currentRegion: string = 'us-east-1';
 
-  constructor() {
+  private constructor() {
     this.initializeClients(this.currentRegion);
+  }
+
+  static getInstance(): ResourceProvisioner {
+    if (!ResourceProvisioner.instance) {
+      ResourceProvisioner.instance = new ResourceProvisioner();
+    }
+    return ResourceProvisioner.instance;
   }
 
   private initializeClients(region: string): void {
@@ -43,21 +49,16 @@ export class ResourceProvisioner {
     resources: Resource[],
     metadata?: { invokePort?: number; invokeUrl?: string; region?: string },
   ): Promise<void> {
-    const provisioned = new Set<string>();
-
     // Update clients if region has changed
     if (metadata?.region && metadata.region !== this.currentRegion) {
       this.currentRegion = metadata.region;
       this.initializeClients(this.currentRegion);
     }
 
-    // Store service metadata for Lambda proxy creation
-    if (metadata?.invokePort) {
-      this.serviceMetadata.set(serviceName, {
-        invokePort: metadata.invokePort,
-        invokeUrl: metadata.invokeUrl || `http://host.docker.internal:${metadata.invokePort}`,
-      });
-    }
+    const invokeUrl = metadata?.invokeUrl
+      || (metadata?.invokePort ? `http://host.docker.internal:${metadata.invokePort}` : undefined);
+
+    let provisionedCount = 0;
 
     // First pass: Create infrastructure resources (DynamoDB, SQS, SNS)
     // Lambda functions are handled by Serverless Offline, not LocalStack
@@ -66,15 +67,15 @@ export class ResourceProvisioner {
         switch (resource.type) {
           case 'dynamodb':
             await this.createDynamoDBTable(resource);
-            provisioned.add(`dynamodb:${resource.name}`);
+            provisionedCount++;
             break;
           case 'sqs':
             await this.createSQSQueue(resource);
-            provisioned.add(`sqs:${resource.name}`);
+            provisionedCount++;
             break;
           case 'sns':
             await this.createSNSTopic(resource);
-            provisioned.add(`sns:${resource.name}`);
+            provisionedCount++;
             break;
         }
       } catch (error: any) {
@@ -89,8 +90,8 @@ export class ResourceProvisioner {
     const eventSources = resources.filter(r => r.type === 'event-source') as EventSourceMapping[];
     for (const eventSource of eventSources) {
       try {
-        await this.createEventSourceMapping(serviceName, eventSource);
-        provisioned.add(`event-source:${eventSource.functionName}`);
+        await this.createEventSourceMapping(serviceName, eventSource, invokeUrl);
+        provisionedCount++;
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         const errorName = error instanceof Error && 'name' in error ? (error as {name: string}).name : '';
@@ -100,8 +101,7 @@ export class ResourceProvisioner {
       }
     }
 
-    this.provisionedResources.set(serviceName, provisioned);
-    console.log(`✅ Provisioned ${provisioned.size} resources for ${serviceName}`);
+    console.log(`✅ Provisioned ${provisionedCount} resources for ${serviceName}`);
   }
 
   private async createDynamoDBTable(resource: DynamoDBResource): Promise<void> {
@@ -280,7 +280,7 @@ export const handler = async (event, context) => {
 `;
   }
 
-  private async createEventSourceMapping(serviceName: string, mapping: EventSourceMapping): Promise<void> {
+  private async createEventSourceMapping(serviceName: string, mapping: EventSourceMapping, invokeUrl?: string): Promise<void> {
     try {
       // Convert CloudFormation function name to Serverless naming convention
       // CloudFormation: ConsumerAppsQueueLambdaFunction -> Serverless: payment-reminder-api-consumerAppsQueue
@@ -290,7 +290,7 @@ export const handler = async (event, context) => {
       const eventSourceArn = await this.resolveEventSourceArn(mapping.eventSourceArn);
 
       // Create Lambda proxy function if it doesn't exist
-      await this.ensureLambdaProxyExists(serviceName, actualFunctionName);
+      await this.ensureLambdaProxyExists(serviceName, actualFunctionName, invokeUrl);
 
       // Check if mapping already exists
       const existingMappings = await this.lambdaClient.send(
@@ -322,7 +322,7 @@ export const handler = async (event, context) => {
     }
   }
 
-  private async ensureLambdaProxyExists(serviceName: string, functionName: string): Promise<void> {
+  private async ensureLambdaProxyExists(serviceName: string, functionName: string, invokeUrl?: string): Promise<void> {
     try {
       // Check if function already exists
       await this.lambdaClient.send(
@@ -338,13 +338,11 @@ export const handler = async (event, context) => {
       }
     }
 
-    // Function doesn't exist, create a Lambda proxy
-    const metadata = this.serviceMetadata.get(serviceName);
-    if (!metadata) {
-      throw new Error(`Cannot create Lambda proxy for ${functionName}: no invoke port configured for ${serviceName}`);
+    if (!invokeUrl) {
+      throw new Error(`Cannot create Lambda proxy for ${functionName}: no invoke URL configured for ${serviceName}`);
     }
 
-    const proxyCode = this.generateProxyLambdaCode(functionName, metadata.invokeUrl);
+    const proxyCode = this.generateProxyLambdaCode(functionName, invokeUrl);
     const zip = new AdmZip();
     zip.addFile('index.mjs', Buffer.from(proxyCode, 'utf-8'));
     const zipBuffer = zip.toBuffer();
@@ -360,7 +358,7 @@ export const handler = async (event, context) => {
         },
         Environment: {
           Variables: {
-            INVOKE_URL: metadata.invokeUrl,
+            INVOKE_URL: invokeUrl,
             FUNCTION_NAME: functionName,
           },
         },
@@ -368,7 +366,7 @@ export const handler = async (event, context) => {
         Timeout: 60,
       }),
     );
-    console.log(`  ✓ Created Lambda proxy: ${functionName} -> ${metadata.invokeUrl}`);
+    console.log(`  ✓ Created Lambda proxy: ${functionName} -> ${invokeUrl}`);
   }
 
   private resolveLambdaFunctionName(serviceName: string, cfnName: string): string {
@@ -511,44 +509,40 @@ export const handler = async (event, context) => {
     }
   }
 
-  async cleanupResources(serviceName: string): Promise<void> {
-    const resources = this.provisionedResources.get(serviceName);
-    if (!resources) {
-      console.log(`No resources found for service ${serviceName}`);
+  async cleanupResources(serviceName: string, resources: Resource[]): Promise<void> {
+    if (!resources || resources.length === 0) {
+      console.log(`No resources to clean up for ${serviceName}`);
       return;
     }
 
     let cleaned = 0;
     for (const resource of resources) {
       try {
-        const [type, name] = resource.split(':');
-        
-        switch (type) {
+        switch (resource.type) {
           case 'dynamodb':
-            await this.deleteDynamoDBTable(name);
+            await this.deleteDynamoDBTable(resource.name);
             cleaned++;
             break;
           case 'sqs':
-            await this.deleteSQSQueue(name);
+            await this.deleteSQSQueue(resource.name);
             cleaned++;
             break;
           case 'sns':
-            await this.deleteSNSTopic(name);
+            await this.deleteSNSTopic(resource.name);
             cleaned++;
             break;
           case 'event-source':
-            await this.deleteEventSourceMapping(serviceName, name);
+            await this.deleteEventSourceMapping(serviceName, resource.functionName);
             cleaned++;
             break;
         }
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        console.error(`Failed to cleanup ${resource}:`, errorMessage);
+        const resourceName = 'name' in resource ? resource.name : resource.functionName;
+        console.error(`Failed to cleanup ${resource.type}:${resourceName}:`, errorMessage);
       }
     }
 
-    this.provisionedResources.delete(serviceName);
-    this.serviceMetadata.delete(serviceName);
     console.log(`✅ Cleaned up ${cleaned} resources for ${serviceName}`);
   }
 

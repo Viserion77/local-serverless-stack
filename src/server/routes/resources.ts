@@ -2,7 +2,7 @@ import { Router, Request, Response } from 'express';
 import { ResourceProvisioner } from '../services/resource-provisioner.js';
 
 const router = Router();
-const provisioner = new ResourceProvisioner();
+const provisioner = ResourceProvisioner.getInstance();
 
 // List all provisioned resources
 router.get('/', async (_req: Request, res: Response) => {
