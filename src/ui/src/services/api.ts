@@ -17,6 +17,32 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return response.json();
 }
 
+export interface QueueConsumer {
+  functionName: string;
+  uuid?: string;
+  state?: string;
+  batchSize?: number;
+  enabled: boolean;
+}
+
+export interface QueueSnapshot {
+  name: string;
+  url: string;
+  arn?: string;
+  available: number;
+  inFlight: number;
+  delayed: number;
+  processed: number;
+  total: number;
+  fifo: boolean;
+  visibilityTimeout?: number;
+  messageRetentionPeriod?: number;
+  createdAt?: number;
+  lastModifiedAt?: number;
+  consumers: QueueConsumer[];
+  lastPolledAt: number;
+}
+
 export const api = {
   // Health
   checkHealth: () => request<{ status: string; localstack: boolean }>('/api/health'),
@@ -53,4 +79,12 @@ export const api = {
 
   // Resources
   listResources: () => request<{ tables: string[]; queues: string[]; topics: string[] }>('/api/resources'),
+
+  // Queues
+  listQueues: () => request<QueueSnapshot[]>('/api/queues'),
+  getQueue: (name: string) => request<QueueSnapshot>(`/api/queues/${name}`),
+  resetQueueProcessed: (name: string) =>
+    request<{ success: boolean }>(`/api/queues/${name}/reset-processed`, {
+      method: 'POST',
+    }),
 };

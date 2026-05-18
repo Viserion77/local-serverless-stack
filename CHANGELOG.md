@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.8] - 2026-05-18
+
+### Added
+- **Queue inspection UI**: new "Queues" tab in the dashboard. For each SQS queue it shows available messages, in-flight messages, processed-since-orchestrator-start, delayed messages, and the Lambda consumers (event source mappings) attached to it. Click "Details" for full attributes (visibility timeout, retention, FIFO, creation time) plus a per-consumer panel.
+- **`/api/queues` endpoints**: `GET /api/queues` (list), `GET /api/queues/:name` (details), `POST /api/queues/:name/reset-processed` (reset processed counter).
+- **Queue metrics tracker**: `QueueInspector` polls LocalStack every 5s and derives a per-queue "processed" count from drops in the in-flight bucket that are not re-queued as retries.
+- **TreeUI design system**: dashboard now uses [`@treeui/vue`](https://www.npmjs.com/package/@treeui/vue) components throughout — `TNavbar`, `TContainer`, `TTabs`, `TCard`, `TStat`, `TTable`, `TBadge`, `TTag`, `TButton`, `TInput`, `TFormField`, `TModal`, `TConfirmDialog`, `TEmptyState`, `TSpinner`, `TProgress`, `TAlert`, `TStack`, `TGrid`, `TDivider`, `TToastProvider` / `useToast()`. Toasts replace native `alert()` calls. Dark theme is applied by default with a light/dark toggle in the navbar.
+
+### Changed
+- `ServicesList` and `ResourcesOverview` rewritten on top of TreeUI primitives.
+- Delete service now goes through a `TConfirmDialog` instead of `window.confirm`.
+
 ## [0.0.6] - 2026-05-17
 
 ### Added

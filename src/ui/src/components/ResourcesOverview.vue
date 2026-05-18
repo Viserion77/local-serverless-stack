@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { TGrid, TStat, TCard, TStack, TBadge, TTag } from '@treeui/vue';
 import { api } from '../services/api';
 
 const resources = ref<{ tables: string[]; queues: string[]; topics: string[] }>({
@@ -8,6 +9,7 @@ const resources = ref<{ tables: string[]; queues: string[]; topics: string[] }>(
   topics: [],
 });
 const loading = ref(true);
+let timer: number | null = null;
 
 async function loadResources() {
   try {
@@ -21,35 +23,90 @@ async function loadResources() {
 
 onMounted(() => {
   loadResources();
-  setInterval(loadResources, 15000);
+  timer = window.setInterval(loadResources, 15000);
+});
+
+onBeforeUnmount(() => {
+  if (timer) window.clearInterval(timer);
 });
 </script>
 
 <template>
-  <div class="grid grid-cols-3">
-    <div class="stat-card">
-      <div class="stat-label">
-        DynamoDB Tables
-      </div>
-      <div class="stat-value">
-        {{ loading ? '...' : resources.tables.length }}
-      </div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">
-        SQS Queues
-      </div>
-      <div class="stat-value">
-        {{ loading ? '...' : resources.queues.length }}
-      </div>
-    </div>
-    <div class="stat-card">
-      <div class="stat-label">
-        SNS Topics
-      </div>
-      <div class="stat-value">
-        {{ loading ? '...' : resources.topics.length }}
-      </div>
-    </div>
-  </div>
+  <TStack direction="vertical" gap="1.25rem">
+    <TGrid :columns="3" gap="1rem">
+      <TStat
+        label="DynamoDB Tables"
+        :value="resources.tables.length"
+        tone="info"
+        :loading="loading"
+      />
+      <TStat
+        label="SQS Queues"
+        :value="resources.queues.length"
+        tone="success"
+        :loading="loading"
+      />
+      <TStat
+        label="SNS Topics"
+        :value="resources.topics.length"
+        tone="warning"
+        :loading="loading"
+      />
+    </TGrid>
+
+    <TCard
+      title="Provisioned resources"
+      variant="outline"
+    >
+      <template #header>
+        <TStack direction="horizontal" gap="0.5rem" align="center">
+          <strong>Provisioned resources</strong>
+          <TBadge tone="neutral" variant="soft">
+            {{ resources.tables.length + resources.queues.length + resources.topics.length }} total
+          </TBadge>
+        </TStack>
+      </template>
+
+      <TStack direction="vertical" gap="0.75rem">
+        <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
+          <TBadge tone="info">Tables</TBadge>
+          <TTag
+            v-for="t in resources.tables"
+            :key="`tbl-${t}`"
+            variant="soft"
+            size="sm"
+          >
+            {{ t }}
+          </TTag>
+          <span v-if="!resources.tables.length" class="muted">none</span>
+        </TStack>
+
+        <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
+          <TBadge tone="success">Queues</TBadge>
+          <TTag
+            v-for="q in resources.queues"
+            :key="`q-${q}`"
+            variant="soft"
+            size="sm"
+          >
+            {{ q }}
+          </TTag>
+          <span v-if="!resources.queues.length" class="muted">none</span>
+        </TStack>
+
+        <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
+          <TBadge tone="warning">Topics</TBadge>
+          <TTag
+            v-for="t in resources.topics"
+            :key="`tp-${t}`"
+            variant="soft"
+            size="sm"
+          >
+            {{ t }}
+          </TTag>
+          <span v-if="!resources.topics.length" class="muted">none</span>
+        </TStack>
+      </TStack>
+    </TCard>
+  </TStack>
 </template>

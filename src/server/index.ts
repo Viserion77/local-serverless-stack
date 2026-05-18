@@ -4,8 +4,10 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { servicesRouter, processManager } from './routes/services.js';
 import { resourcesRouter } from './routes/resources.js';
+import { queuesRouter } from './routes/queues.js';
 import { LocalStackManager } from './services/localstack-manager.js';
 import { ConfigManager } from './services/config-manager.js';
+import { QueueInspector } from './services/queue-inspector.js';
 import { startDynamoProxy } from './dev/dynamo-proxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -22,6 +24,7 @@ app.use(express.json());
 // API routes
 app.use('/api/services', servicesRouter);
 app.use('/api/resources', resourcesRouter);
+app.use('/api/queues', queuesRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -53,6 +56,8 @@ async function start() {
       console.log(`✅ LocalStack running on ${localstack.getEndpoint()}`);
     });
 
+    QueueInspector.getInstance().startPolling();
+
     // Optional DynamoDB proxy
     if (configManager.isEnableDynamoProxy()) {
       const proxyPort = configManager.getDynamoProxyPort();
@@ -70,6 +75,7 @@ async function start() {
 // Graceful shutdown
 process.on('SIGINT', async () => {
   console.log('\n🛑 Shutting down gracefully...');
+  QueueInspector.getInstance().stopPolling();
   processManager.stopAll();
   await processManager.cleanup();
   const localstack = LocalStackManager.getInstance();
