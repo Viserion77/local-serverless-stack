@@ -8,5 +8,8 @@
   "services": ["dynamodb", "sqs", "sns", "lambda"],
   "persistence": true,
   "debug": false,
-  "seedsDir": "./seeds"
+  "seedsDir": "./seeds",
+  "autoPackage": false,
+  "packageCommand": "npx serverless package",
+  "packageTimeoutMs": 300000
 }

@@ -32,7 +32,10 @@ Both files should contain valid JSON with the following optional properties:
   "region": "us-east-1",
   "services": ["dynamodb", "sqs", "sns", "lambda"],
   "persistence": true,
-  "debug": false
+  "debug": false,
+  "autoPackage": false,
+  "packageCommand": "npx serverless package",
+  "packageTimeoutMs": 300000
 }
 ```
 
@@ -96,6 +99,20 @@ Both files should contain valid JSON with the following optional properties:
 - **debug** (boolean, default: false)
   - Enable debug mode for LocalStack
   - Example: `false`
+
+- **autoPackage** (boolean, default: false)
+  - When registering a service, if `.serverless/cloudformation-template-update-stack.json` is missing, run the configured `packageCommand` in the service directory and retry.
+  - Useful when integrating new microservices without manually running `serverless package` first.
+  - Example: `true`
+
+- **packageCommand** (string, default: `"npx serverless package"`)
+  - Command executed in the service directory when `autoPackage` is enabled and the template is missing.
+  - Parsed as shell-style tokens (quoted args supported); not run through a shell.
+  - Example: `"npm run package"` or `"npx serverless package --stage dev"`
+
+- **packageTimeoutMs** (number, default: 300000)
+  - Maximum time in milliseconds to wait for `packageCommand` before killing it.
+  - Example: `600000` (10 minutes)
 
 ## Configuring the Serverless Plugin
 
@@ -205,6 +222,9 @@ If no configuration file is found, you can use environment variables:
 - `LSS_SERVICES` - Services (comma-separated)
 - `LSS_PERSISTENCE` - Persistence (true/false or 1/0)
 - `LSS_DEBUG` - Debug mode (true/false or 1/0)
+- `LSS_AUTO_PACKAGE` - Run package command when template is missing (true/false or 1/0)
+- `LSS_PACKAGE_COMMAND` - Override the package command
+- `LSS_PACKAGE_TIMEOUT_MS` - Override the package timeout in milliseconds
 
 ### Environment Variable Examples
 

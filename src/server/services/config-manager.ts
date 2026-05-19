@@ -49,6 +49,17 @@ export interface LSSConfig {
   // Directory containing DynamoDB seed files ({tableName}.json).
   // Seeds are auto-applied when a table is created; can also be run on demand.
   seedsDir?: string;
+
+  // When the CloudFormation template is missing during /register, run a packaging
+  // command (default: `npx serverless package`) and retry the read.
+  autoPackage?: boolean;
+
+  // Command to run when autoPackage is enabled and the template is missing.
+  // Parsed as shell-style args; runs in the servicePath as CWD.
+  packageCommand?: string;
+
+  // Maximum time (ms) to wait for the package command to complete. Defaults to 300000 (5min).
+  packageTimeoutMs?: number;
 }
 
 export class ConfigManager {
@@ -153,6 +164,18 @@ export class ConfigManager {
     if (process.env.LSS_SEEDS_DIR) {
       this.config.seedsDir = process.env.LSS_SEEDS_DIR;
     }
+    if (process.env.LSS_AUTO_PACKAGE) {
+      this.config.autoPackage = process.env.LSS_AUTO_PACKAGE === 'true' || process.env.LSS_AUTO_PACKAGE === '1';
+    }
+    if (process.env.LSS_PACKAGE_COMMAND) {
+      this.config.packageCommand = process.env.LSS_PACKAGE_COMMAND;
+    }
+    if (process.env.LSS_PACKAGE_TIMEOUT_MS) {
+      const parsed = parseInt(process.env.LSS_PACKAGE_TIMEOUT_MS, 10);
+      if (!isNaN(parsed) && parsed > 0) {
+        this.config.packageTimeoutMs = parsed;
+      }
+    }
   }
 
   getConfig(): LSSConfig {
@@ -247,6 +270,18 @@ export class ConfigManager {
     return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
   }
 
+  isAutoPackage(): boolean {
+    return this.config.autoPackage ?? false;
+  }
+
+  getPackageCommand(): string {
+    return this.config.packageCommand ?? 'npx serverless package';
+  }
+
+  getPackageTimeoutMs(): number {
+    return this.config.packageTimeoutMs ?? 300000;
+  }
+
   getConfigPath(): string {
     return this.configPath;
   }
@@ -271,6 +306,10 @@ export class ConfigManager {
     console.log(`  Services: ${this.getServices().join(', ')}`);
     console.log(`  Persistence: ${this.isPersistence()}`);
     console.log(`  Seeds Dir: ${this.getSeedsDir()}`);
+    console.log(`  Auto Package: ${this.isAutoPackage()}`);
+    if (this.isAutoPackage()) {
+      console.log(`  Package Command: ${this.getPackageCommand()}`);
+    }
     if (this.getConfigPath()) {
       console.log(`  Config File: ${this.getConfigPath()}`);
     }

@@ -5,6 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.13] - 2026-05-19
+
+### Added
+- **Auto-package on register**: when registering a service, if `.serverless/cloudformation-template-update-stack.json` is missing, the orchestrator can now run a configurable package command in the service directory and retry the read. Controlled by three new `lss.config.json` options: `autoPackage` (boolean, default `false`), `packageCommand` (string, default `"npx serverless package"`), and `packageTimeoutMs` (number, default `300000`). Also exposed as the env vars `LSS_AUTO_PACKAGE`, `LSS_PACKAGE_COMMAND`, `LSS_PACKAGE_TIMEOUT_MS`. Useful when integrating new microservices without manually running `serverless package` first. The runnable `examples/sample-microservice/lss.config.json` ships with `autoPackage: true` enabled by default.
+
+### Changed
+- `POST /api/services/register` now returns a clear `400` with an actionable message (`"CloudFormation template not found at ... Run 'serverless package' in the service directory, or enable autoPackage in lss.config.json."`) when the template is missing and `autoPackage` is disabled, instead of leaking the underlying `ENOENT` stack trace as a `500`.
+- The configuration summary printed at startup now includes the active `autoPackage` and (when enabled) `packageCommand` values.
+
 ## [0.0.12] - 2026-05-19
 
 ### Added

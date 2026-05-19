@@ -6,6 +6,7 @@ import { CacheManager } from '../services/cache-manager.js';
 import { ResourceProvisioner } from '../services/resource-provisioner.js';
 import { ProcessManager } from '../services/process-manager.js';
 import { ConfigManager } from '../services/config-manager.js';
+import { runServerlessPackage, ServerlessPackageError } from '../services/serverless-packager.js';
 
 const router = Router();
 const parser = new CloudFormationParser();
@@ -59,9 +60,40 @@ router.post('/register', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid invokePort, must be between 1024-65535' });
     }
 
-    // Read CloudFormation template
+    // Read CloudFormation template. If missing and autoPackage is enabled, run
+    // the configured package command and retry once.
     const templatePath = path.join(resolvedPath, '.serverless', 'cloudformation-template-update-stack.json');
-    const templateContent = await fs.readFile(templatePath, 'utf-8');
+    let templateContent: string;
+    try {
+      templateContent = await fs.readFile(templatePath, 'utf-8');
+    } catch (err) {
+      const isENOENT = (err as NodeJS.ErrnoException)?.code === 'ENOENT';
+      if (!isENOENT) throw err;
+
+      if (!configManager.isAutoPackage()) {
+        return res.status(400).json({
+          error: `CloudFormation template not found at ${templatePath}. Run 'serverless package' in the service directory, or enable autoPackage in lss.config.json.`,
+        });
+      }
+
+      const packageCommand = configManager.getPackageCommand();
+      console.log(`📦 Template missing — running '${packageCommand}' in ${resolvedPath}`);
+      try {
+        await runServerlessPackage({
+          command: packageCommand,
+          cwd: resolvedPath,
+          timeoutMs: configManager.getPackageTimeoutMs(),
+        });
+      } catch (packageErr) {
+        const detail = packageErr instanceof ServerlessPackageError
+          ? `${packageErr.message}\n${packageErr.result.stderr || packageErr.result.stdout}`.trim()
+          : packageErr instanceof Error ? packageErr.message : 'Unknown error';
+        return res.status(500).json({
+          error: `Auto-package failed for ${resolvedPath}: ${detail}`,
+        });
+      }
+      templateContent = await fs.readFile(templatePath, 'utf-8');
+    }
     const template = JSON.parse(templateContent);
 
     // Parse resources
