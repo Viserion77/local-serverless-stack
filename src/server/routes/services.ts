@@ -79,17 +79,32 @@ router.post('/register', async (req: Request, res: Response) => {
       const packageCommand = configManager.getPackageCommand();
       console.log(`📦 Template missing — running '${packageCommand}' in ${resolvedPath}`);
       try {
-        await runServerlessPackage({
+        const result = await runServerlessPackage({
           command: packageCommand,
           cwd: resolvedPath,
           timeoutMs: configManager.getPackageTimeoutMs(),
         });
+        console.log(`✅ Auto-package finished for ${resolvedPath} (exit 0)`);
+        if (result.stdout.trim()) {
+          console.log(`--- ${packageCommand} stdout ---\n${result.stdout.trimEnd()}\n--- end ---`);
+        }
       } catch (packageErr) {
+        if (packageErr instanceof ServerlessPackageError) {
+          console.error(`❌ Auto-package failed for ${resolvedPath}: ${packageErr.message}`);
+          if (packageErr.result.stdout.trim()) {
+            console.error(`--- ${packageCommand} stdout ---\n${packageErr.result.stdout.trimEnd()}\n--- end ---`);
+          }
+          if (packageErr.result.stderr.trim()) {
+            console.error(`--- ${packageCommand} stderr ---\n${packageErr.result.stderr.trimEnd()}\n--- end ---`);
+          }
+        } else {
+          console.error(`❌ Auto-package failed for ${resolvedPath}:`, packageErr);
+        }
         const detail = packageErr instanceof ServerlessPackageError
           ? `${packageErr.message}\n${packageErr.result.stderr || packageErr.result.stdout}`.trim()
           : packageErr instanceof Error ? packageErr.message : 'Unknown error';
         return res.status(500).json({
-          error: `Auto-package failed for ${resolvedPath}: ${detail}`,
+          error: `Auto-package failed for ${resolvedPath}: ${detail}. Full stderr/stdout is in the orchestrator log (/tmp/lss-orchestrator.log).`,
         });
       }
       templateContent = await fs.readFile(templatePath, 'utf-8');

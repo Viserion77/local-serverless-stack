@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - `POST /api/services/register` now returns a clear `400` with an actionable message (`"CloudFormation template not found at ... Run 'serverless package' in the service directory, or enable autoPackage in lss.config.json."`) when the template is missing and `autoPackage` is disabled, instead of leaking the underlying `ENOENT` stack trace as a `500`.
+- Auto-package failures now log the full stdout/stderr of the package command to the orchestrator log (`/tmp/lss-orchestrator.log`) with delimiter lines, so failures from `serverless-webpack`, stage validators, missing params, etc. are diagnosable. The HTTP response now points users to the orchestrator log for the full transcript.
 - The configuration summary printed at startup now includes the active `autoPackage` and (when enabled) `packageCommand` values.
 
 ## [0.0.12] - 2026-05-19
