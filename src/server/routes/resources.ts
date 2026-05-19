@@ -5,9 +5,10 @@ const router = Router();
 const provisioner = ResourceProvisioner.getInstance();
 
 // List all provisioned resources
-router.get('/', async (_req: Request, res: Response) => {
+router.get('/', async (req: Request, res: Response) => {
   try {
-    const resources = await provisioner.listAllResources();
+    const region = typeof req.query.region === 'string' && req.query.region ? req.query.region : undefined;
+    const resources = await provisioner.listAllResources(region);
     res.json(resources);
   } catch (error: any) {
     res.status(500).json({ error: error.message });

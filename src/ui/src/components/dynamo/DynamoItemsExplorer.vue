@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import {
-  TCard, TButton, TBadge, TStack, TTable, TEmptyState, TSpinner, TAlert,
-  TInput, TSelect, TSelectableList, TDivider, TConfirmDialog, useToast,
-  TToggleGroup,
+  TCard, TButton, TStack, TTable, TEmptyState, TSpinner, TAlert,
+  TInput, TSelect, TDivider, TConfirmDialog, useToast, TFormField,
+  TToggleGroup, TLink, TCheckbox,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type {
@@ -16,26 +16,37 @@ const props = defineProps<{ table: DynamoTableDetail }>();
 const toast = useToast();
 
 type Mode = 'scan' | 'query';
+type FilterType = 'String' | 'Number' | 'Boolean' | 'Null';
 
-interface Condition {
+interface Filter {
   attr: string;
   op: string;
+  type: FilterType;
   value: string;
 }
 
 const mode = ref<Mode>('scan');
 const indexName = ref<string>('');
-const keyConditions = ref<Condition[]>([]);
-const filterConditions = ref<Condition[]>([]);
 const limit = ref<number>(50);
+
+// Query — single partition + single sort condition, AWS-style.
+const pkValue = ref<string>('');
+const skOperator = ref<string>('=');
+const skValue = ref<string>('');
+const skValue2 = ref<string>(''); // second value, used by the BETWEEN operator
+const sortDescending = ref<boolean>(false);
+
+const filters = ref<Filter[]>([]);
+const filtersExpanded = ref<boolean>(false);
 
 const items = ref<Record<string, unknown>[]>([]);
 const lastEvaluatedKey = ref<Record<string, unknown> | undefined>(undefined);
 const scannedCount = ref<number | undefined>(undefined);
+const startedAt = ref<Date | null>(null);
 const running = ref(false);
 const error = ref<string | null>(null);
+const statusVisible = ref(false);
 
-// Modal state
 const editorOpen = ref(false);
 const editorMode = ref<'create' | 'edit' | 'view'>('view');
 const editorItem = ref<Record<string, unknown> | null>(null);
@@ -44,44 +55,50 @@ const editorOriginalKey = ref<Record<string, unknown> | null>(null);
 const confirmDeleteOpen = ref(false);
 const pendingDelete = ref<Record<string, unknown> | null>(null);
 
-const filterOps: { value: string; label: string }[] = [
-  { value: '=', label: 'equals' },
-  { value: '<>', label: 'not equals' },
-  { value: '<', label: 'less than' },
-  { value: '<=', label: 'less or equal' },
-  { value: '>', label: 'greater than' },
-  { value: '>=', label: 'greater or equal' },
-  { value: 'begins_with', label: 'begins with' },
-  { value: 'contains', label: 'contains' },
-  { value: 'attribute_exists', label: 'exists' },
-  { value: 'attribute_not_exists', label: 'does not exist' },
-];
-
-// Query key-condition supports only =, <, <=, >, >=, between, begins_with — and =/begins_with
-// for the sort key. To keep it ergonomic we expose the common ones.
-const keyConditionOps: { value: string; label: string }[] = [
-  { value: '=', label: 'equals' },
-  { value: '<', label: 'less than' },
-  { value: '<=', label: 'less or equal' },
-  { value: '>', label: 'greater than' },
-  { value: '>=', label: 'greater or equal' },
-  { value: 'begins_with', label: 'begins with' },
-];
-
 const modeOptions = [
   { value: 'scan', label: 'Scan' },
   { value: 'query', label: 'Query' },
 ];
 
+const skOperators: { value: string; label: string }[] = [
+  { value: '=', label: 'Equal to' },
+  { value: '<=', label: 'Less than or equal to' },
+  { value: '<', label: 'Less than' },
+  { value: '>=', label: 'Greater than or equal to' },
+  { value: '>', label: 'Greater than' },
+  { value: 'between', label: 'Between' },
+  { value: 'begins_with', label: 'Begins with' },
+];
+
+const filterOps: { value: string; label: string }[] = [
+  { value: '=', label: 'Equal to' },
+  { value: '<>', label: 'Not equal to' },
+  { value: '<', label: 'Less than' },
+  { value: '<=', label: 'Less than or equal to' },
+  { value: '>', label: 'Greater than' },
+  { value: '>=', label: 'Greater than or equal to' },
+  { value: 'begins_with', label: 'Begins with' },
+  { value: 'contains', label: 'Contains' },
+  { value: 'attribute_exists', label: 'Exists' },
+  { value: 'attribute_not_exists', label: 'Does not exist' },
+];
+
+const filterTypeOptions: { value: FilterType; label: string }[] = [
+  { value: 'String', label: 'String' },
+  { value: 'Number', label: 'Number' },
+  { value: 'Boolean', label: 'Boolean' },
+  { value: 'Null', label: 'Null' },
+];
+
 const indexOptions = computed(() => {
   const opts: { value: string; label: string }[] = [
-    { value: '', label: 'Table (primary key)' },
+    { value: '', label: `Table - ${props.table.name}` },
   ];
   for (const gsi of props.table.gsis || []) {
-    if (gsi.IndexName) opts.push({ value: gsi.IndexName, label: `GSI · ${gsi.IndexName}` });
+    if (gsi.IndexName) opts.push({ value: gsi.IndexName, label: `Index - ${gsi.IndexName}` });
   }
   for (const lsi of props.table.lsis || []) {
-    if (lsi.IndexName) opts.push({ value: lsi.IndexName, label: `LSI · ${lsi.IndexName}` });
+    if (lsi.IndexName) opts.push({ value: lsi.IndexName, label: `Index - ${lsi.IndexName}` });
   }
   return opts;
 });
@@ -94,126 +111,164 @@ const activeKeySchema = computed(() => {
   return idx?.KeySchema || props.table.keySchema;
 });
 
+const pkAttr = computed(
+  () => activeKeySchema.value?.find(k => k.KeyType === 'HASH')?.AttributeName || '',
+);
+const skAttr = computed(
+  () => activeKeySchema.value?.find(k => k.KeyType === 'RANGE')?.AttributeName || '',
+);
+
 const keyAttrNames = computed(() =>
   (activeKeySchema.value || []).map(k => k.AttributeName).filter((n): n is string => !!n),
 );
 
-const allAttrNames = computed(() => {
+const nonKeyAttrsInItems = computed(() => {
   const set = new Set<string>();
   for (const item of items.value) {
-    Object.keys(item).forEach(k => set.add(k));
+    Object.keys(item).forEach(k => {
+      if (!keyAttrNames.value.includes(k)) set.add(k);
+    });
   }
-  // Always include declared key/attr names so the dropdowns aren't empty before first run.
-  (props.table.attributeDefinitions || []).forEach(a => {
-    if (a.AttributeName) set.add(a.AttributeName);
-  });
   return Array.from(set).sort();
 });
 
+function attrTypeLabel(name: string): string | null {
+  const def = props.table.attributeDefinitions.find(a => a.AttributeName === name);
+  if (!def?.AttributeType) return null;
+  if (def.AttributeType === 'S') return 'String';
+  if (def.AttributeType === 'N') return 'Number';
+  if (def.AttributeType === 'B') return 'Binary';
+  return def.AttributeType;
+}
+
+function columnLabel(name: string, isPk?: boolean, isSk?: boolean): string {
+  const type = attrTypeLabel(name);
+  if (isPk) return type ? `${name} (${type}, PK)` : `${name} (PK)`;
+  if (isSk) return type ? `${name} (${type}, SK)` : `${name} (SK)`;
+  return type ? `${name} (${type})` : name;
+}
+
 const columns = computed(() => {
-  const keyCols = keyAttrNames.value.map(name => ({ key: `__attr__${name}`, label: name }));
-  return [
-    ...keyCols,
-    { key: '__preview', label: 'Other attributes' },
-    { key: '__actions', label: '', align: 'right' as const },
-  ];
+  const keyCols = keyAttrNames.value.map((name, idx) => ({
+    key: `__attr__${name}`,
+    label: columnLabel(name, idx === 0, idx === 1),
+  }));
+  const otherCols = nonKeyAttrsInItems.value.map(name => ({
+    key: `__attr__${name}`,
+    label: columnLabel(name),
+  }));
+  return [...keyCols, ...otherCols];
 });
 
 const rows = computed(() =>
   items.value.map((item, i) => {
-    const row: Record<string, unknown> = { __id: i };
-    for (const name of keyAttrNames.value) {
-      row[`__attr__${name}`] = item[name];
-    }
-    const otherEntries = Object.entries(item).filter(([k]) => !keyAttrNames.value.includes(k));
-    row.__preview = otherEntries
-      .slice(0, 4)
-      .map(([k, v]) => `${k}: ${stringifyShort(v)}`)
-      .join(' · ') + (otherEntries.length > 4 ? ` · +${otherEntries.length - 4} more` : '');
-    row.__raw = item;
+    const row: Record<string, unknown> = { __id: i, __raw: item };
+    for (const name of keyAttrNames.value) row[`__attr__${name}`] = item[name];
+    for (const name of nonKeyAttrsInItems.value) row[`__attr__${name}`] = item[name];
     return row;
   }),
 );
 
 function stringifyShort(v: unknown): string {
+  if (v === undefined) return '—';
   if (v === null) return 'null';
-  if (typeof v === 'object') return JSON.stringify(v).slice(0, 60);
-  return String(v).slice(0, 60);
+  if (typeof v === 'boolean') return v ? 'true' : 'false';
+  if (typeof v === 'object') return JSON.stringify(v).slice(0, 80);
+  return String(v).slice(0, 80);
 }
 
-function inferValue(raw: string): unknown {
-  const trimmed = raw.trim();
-  if (trimmed === '') return '';
-  if (trimmed === 'true') return true;
-  if (trimmed === 'false') return false;
-  if (trimmed === 'null') return null;
-  if (/^-?\d+(\.\d+)?$/.test(trimmed)) return Number(trimmed);
-  if ((trimmed.startsWith('{') && trimmed.endsWith('}')) ||
-      (trimmed.startsWith('[') && trimmed.endsWith(']')) ||
-      (trimmed.startsWith('"') && trimmed.endsWith('"'))) {
-    try { return JSON.parse(trimmed); } catch { /* fall through */ }
+function coerceByType(raw: string, type: FilterType): unknown {
+  switch (type) {
+    case 'Number': {
+      const n = Number(raw);
+      if (Number.isNaN(n)) throw new Error(`"${raw}" is not a number`);
+      return n;
+    }
+    case 'Boolean':
+      return raw === 'true' || raw === '1';
+    case 'Null':
+      return null;
+    case 'String':
+    default:
+      return raw;
   }
-  return trimmed;
 }
 
-function buildExpression(
-  conditions: Condition[],
-  prefix: string,
-): { expression: string; names: Record<string, string>; values: Record<string, unknown> } {
-  const expressions: string[] = [];
+function coerceByAttrType(raw: string, name: string): unknown {
+  const def = props.table.attributeDefinitions.find(a => a.AttributeName === name);
+  if (def?.AttributeType === 'N') {
+    const n = Number(raw);
+    if (Number.isNaN(n)) throw new Error(`"${raw}" is not a number for ${name}`);
+    return n;
+  }
+  return raw;
+}
+
+function buildQuery(): { keyExpr: string; names: Record<string, string>; values: Record<string, unknown> } {
   const names: Record<string, string> = {};
   const values: Record<string, unknown> = {};
-  conditions.forEach((c, i) => {
-    if (!c.attr) return;
-    const nameKey = `#${prefix}n${i}`;
-    const valueKey = `:${prefix}v${i}`;
-    names[nameKey] = c.attr;
-    switch (c.op) {
-      case 'attribute_exists':
-        expressions.push(`attribute_exists(${nameKey})`);
-        break;
-      case 'attribute_not_exists':
-        expressions.push(`attribute_not_exists(${nameKey})`);
-        break;
-      case 'begins_with':
-        values[valueKey] = inferValue(c.value);
-        expressions.push(`begins_with(${nameKey}, ${valueKey})`);
-        break;
-      case 'contains':
-        values[valueKey] = inferValue(c.value);
-        expressions.push(`contains(${nameKey}, ${valueKey})`);
-        break;
-      default:
-        values[valueKey] = inferValue(c.value);
-        expressions.push(`${nameKey} ${c.op} ${valueKey}`);
+  if (!pkAttr.value) throw new Error('No partition key on the selected table or index');
+  if (!pkValue.value) throw new Error(`Partition key value (${pkAttr.value}) is required`);
+
+  names['#pk'] = pkAttr.value;
+  values[':pkv'] = coerceByAttrType(pkValue.value, pkAttr.value);
+  let keyExpr = '#pk = :pkv';
+
+  if (skAttr.value && skValue.value) {
+    names['#sk'] = skAttr.value;
+    if (skOperator.value === 'between') {
+      if (!skValue2.value) throw new Error('BETWEEN requires two values');
+      values[':skv1'] = coerceByAttrType(skValue.value, skAttr.value);
+      values[':skv2'] = coerceByAttrType(skValue2.value, skAttr.value);
+      keyExpr += ' AND #sk BETWEEN :skv1 AND :skv2';
+    } else if (skOperator.value === 'begins_with') {
+      values[':skv'] = coerceByAttrType(skValue.value, skAttr.value);
+      keyExpr += ' AND begins_with(#sk, :skv)';
+    } else {
+      values[':skv'] = coerceByAttrType(skValue.value, skAttr.value);
+      keyExpr += ` AND #sk ${skOperator.value} :skv`;
     }
-  });
-  return { expression: expressions.join(' AND '), names, values };
+  }
+
+  return { keyExpr, names, values };
 }
 
-function mergeMaps<T>(a: Record<string, T>, b: Record<string, T>): Record<string, T> {
-  return { ...a, ...b };
+function buildFilter(): { expr: string; names: Record<string, string>; values: Record<string, unknown> } {
+  const names: Record<string, string> = {};
+  const values: Record<string, unknown> = {};
+  const parts: string[] = [];
+  filters.value.forEach((f, i) => {
+    if (!f.attr) return;
+    const nameK = `#fn${i}`;
+    const valueK = `:fv${i}`;
+    names[nameK] = f.attr;
+    if (f.op === 'attribute_exists') { parts.push(`attribute_exists(${nameK})`); return; }
+    if (f.op === 'attribute_not_exists') { parts.push(`attribute_not_exists(${nameK})`); return; }
+    values[valueK] = coerceByType(f.value, f.type);
+    if (f.op === 'begins_with') parts.push(`begins_with(${nameK}, ${valueK})`);
+    else if (f.op === 'contains') parts.push(`contains(${nameK}, ${valueK})`);
+    else parts.push(`${nameK} ${f.op} ${valueK}`);
+  });
+  return { expr: parts.join(' AND '), names, values };
 }
 
 function buildInput(continueFrom?: Record<string, unknown>): DynamoScanQueryInput {
-  const filter = buildExpression(filterConditions.value, 'f');
+  const filter = buildFilter();
   const input: DynamoScanQueryInput = {
     indexName: indexName.value || undefined,
     limit: limit.value > 0 ? limit.value : undefined,
     exclusiveStartKey: continueFrom,
   };
-  let names: Record<string, string> = filter.names;
-  let values: Record<string, unknown> = filter.values;
-  if (filter.expression) input.filterExpression = filter.expression;
+  let names = filter.names;
+  let values = filter.values;
+  if (filter.expr) input.filterExpression = filter.expr;
 
   if (mode.value === 'query') {
-    const key = buildExpression(keyConditions.value, 'k');
-    if (!key.expression) {
-      throw new Error('Query requires at least one key condition');
-    }
-    input.keyConditionExpression = key.expression;
-    names = mergeMaps(names, key.names);
-    values = mergeMaps(values, key.values);
+    const q = buildQuery();
+    input.keyConditionExpression = q.keyExpr;
+    names = { ...names, ...q.names };
+    values = { ...values, ...q.values };
+    if (sortDescending.value) input.scanIndexForward = false;
   }
 
   if (Object.keys(names).length) input.expressionAttributeNames = names;
@@ -230,13 +285,14 @@ async function run(continueFrom?: Record<string, unknown>) {
       mode.value === 'scan'
         ? await api.scanDynamoTable(props.table.name, input)
         : await api.queryDynamoTable(props.table.name, input);
-    if (continueFrom) {
-      items.value = [...items.value, ...res.items];
-    } else {
+    if (continueFrom) items.value = [...items.value, ...res.items];
+    else {
       items.value = res.items;
+      startedAt.value = new Date();
     }
     lastEvaluatedKey.value = res.lastEvaluatedKey;
     scannedCount.value = res.scannedCount;
+    statusVisible.value = true;
   } catch (err: any) {
     error.value = err.message || 'Request failed';
   } finally {
@@ -244,30 +300,31 @@ async function run(continueFrom?: Record<string, unknown>) {
   }
 }
 
-function loadMore() {
+function reset() {
+  pkValue.value = '';
+  skOperator.value = '=';
+  skValue.value = '';
+  skValue2.value = '';
+  sortDescending.value = false;
+  filters.value = [];
+  items.value = [];
+  lastEvaluatedKey.value = undefined;
+  scannedCount.value = undefined;
+  statusVisible.value = false;
+  error.value = null;
+}
+
+function nextPage() {
   if (lastEvaluatedKey.value) run(lastEvaluatedKey.value);
 }
 
 function addFilter() {
-  filterConditions.value.push({
-    attr: allAttrNames.value[0] || '',
-    op: '=',
-    value: '',
-  });
-}
-
-function addKeyCondition() {
-  if (keyConditions.value.length >= 2) return; // PK + SK max
-  const next = keyAttrNames.value[keyConditions.value.length];
-  keyConditions.value.push({ attr: next || '', op: '=', value: '' });
+  filters.value.push({ attr: '', op: '=', type: 'String', value: '' });
+  filtersExpanded.value = true;
 }
 
 function removeFilter(i: number) {
-  filterConditions.value.splice(i, 1);
-}
-
-function removeKeyCondition(i: number) {
-  keyConditions.value.splice(i, 1);
+  filters.value.splice(i, 1);
 }
 
 function extractKey(item: Record<string, unknown>): Record<string, unknown> {
@@ -278,17 +335,20 @@ function extractKey(item: Record<string, unknown>): Record<string, unknown> {
   return key;
 }
 
-function openCreate() {
-  editorMode.value = 'create';
-  editorItem.value = null;
-  editorOriginalKey.value = null;
-  editorOpen.value = true;
+function stubFromKeySchema(): Record<string, unknown> {
+  const stub: Record<string, unknown> = {};
+  for (const k of props.table.keySchema) {
+    if (!k.AttributeName) continue;
+    const def = props.table.attributeDefinitions.find(a => a.AttributeName === k.AttributeName);
+    stub[k.AttributeName] = def?.AttributeType === 'N' ? 0 : '';
+  }
+  return stub;
 }
 
-function openEdit(item: Record<string, unknown>) {
-  editorMode.value = 'edit';
-  editorItem.value = item;
-  editorOriginalKey.value = extractKey(item);
+function openCreate() {
+  editorMode.value = 'create';
+  editorItem.value = stubFromKeySchema();
+  editorOriginalKey.value = null;
   editorOpen.value = true;
 }
 
@@ -299,8 +359,28 @@ function openView(item: Record<string, unknown>) {
   editorOpen.value = true;
 }
 
-function askDelete(item: Record<string, unknown>) {
-  pendingDelete.value = extractKey(item);
+function requestEditFromView() {
+  if (!editorItem.value) return;
+  editorOriginalKey.value = extractKey(editorItem.value);
+  editorMode.value = 'edit';
+}
+
+function requestCloneFromView() {
+  if (!editorItem.value) return;
+  const cloned: Record<string, unknown> = { ...editorItem.value };
+  for (const k of props.table.keySchema) {
+    if (!k.AttributeName) continue;
+    const def = props.table.attributeDefinitions.find(a => a.AttributeName === k.AttributeName);
+    cloned[k.AttributeName] = def?.AttributeType === 'N' ? 0 : '';
+  }
+  editorItem.value = cloned;
+  editorOriginalKey.value = null;
+  editorMode.value = 'create';
+}
+
+function requestDeleteFromView() {
+  if (!editorItem.value) return;
+  pendingDelete.value = extractKey(editorItem.value);
   confirmDeleteOpen.value = true;
 }
 
@@ -309,6 +389,7 @@ async function doDelete() {
   try {
     await api.deleteDynamoItem(props.table.name, pendingDelete.value);
     toast.add({ title: 'Item deleted', variant: 'info' });
+    editorOpen.value = false;
     await run();
   } catch (err: any) {
     toast.add({ title: 'Delete failed', description: err.message, variant: 'danger' });
@@ -318,18 +399,23 @@ async function doDelete() {
   }
 }
 
-function onSaved() {
-  run();
-}
+function onSaved() { run(); }
 
-// Initial load
+const statusInfo = computed(() => {
+  const returned = items.value.length;
+  const scanned = scannedCount.value ?? returned;
+  const efficiency = scanned > 0 ? Math.round((returned / scanned) * 100) : 100;
+  return { returned, scanned, efficiency, finished: !lastEvaluatedKey.value };
+});
+
 run();
 
-// Reset paging when mode or index changes
+// Reset paging + cached items when mode or index changes (key schema may differ).
 watch(() => [mode.value, indexName.value], () => {
   items.value = [];
   lastEvaluatedKey.value = undefined;
-  keyConditions.value = [];
+  scannedCount.value = undefined;
+  statusVisible.value = false;
 });
 </script>
 
@@ -337,148 +423,178 @@ watch(() => [mode.value, indexName.value], () => {
   <TStack direction="vertical" gap="1rem">
     <TCard variant="outline">
       <template #header>
-        <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <strong>Explore items</strong>
-          <TStack direction="horizontal" gap="0.5rem">
-            <TToggleGroup
-              v-model="mode"
-              :options="modeOptions"
-              size="sm"
-            />
-            <TButton size="sm" variant="solid" :loading="running" @click="run()">
-              Run
-            </TButton>
-            <TButton size="sm" variant="soft" @click="openCreate">
-              Create item
-            </TButton>
-          </TStack>
-        </TStack>
+        <strong>Scan or query items</strong>
       </template>
 
-      <TStack direction="vertical" gap="0.75rem">
-        <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
-          <span class="muted" style="min-width: 4rem;">Index</span>
-          <TSelect v-model="indexName" :options="indexOptions" size="sm" style="min-width: 16rem;" />
-          <span class="muted" style="margin-left: 0.5rem;">Limit</span>
-          <TInput v-model.number="limit" type="number" size="sm" style="width: 6rem;" />
+      <TStack direction="vertical" gap="1rem">
+        <div style="width: 100%;">
+          <TToggleGroup
+            v-model="mode"
+            :options="modeOptions"
+            size="md"
+          />
+        </div>
+
+        <TStack direction="horizontal" gap="1rem">
+          <TFormField label="Select a table or index" style="flex: 1;">
+            <TSelect v-model="indexName" :options="indexOptions" />
+          </TFormField>
+          <TFormField label="Select attribute projection" style="flex: 1;">
+            <TSelect
+              :model-value="'All attributes'"
+              :options="[{ value: 'All attributes', label: 'All attributes' }]"
+              disabled
+            />
+          </TFormField>
         </TStack>
 
-        <TDivider v-if="mode === 'query'" />
-
-        <TStack v-if="mode === 'query'" direction="vertical" gap="0.5rem">
-          <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-            <strong style="font-size: 0.85rem;">Key conditions</strong>
-            <TButton
-              size="sm"
-              variant="ghost"
-              :disabled="keyConditions.length >= 2"
-              @click="addKeyCondition"
-            >
-              Add condition
-            </TButton>
-          </TStack>
-
-          <TEmptyState
-            v-if="!keyConditions.length"
-            title="No key conditions yet"
-            description="Query requires at least one condition on the partition key."
-            size="sm"
-          />
-
-          <TStack v-else direction="vertical" gap="0.375rem">
-            <TStack
-              v-for="(c, i) in keyConditions"
-              :key="`kc-${i}`"
-              direction="horizontal"
-              gap="0.5rem"
-              align="center"
-            >
-              <TSelect
-                v-model="c.attr"
-                :options="keyAttrNames.map(n => ({ value: n, label: n }))"
-                size="sm"
-                style="min-width: 12rem;"
-              />
-              <TSelect
-                v-model="c.op"
-                :options="keyConditionOps"
-                size="sm"
-                style="min-width: 10rem;"
-              />
-              <TInput v-model="c.value" placeholder="value" size="sm" style="flex: 1;" />
-              <TButton size="sm" variant="ghost" @click="removeKeyCondition(i)">×</TButton>
+        <template v-if="mode === 'query'">
+          <TDivider />
+          <TStack direction="vertical" gap="0.5rem">
+            <strong style="font-size: 0.9rem;">Partition key</strong>
+            <TStack direction="horizontal" gap="1rem">
+              <TFormField label="Attribute" style="flex: 1;">
+                <TInput :model-value="pkAttr || '—'" disabled />
+              </TFormField>
+              <TFormField label="Value" style="flex: 2;">
+                <TInput v-model="pkValue" placeholder="Enter attribute value" />
+              </TFormField>
             </TStack>
           </TStack>
-        </TStack>
+
+          <TStack v-if="skAttr" direction="vertical" gap="0.5rem">
+            <strong style="font-size: 0.9rem;">Sort key – optional</strong>
+            <TStack direction="horizontal" gap="0.75rem" align="end">
+              <TFormField label="Attribute" style="flex: 1.4;">
+                <TInput :model-value="skAttr" disabled />
+              </TFormField>
+              <TFormField label="Value" style="flex: 1.2; min-width: 11rem;">
+                <TSelect v-model="skOperator" :options="skOperators" />
+              </TFormField>
+              <TInput
+                v-model="skValue"
+                placeholder="Enter attribute value"
+                style="flex: 2;"
+              />
+              <TInput
+                v-if="skOperator === 'between'"
+                v-model="skValue2"
+                placeholder="and value"
+                style="flex: 2;"
+              />
+              <TCheckbox v-model="sortDescending" label="Sort descending" />
+            </TStack>
+          </TStack>
+        </template>
 
         <TDivider />
 
         <TStack direction="vertical" gap="0.5rem">
-          <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-            <strong style="font-size: 0.85rem;">Filters</strong>
-            <TButton size="sm" variant="ghost" @click="addFilter">Add filter</TButton>
-          </TStack>
-
-          <TStack
-            v-if="filterConditions.length"
-            direction="vertical"
-            gap="0.375rem"
+          <a
+            href="#"
+            style="text-decoration: none; font-weight: 600; font-size: 0.9rem;"
+            @click.prevent="filtersExpanded = !filtersExpanded"
           >
+            {{ filtersExpanded ? '▼' : '▶' }} Filters – optional
+          </a>
+
+          <TStack v-if="filtersExpanded" direction="vertical" gap="0.5rem">
             <TStack
-              v-for="(c, i) in filterConditions"
-              :key="`fc-${i}`"
+              v-for="(f, i) in filters"
+              :key="`f-${i}`"
               direction="horizontal"
               gap="0.5rem"
-              align="center"
+              align="end"
             >
-              <TInput
-                v-model="c.attr"
-                placeholder="attribute"
-                size="sm"
-                style="min-width: 12rem;"
-                :list="`attr-list-${i}`"
-              />
-              <datalist :id="`attr-list-${i}`">
-                <option v-for="n in allAttrNames" :key="n" :value="n" />
-              </datalist>
-              <TSelect
-                v-model="c.op"
-                :options="filterOps"
-                size="sm"
-                style="min-width: 12rem;"
-              />
-              <TInput
-                v-if="c.op !== 'attribute_exists' && c.op !== 'attribute_not_exists'"
-                v-model="c.value"
-                placeholder="value (auto-typed)"
-                size="sm"
-                style="flex: 1;"
-              />
-              <TButton size="sm" variant="ghost" @click="removeFilter(i)">×</TButton>
+              <TFormField label="Attribute name" style="flex: 1.4;">
+                <TInput v-model="f.attr" placeholder="Enter attribute name" />
+              </TFormField>
+              <TFormField label="Condition" style="flex: 1.4;">
+                <TSelect v-model="f.op" :options="filterOps" />
+              </TFormField>
+              <TFormField label="Type" style="flex: 0.9;">
+                <TSelect v-model="f.type" :options="filterTypeOptions" />
+              </TFormField>
+              <TFormField label="Value" style="flex: 1.7;">
+                <TInput
+                  v-model="f.value"
+                  :disabled="f.op === 'attribute_exists' || f.op === 'attribute_not_exists'"
+                  placeholder="Enter attribute value"
+                />
+              </TFormField>
+              <TButton size="sm" variant="outline" @click="removeFilter(i)">Remove</TButton>
             </TStack>
-          </TStack>
 
-          <span v-else class="muted" style="font-size: 0.75rem;">
-            No filters. Numbers and booleans are auto-detected from the value text; wrap strings in quotes if you need to force a string type.
-          </span>
+            <div>
+              <TButton size="sm" variant="outline" @click="addFilter">Add filter</TButton>
+            </div>
+          </TStack>
         </TStack>
       </TStack>
+
+      <template #footer>
+        <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
+          <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TButton variant="solid" :loading="running" @click="run()">Run</TButton>
+            <TButton variant="ghost" @click="reset">Reset</TButton>
+          </TStack>
+          <TStack direction="horizontal" gap="0.5rem" align="center">
+            <span class="muted">Limit</span>
+            <TInput v-model.number="limit" type="number" size="sm" style="width: 6rem;" />
+          </TStack>
+        </TStack>
+      </template>
     </TCard>
 
     <TAlert v-if="error" variant="danger" dismissible @dismiss="error = null">
       {{ error }}
     </TAlert>
 
+    <TAlert
+      v-if="statusVisible && !error"
+      :variant="statusInfo.finished ? 'success' : 'warning'"
+      dismissible
+      @dismiss="statusVisible = false"
+    >
+      <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
+        <span>
+          <strong>{{ statusInfo.finished ? 'Completed' : 'Stopped' }}</strong>
+          · Items returned: <strong>{{ statusInfo.returned }}</strong>
+          · Items scanned: <strong>{{ statusInfo.scanned }}</strong>
+          · Efficiency: <strong>{{ statusInfo.efficiency }}%</strong>
+        </span>
+        <TButton
+          v-if="!statusInfo.finished"
+          size="sm"
+          variant="outline"
+          :loading="running"
+          @click="nextPage"
+        >
+          Retrieve next page
+        </TButton>
+      </TStack>
+    </TAlert>
+
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <strong>Results</strong>
+          <TStack direction="vertical" gap="0.125rem">
+            <strong>
+              {{
+                indexName
+                  ? `Index: ${indexName} (${props.table.name})`
+                  : `Table: ${props.table.name}`
+              }}
+              – Items returned ({{ items.length }})
+            </strong>
+            <span class="muted" style="font-size: 0.75rem;">
+              {{ mode === 'scan' ? 'Scan' : 'Query' }} started on
+              {{ startedAt ? startedAt.toLocaleString() : '—' }}
+            </span>
+          </TStack>
           <TStack direction="horizontal" gap="0.5rem">
-            <TBadge tone="info" variant="soft">{{ items.length }} loaded</TBadge>
-            <TBadge v-if="scannedCount !== undefined" tone="neutral" variant="soft">
-              scanned: {{ scannedCount }}
-            </TBadge>
-            <TBadge v-if="lastEvaluatedKey" tone="warning" variant="soft">more available</TBadge>
+            <TButton size="sm" variant="ghost" :loading="running" @click="run()">Refresh</TButton>
+            <TButton size="sm" variant="outline" @click="openCreate">Create item</TButton>
           </TStack>
         </TStack>
       </template>
@@ -494,30 +610,34 @@ watch(() => [mode.value, indexName.value], () => {
       />
 
       <TTable v-else :columns="columns" :rows="rows">
-        <template v-for="name in keyAttrNames" :key="name" #[`cell-__attr__${name}`]="{ row }">
-          <span class="mono">{{ stringifyShort((row as any)[`__attr__${name}`]) }}</span>
+        <template
+          v-for="(name, idx) in keyAttrNames"
+          :key="`k-${name}`"
+          #[`cell-__attr__${name}`]="{ row }"
+        >
+          <TLink
+            v-if="idx === 0"
+            href="#"
+            class="mono"
+            @click.prevent="openView((row as any).__raw)"
+          >
+            {{ stringifyShort((row as any)[`__attr__${name}`]) }}
+          </TLink>
+          <span v-else class="mono">
+            {{ stringifyShort((row as any)[`__attr__${name}`]) }}
+          </span>
         </template>
 
-        <template #cell-__preview="{ row }">
-          <span class="muted mono" style="font-size: 0.75rem;">{{ row.__preview }}</span>
-        </template>
-
-        <template #cell-__actions="{ row }">
-          <TStack direction="horizontal" gap="0.25rem" justify="flex-end">
-            <TButton size="sm" variant="ghost" @click="openView((row as any).__raw)">View</TButton>
-            <TButton size="sm" variant="ghost" @click="openEdit((row as any).__raw)">Edit</TButton>
-            <TButton size="sm" variant="ghost" tone="danger" @click="askDelete((row as any).__raw)">Delete</TButton>
-          </TStack>
+        <template
+          v-for="name in nonKeyAttrsInItems"
+          :key="`n-${name}`"
+          #[`cell-__attr__${name}`]="{ row }"
+        >
+          <span class="mono" style="font-size: 0.8rem;">
+            {{ stringifyShort((row as any)[`__attr__${name}`]) }}
+          </span>
         </template>
       </TTable>
-
-      <template v-if="lastEvaluatedKey" #footer>
-        <TStack direction="horizontal" justify="center">
-          <TButton size="sm" variant="soft" :loading="running" @click="loadMore">
-            Load more
-          </TButton>
-        </TStack>
-      </template>
     </TCard>
 
     <DynamoItemEditor
@@ -527,6 +647,9 @@ watch(() => [mode.value, indexName.value], () => {
       :item="editorItem"
       :original-key="editorOriginalKey"
       @saved="onSaved"
+      @request-edit="requestEditFromView"
+      @request-clone="requestCloneFromView"
+      @request-delete="requestDeleteFromView"
     />
 
     <TConfirmDialog

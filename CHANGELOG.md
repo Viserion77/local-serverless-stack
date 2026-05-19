@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.12] - 2026-05-19
+
+### Added
+- **Region selector in the dashboard navbar** (AWS Console–style). The selected region is persisted in `localStorage` and is automatically appended as `?region=<value>` to every API request. The Overview, DynamoDB, and Seeds tabs now reload from scratch when the region changes (keyed remount).
+- **`examples/sample-microservice`**: end-to-end test microservice (`serverless.yml` + JS handlers) that exercises DynamoDB (PK-only / composite key + GSI / stream), SQS, SNS and Lambda event sources — meant for poking at the dashboard with real data. Includes its own `lss.config.json` (default ports), seed fixtures for Users/Orders, and `npm run lss:*` scripts that delegate to the local LSS CLI via relative paths.
+
+### Changed
+- `DynamoExplorer`, `SeedManager`, and `ResourceProvisioner.listAllResources` now keep a per-region client cache and accept an optional `region` argument on every public method. Each `/api/dynamo/*`, `/api/seeds/*`, and `/api/resources` route reads `?region=` from the query string and forwards it through.
+- Auto-seed on table creation now passes the provisioning region down so seeds land in the correct namespace when a service is registered in a non-default region.
+
+### Known limitations
+- The **Queues** tab is not yet region-aware — `QueueInspector` still polls the singleton's region (the one set by the most recently registered service). A region-aware refactor of the inspector is planned for a follow-up.
+
 ## [0.0.11] - 2026-05-18
 
 ### Added

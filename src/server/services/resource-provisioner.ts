@@ -154,7 +154,7 @@ export class ResourceProvisioner {
         }),
       );
       console.log(`  ✓ Created DynamoDB table: ${resource.name}`);
-      SeedManager.getInstance().seedOnTableCreated(resource.name);
+      SeedManager.getInstance().seedOnTableCreated(resource.name, this.currentRegion);
   } catch (error) {
     const errorName = error instanceof Error && 'name' in error ? (error as {name: string}).name : '';
     if (errorName === 'ResourceInUseException') {
@@ -468,41 +468,47 @@ export const handler = async (event, context) => {
     throw new Error(`Event source not found: ${arnRef} (resolved as: ${resourceName})`);
   }
 
-  async listAllResources(): Promise<{
+  async listAllResources(region?: string): Promise<{
     tables: string[];
     queues: string[];
     topics: string[];
   }> {
+    const baseConfig = LocalStackManager.getInstance().getConfig();
+    const config = region ? { ...baseConfig, region } : { ...baseConfig, region: this.currentRegion };
+    const dynamo = region && region !== this.currentRegion ? new DynamoDBClient(config) : this.dynamoClient;
+    const sqs = region && region !== this.currentRegion ? new SQSClient(config) : this.sqsClient;
+    const sns = region && region !== this.currentRegion ? new SNSClient(config) : this.snsClient;
+
     const [tables, queues, topics] = await Promise.all([
-      this.listDynamoDBTables(),
-      this.listSQSQueues(),
-      this.listSNSTopics(),
+      this.listDynamoDBTables(dynamo),
+      this.listSQSQueues(sqs),
+      this.listSNSTopics(sns),
     ]);
 
     return { tables, queues, topics };
   }
 
-  private async listDynamoDBTables(): Promise<string[]> {
+  private async listDynamoDBTables(client: DynamoDBClient = this.dynamoClient): Promise<string[]> {
     try {
-      const response = await this.dynamoClient.send(new ListTablesCommand({}));
+      const response = await client.send(new ListTablesCommand({}));
       return response.TableNames || [];
     } catch {
       return [];
     }
   }
 
-  private async listSQSQueues(): Promise<string[]> {
+  private async listSQSQueues(client: SQSClient = this.sqsClient): Promise<string[]> {
     try {
-      const response = await this.sqsClient.send(new ListQueuesCommand({}));
+      const response = await client.send(new ListQueuesCommand({}));
       return response.QueueUrls?.map(url => url.split('/').pop()!) || [];
     } catch {
       return [];
     }
   }
 
-  private async listSNSTopics(): Promise<string[]> {
+  private async listSNSTopics(client: SNSClient = this.snsClient): Promise<string[]> {
     try {
-      const response = await this.snsClient.send(new ListTopicsCommand({}));
+      const response = await client.send(new ListTopicsCommand({}));
       return response.Topics?.map(t => {
         const arn = t.TopicArn?.split(':').pop();
         return arn || '';

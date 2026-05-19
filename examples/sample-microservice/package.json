@@ -1,0 +1,28 @@
+{
+  "name": "sample-microservice",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end test microservice for Local Serverless Stack — exercises DynamoDB (PK/SK, GSI, streams), SQS, SNS, and Lambda event sources.",
+  "scripts": {
+    "offline": "serverless package && serverless offline start",
+    "package": "serverless package",
+    "deploy": "serverless deploy",
+    "lss:start": "node ../../bin/cli.js start",
+    "lss:stop": "node ../../bin/cli.js stop",
+    "lss:status": "node ../../bin/cli.js status",
+    "lss:logs": "node ../../bin/cli.js logs",
+    "lss:seed": "node ../../bin/cli.js seed",
+    "lss:seed:clear": "node ../../bin/cli.js seed:clear"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "3.974.0",
+    "@aws-sdk/client-sns": "3.974.0",
+    "@aws-sdk/client-sqs": "3.974.0",
+    "@aws-sdk/util-dynamodb": "3.974.0"
+  },
+  "devDependencies": {
+    "lss-serverless-plugin": "file:../../packages/serverless-plugin",
+    "serverless": "^3.39.0",
+    "serverless-offline": "^13.6.0"
+  }
+}

@@ -20,6 +20,9 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'update:open', value: boolean): void;
   (e: 'saved'): void;
+  (e: 'request-edit'): void;
+  (e: 'request-clone'): void;
+  (e: 'request-delete'): void;
 }>();
 
 const toast = useToast();
@@ -130,9 +133,16 @@ function formatDraft() {
 
     <template #footer>
       <TStack direction="horizontal" gap="0.5rem" justify="space-between">
-        <TButton v-if="!readOnly" size="sm" variant="ghost" @click="formatDraft">
-          Format JSON
-        </TButton>
+        <TStack direction="horizontal" gap="0.5rem">
+          <TButton v-if="!readOnly" size="sm" variant="ghost" @click="formatDraft">
+            Format JSON
+          </TButton>
+          <template v-if="readOnly">
+            <TButton size="sm" variant="soft" @click="emit('request-edit')">Edit</TButton>
+            <TButton size="sm" variant="ghost" @click="emit('request-clone')">Clone</TButton>
+            <TButton size="sm" variant="ghost" tone="danger" @click="emit('request-delete')">Delete</TButton>
+          </template>
+        </TStack>
         <TStack direction="horizontal" gap="0.5rem">
           <TButton size="sm" variant="ghost" @click="isOpen = false">
             {{ readOnly ? 'Close' : 'Cancel' }}

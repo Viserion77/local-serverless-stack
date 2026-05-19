@@ -2,8 +2,9 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue';
 import {
   TNavbar, TContainer, TStack, TBadge, TTabs, TTabList, TTab, TTabPanel,
-  TToastProvider, TButton,
+  TToastProvider, TButton, TSelect,
 } from '@treeui/vue';
+import { currentRegion, AWS_REGIONS } from './services/region';
 import ServicesList from './components/ServicesList.vue';
 import ResourcesOverview from './components/ResourcesOverview.vue';
 import QueuesView from './components/QueuesView.vue';
@@ -55,6 +56,13 @@ onBeforeUnmount(() => {
         </template>
         <template #end>
           <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TSelect
+              v-model="currentRegion"
+              :options="AWS_REGIONS"
+              size="sm"
+              style="min-width: 14rem;"
+              aria-label="AWS Region"
+            />
             <TBadge
               :tone="health.localstack ? 'success' : 'danger'"
               variant="soft"
@@ -80,7 +88,7 @@ onBeforeUnmount(() => {
             </TTabList>
 
             <TTabPanel value="overview">
-              <div style="padding-top: 1.25rem;">
+              <div :key="currentRegion" style="padding-top: 1.25rem;">
                 <ResourcesOverview />
               </div>
             </TTabPanel>
@@ -98,13 +106,13 @@ onBeforeUnmount(() => {
             </TTabPanel>
 
             <TTabPanel value="dynamodb">
-              <div style="padding-top: 1.25rem;">
+              <div :key="currentRegion" style="padding-top: 1.25rem;">
                 <DynamoTab />
               </div>
             </TTabPanel>
 
             <TTabPanel value="seeds">
-              <div style="padding-top: 1.25rem;">
+              <div :key="currentRegion" style="padding-top: 1.25rem;">
                 <SeedsPanel />
               </div>
             </TTabPanel>

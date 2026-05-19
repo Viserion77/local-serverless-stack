@@ -15,9 +15,14 @@ function isValidTableName(name: unknown): name is string {
   );
 }
 
-router.get('/', async (_req: Request, res: Response) => {
+function getRegion(req: Request): string | undefined {
+  const r = req.query.region;
+  return typeof r === 'string' && r ? r : undefined;
+}
+
+router.get('/', async (req: Request, res: Response) => {
   try {
-    const entries = await seeds.list();
+    const entries = await seeds.list(getRegion(req));
     res.json({
       seedsDir: ConfigManager.getInstance().getSeedsDir(),
       entries,
@@ -34,9 +39,10 @@ router.post('/run', async (req: Request, res: Response) => {
     if (tableName !== undefined && !isValidTableName(tableName)) {
       return res.status(400).json({ error: 'Invalid tableName' });
     }
+    const region = getRegion(req);
     const result = tableName
-      ? [await seeds.seedTable(tableName)]
-      : await seeds.seedAll();
+      ? [await seeds.seedTable(tableName, region)]
+      : await seeds.seedAll(region);
     return res.json({ results: result });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to run seeds';
@@ -50,9 +56,10 @@ router.post('/clear', async (req: Request, res: Response) => {
     if (tableName !== undefined && !isValidTableName(tableName)) {
       return res.status(400).json({ error: 'Invalid tableName' });
     }
+    const region = getRegion(req);
     const result = tableName
-      ? [await seeds.clearTable(tableName)]
-      : await seeds.clearAllSeeded();
+      ? [await seeds.clearTable(tableName, region)]
+      : await seeds.clearAllSeeded(region);
     return res.json({ results: result });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to clear seeds';

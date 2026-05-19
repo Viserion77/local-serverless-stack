@@ -38,12 +38,10 @@ export interface ClearResult {
 
 export class SeedManager {
   private static instance: SeedManager;
-  private dynamoClient!: DynamoDBClient;
-  private currentRegion: string = 'us-east-1';
+  private clients = new Map<string, DynamoDBClient>();
+  private defaultRegion: string = 'us-east-1';
 
-  private constructor() {
-    this.initializeClient(this.currentRegion);
-  }
+  private constructor() {}
 
   static getInstance(): SeedManager {
     if (!SeedManager.instance) {
@@ -52,16 +50,24 @@ export class SeedManager {
     return SeedManager.instance;
   }
 
-  private initializeClient(region: string): void {
-    const baseConfig = LocalStackManager.getInstance().getConfig();
-    this.dynamoClient = new DynamoDBClient({ ...baseConfig, region });
-    this.currentRegion = region;
+  setDefaultRegion(region: string): void {
+    if (region) this.defaultRegion = region;
   }
 
+  // Kept for backwards compatibility with ResourceProvisioner.setRegion calls.
   setRegion(region: string): void {
-    if (region && region !== this.currentRegion) {
-      this.initializeClient(region);
+    this.setDefaultRegion(region);
+  }
+
+  private clientFor(region?: string): DynamoDBClient {
+    const r = region || this.defaultRegion;
+    let client = this.clients.get(r);
+    if (!client) {
+      const baseConfig = LocalStackManager.getInstance().getConfig();
+      client = new DynamoDBClient({ ...baseConfig, region: r });
+      this.clients.set(r, client);
     }
+    return client;
   }
 
   private getSeedsDir(): string {
@@ -92,11 +98,11 @@ export class SeedManager {
     return fs.existsSync(this.seedFilePath(tableName));
   }
 
-  async list(): Promise<SeedFileEntry[]> {
+  async list(region?: string): Promise<SeedFileEntry[]> {
     const dir = this.getSeedsDir();
     if (!fs.existsSync(dir)) return [];
 
-    const liveTables = new Set(await this.listTables());
+    const liveTables = new Set(await this.listTables(region));
     const files = fs.readdirSync(dir).filter(f => f.endsWith('.json'));
 
     return files.map(file => {
@@ -117,7 +123,7 @@ export class SeedManager {
     });
   }
 
-  async seedTable(tableName: string): Promise<SeedResult> {
+  async seedTable(tableName: string, region?: string): Promise<SeedResult> {
     const items = this.readSeedFile(tableName);
     if (items === null) {
       return { tableName, inserted: 0, skipped: true, reason: 'no seed file' };
@@ -143,7 +149,7 @@ export class SeedManager {
     let inserted = 0;
     for (let i = 0; i < requests.length; i += BATCH_LIMIT) {
       const chunk = requests.slice(i, i + BATCH_LIMIT);
-      await this.writeBatchWithRetry(tableName, chunk);
+      await this.writeBatchWithRetry(tableName, chunk, region);
       inserted += chunk.length;
     }
 
@@ -151,8 +157,8 @@ export class SeedManager {
     return { tableName, inserted };
   }
 
-  async seedAll(): Promise<SeedResult[]> {
-    const entries = await this.list();
+  async seedAll(region?: string): Promise<SeedResult[]> {
+    const entries = await this.list(region);
     const results = await Promise.all(
       entries.map(async entry => {
         if (!entry.tableExists) {
@@ -164,7 +170,7 @@ export class SeedManager {
           } as SeedResult;
         }
         try {
-          return await this.seedTable(entry.tableName);
+          return await this.seedTable(entry.tableName, region);
         } catch (error) {
           const msg = error instanceof Error ? error.message : 'unknown error';
           console.warn(`[seed] ${entry.tableName}: ${msg}`);
@@ -175,17 +181,18 @@ export class SeedManager {
     return results;
   }
 
-  async clearTable(tableName: string): Promise<ClearResult> {
-    const keyAttrs = await this.getTableKeyAttributes(tableName);
+  async clearTable(tableName: string, region?: string): Promise<ClearResult> {
+    const keyAttrs = await this.getTableKeyAttributes(tableName, region);
     if (!keyAttrs) {
       return { tableName, deleted: 0, skipped: true, reason: 'table not found' };
     }
 
+    const client = this.clientFor(region);
     let deleted = 0;
     let exclusiveStartKey: Record<string, AttributeValue> | undefined;
 
     do {
-      const scan = await this.dynamoClient.send(
+      const scan = await client.send(
         new ScanCommand({
           TableName: tableName,
           ProjectionExpression: keyAttrs.map((_, i) => `#k${i}`).join(', '),
@@ -198,14 +205,14 @@ export class SeedManager {
 
       const items = scan.Items ?? [];
       for (let i = 0; i < items.length; i += BATCH_LIMIT) {
-        const chunk = items.slice(i, i + BATCH_LIMIT).map(item => {
+        const chunk = items.slice(i, i + BATCH_LIMIT).map((item: Record<string, AttributeValue>) => {
           const key: Record<string, AttributeValue> = {};
           for (const attr of keyAttrs) {
             if (item[attr] !== undefined) key[attr] = item[attr];
           }
           return { DeleteRequest: { Key: key } } as WriteRequest;
         });
-        await this.writeBatchWithRetry(tableName, chunk);
+        await this.writeBatchWithRetry(tableName, chunk, region);
         deleted += chunk.length;
       }
 
@@ -216,8 +223,8 @@ export class SeedManager {
     return { tableName, deleted };
   }
 
-  async clearAllSeeded(): Promise<ClearResult[]> {
-    const entries = await this.list();
+  async clearAllSeeded(region?: string): Promise<ClearResult[]> {
+    const entries = await this.list(region);
     const results: ClearResult[] = [];
     for (const entry of entries) {
       if (!entry.tableExists) {
@@ -230,7 +237,7 @@ export class SeedManager {
         continue;
       }
       try {
-        results.push(await this.clearTable(entry.tableName));
+        results.push(await this.clearTable(entry.tableName, region));
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'unknown error';
         console.warn(`[seed:clear] ${entry.tableName}: ${msg}`);
@@ -244,26 +251,28 @@ export class SeedManager {
    * Background fire-and-forget seeding triggered when a table is provisioned.
    * Never throws — logs warnings instead so it cannot break the provisioner.
    */
-  seedOnTableCreated(tableName: string): void {
+  seedOnTableCreated(tableName: string, region?: string): void {
     if (!this.hasSeedFile(tableName)) return;
-    this.seedTable(tableName).catch(error => {
+    this.seedTable(tableName, region).catch(error => {
       const msg = error instanceof Error ? error.message : 'unknown error';
       console.warn(`[seed] auto-seed for ${tableName} failed: ${msg}`);
     });
   }
 
-  private async listTables(): Promise<string[]> {
+  private async listTables(region?: string): Promise<string[]> {
     try {
-      const res = await this.dynamoClient.send(new ListTablesCommand({}));
+      const client = this.clientFor(region);
+      const res = await client.send(new ListTablesCommand({}));
       return res.TableNames ?? [];
     } catch {
       return [];
     }
   }
 
-  private async getTableKeyAttributes(tableName: string): Promise<string[] | null> {
+  private async getTableKeyAttributes(tableName: string, region?: string): Promise<string[] | null> {
     try {
-      const res = await this.dynamoClient.send(
+      const client = this.clientFor(region);
+      const res = await client.send(
         new DescribeTableCommand({ TableName: tableName }),
       );
       const keys = res.Table?.KeySchema?.map(k => k.AttributeName!).filter(Boolean) ?? [];
@@ -275,11 +284,12 @@ export class SeedManager {
 
   // BatchWriteItem returns UnprocessedItems on throttling/partial failures.
   // Retry them with exponential backoff so we don't silently drop writes.
-  private async writeBatchWithRetry(tableName: string, requests: WriteRequest[]): Promise<void> {
+  private async writeBatchWithRetry(tableName: string, requests: WriteRequest[], region?: string): Promise<void> {
+    const client = this.clientFor(region);
     let pending = requests;
     let attempt = 0;
     while (pending.length > 0) {
-      const res = await this.dynamoClient.send(
+      const res = await client.send(
         new BatchWriteItemCommand({ RequestItems: { [tableName]: pending } }),
       );
       const unprocessed = res.UnprocessedItems?.[tableName] ?? [];

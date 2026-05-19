@@ -1,0 +1,10 @@
+{
+  "serverPort": 3100,
+  "localstackPort": 4566,
+  "mode": "managed",
+  "localstackEdition": "community",
+  "region": "us-east-1",
+  "services": ["dynamodb", "sqs", "sns", "lambda"],
+  "persistence": true,
+  "seedsDir": "./seeds"
+}

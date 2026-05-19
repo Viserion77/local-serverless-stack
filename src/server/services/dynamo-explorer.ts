@@ -68,40 +68,45 @@ export interface ScanQueryOutput {
 
 export class DynamoExplorer {
   private static instance: DynamoExplorer;
-  private client!: DynamoDBClient;
-  private currentRegion: string = 'us-east-1';
+  private clients = new Map<string, DynamoDBClient>();
+  private defaultRegion: string = 'us-east-1';
 
-  private constructor() {
-    this.init(this.currentRegion);
-  }
+  private constructor() {}
 
   static getInstance(): DynamoExplorer {
     if (!DynamoExplorer.instance) DynamoExplorer.instance = new DynamoExplorer();
     return DynamoExplorer.instance;
   }
 
-  private init(region: string): void {
-    const baseConfig = LocalStackManager.getInstance().getConfig();
-    this.client = new DynamoDBClient({ ...baseConfig, region });
-    this.currentRegion = region;
+  setDefaultRegion(region: string): void {
+    if (region) this.defaultRegion = region;
   }
 
-  setRegion(region: string): void {
-    if (region && region !== this.currentRegion) this.init(region);
+  private clientFor(region?: string): DynamoDBClient {
+    const r = region || this.defaultRegion;
+    let client = this.clients.get(r);
+    if (!client) {
+      const baseConfig = LocalStackManager.getInstance().getConfig();
+      client = new DynamoDBClient({ ...baseConfig, region: r });
+      this.clients.set(r, client);
+    }
+    return client;
   }
 
-  async listTables(): Promise<DynamoTableSummary[]> {
-    const list = await this.client.send(new ListTablesCommand({}));
+  async listTables(region?: string): Promise<DynamoTableSummary[]> {
+    const client = this.clientFor(region);
+    const list = await client.send(new ListTablesCommand({}));
     const names = list.TableNames ?? [];
-    const summaries = await Promise.all(names.map(name => this.summarize(name)));
-    return summaries.filter((s): s is DynamoTableSummary => s !== null);
+    const summaries = await Promise.all(names.map((name: string) => this.summarize(name, region)));
+    return summaries.filter((s: DynamoTableSummary | null): s is DynamoTableSummary => s !== null);
   }
 
-  private async summarize(name: string): Promise<DynamoTableSummary | null> {
+  private async summarize(name: string, region?: string): Promise<DynamoTableSummary | null> {
     try {
+      const client = this.clientFor(region);
       const [desc, ttl] = await Promise.all([
-        this.client.send(new DescribeTableCommand({ TableName: name })),
-        this.describeTtl(name),
+        client.send(new DescribeTableCommand({ TableName: name })),
+        this.describeTtl(name, region),
       ]);
       const table = desc.Table;
       if (!table) return null;
@@ -131,10 +136,11 @@ export class DynamoExplorer {
     }
   }
 
-  async describeTable(name: string): Promise<DynamoTableDetail | null> {
-    const summary = await this.summarize(name);
+  async describeTable(name: string, region?: string): Promise<DynamoTableDetail | null> {
+    const summary = await this.summarize(name, region);
     if (!summary) return null;
-    const desc = await this.client.send(new DescribeTableCommand({ TableName: name }));
+    const client = this.clientFor(region);
+    const desc = await client.send(new DescribeTableCommand({ TableName: name }));
     const table = desc.Table!;
     return {
       ...summary,
@@ -146,9 +152,10 @@ export class DynamoExplorer {
     };
   }
 
-  async describeTtl(name: string): Promise<TtlInfo> {
+  async describeTtl(name: string, region?: string): Promise<TtlInfo> {
     try {
-      const res = await this.client.send(new DescribeTimeToLiveCommand({ TableName: name }));
+      const client = this.clientFor(region);
+      const res = await client.send(new DescribeTimeToLiveCommand({ TableName: name }));
       const desc = res.TimeToLiveDescription;
       const status = desc?.TimeToLiveStatus;
       const enabled = status === 'ENABLED' || status === 'ENABLING';
@@ -158,14 +165,15 @@ export class DynamoExplorer {
     }
   }
 
-  async setTtl(name: string, enabled: boolean, attributeName?: string): Promise<TtlInfo> {
+  async setTtl(name: string, enabled: boolean, attributeName?: string, region?: string): Promise<TtlInfo> {
     if (enabled && !attributeName) {
       throw new Error('attributeName is required when enabling TTL');
     }
-    const current = await this.describeTtl(name);
+    const current = await this.describeTtl(name, region);
     // UpdateTimeToLive requires the attribute name even when disabling — pass the current one.
     const attr = enabled ? attributeName! : current.attributeName ?? attributeName ?? 'ttl';
-    await this.client.send(
+    const client = this.clientFor(region);
+    await client.send(
       new UpdateTimeToLiveCommand({
         TableName: name,
         TimeToLiveSpecification: { Enabled: enabled, AttributeName: attr },
@@ -174,13 +182,14 @@ export class DynamoExplorer {
     return { enabled, attributeName: attr };
   }
 
-  async scan(name: string, input: ScanQueryInput): Promise<ScanQueryOutput> {
+  async scan(name: string, input: ScanQueryInput, region?: string): Promise<ScanQueryOutput> {
     const eav = this.marshallExpressionValues(input.expressionAttributeValues);
     const esk = input.exclusiveStartKey
       ? (marshall(input.exclusiveStartKey, { removeUndefinedValues: true }) as Record<string, AttributeValue>)
       : undefined;
 
-    const res = await this.client.send(
+    const client = this.clientFor(region);
+    const res = await client.send(
       new ScanCommand({
         TableName: name,
         FilterExpression: input.filterExpression || undefined,
@@ -195,7 +204,7 @@ export class DynamoExplorer {
     return this.formatPagedOutput(res);
   }
 
-  async query(name: string, input: ScanQueryInput): Promise<ScanQueryOutput> {
+  async query(name: string, input: ScanQueryInput, region?: string): Promise<ScanQueryOutput> {
     if (!input.keyConditionExpression) {
       throw new Error('keyConditionExpression is required for query');
     }
@@ -204,7 +213,8 @@ export class DynamoExplorer {
       ? (marshall(input.exclusiveStartKey, { removeUndefinedValues: true }) as Record<string, AttributeValue>)
       : undefined;
 
-    const res = await this.client.send(
+    const client = this.clientFor(region);
+    const res = await client.send(
       new QueryCommand({
         TableName: name,
         KeyConditionExpression: input.keyConditionExpression,
@@ -221,8 +231,9 @@ export class DynamoExplorer {
     return this.formatPagedOutput(res);
   }
 
-  async getItem(name: string, key: Record<string, unknown>): Promise<Record<string, unknown> | null> {
-    const res = await this.client.send(
+  async getItem(name: string, key: Record<string, unknown>, region?: string): Promise<Record<string, unknown> | null> {
+    const client = this.clientFor(region);
+    const res = await client.send(
       new GetItemCommand({
         TableName: name,
         Key: marshall(key, { removeUndefinedValues: true }) as Record<string, AttributeValue>,
@@ -231,11 +242,12 @@ export class DynamoExplorer {
     return res.Item ? unmarshall(res.Item) : null;
   }
 
-  async putItem(name: string, item: Record<string, unknown>): Promise<void> {
+  async putItem(name: string, item: Record<string, unknown>, region?: string): Promise<void> {
     if (!item || typeof item !== 'object') {
       throw new Error('Item must be a plain object');
     }
-    await this.client.send(
+    const client = this.clientFor(region);
+    await client.send(
       new PutItemCommand({
         TableName: name,
         Item: marshall(item, {
@@ -246,8 +258,9 @@ export class DynamoExplorer {
     );
   }
 
-  async deleteItem(name: string, key: Record<string, unknown>): Promise<void> {
-    await this.client.send(
+  async deleteItem(name: string, key: Record<string, unknown>, region?: string): Promise<void> {
+    const client = this.clientFor(region);
+    await client.send(
       new DeleteItemCommand({
         TableName: name,
         Key: marshall(key, { removeUndefinedValues: true }) as Record<string, AttributeValue>,

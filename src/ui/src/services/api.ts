@@ -1,7 +1,16 @@
+import { currentRegion } from './region';
+
 const API_BASE = import.meta.env.DEV ? 'http://localhost:3100' : '';
 
+function withRegion(path: string): string {
+  const r = currentRegion.value;
+  if (!r) return path;
+  const sep = path.includes('?') ? '&' : '?';
+  return `${path}${sep}region=${encodeURIComponent(r)}`;
+}
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`, {
+  const response = await fetch(`${API_BASE}${withRegion(path)}`, {
     headers: {
       'Content-Type': 'application/json',
       ...options?.headers,
