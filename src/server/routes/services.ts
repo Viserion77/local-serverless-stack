@@ -158,8 +158,14 @@ router.get('/', async (_req: Request, res: Response) => {
     const withCount = await Promise.all(
       services.map(async (s) => {
         const template = await cache.getTemplate(s.name);
-        const resourcesCount = template ? parser.parse(template).length : 0;
-        return { ...s, resourcesCount };
+        const resources = template ? parser.parse(template) : [];
+        const resourceBreakdown = {
+          lambdas: resources.filter(r => r.type === 'lambda').length,
+          tables: resources.filter(r => r.type === 'dynamodb').length,
+          queues: resources.filter(r => r.type === 'sqs').length,
+          topics: resources.filter(r => r.type === 'sns').length,
+        };
+        return { ...s, resourcesCount: resources.length, resourceBreakdown };
       }),
     );
     return res.json(withCount);

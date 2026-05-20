@@ -21,7 +21,7 @@ plugins:
 custom:
   orchestrator:
     enabled: true
-    orchestratorUrl: http://localhost:3100
+    orchestratorUrl: http://localhost:3101
   serverless-offline:
     httpPort: 3000
     lambdaPort: 3001

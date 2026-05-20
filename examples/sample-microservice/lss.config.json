@@ -1,5 +1,5 @@
 {
-  "serverPort": 3100,
+  "serverPort": 3101,
   "localstackPort": 4566,
   "mode": "managed",
   "localstackEdition": "community",

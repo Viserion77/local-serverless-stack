@@ -1,0 +1,48 @@
+import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
+
+const routes: RouteRecordRaw[] = [
+  {
+    path: '/',
+    name: 'overview',
+    component: () => import('./pages/OverviewPage.vue'),
+    meta: { title: 'Overview' },
+  },
+  {
+    path: '/services',
+    name: 'services',
+    component: () => import('./pages/ServicesPage.vue'),
+    meta: { title: 'Services' },
+  },
+  {
+    path: '/services/:name',
+    name: 'service-detail',
+    component: () => import('./pages/ServiceDetailPage.vue'),
+    props: route => ({ serviceName: String(route.params.name) }),
+    meta: { title: 'Service' },
+  },
+  {
+    path: '/queues',
+    name: 'queues',
+    component: () => import('./pages/QueuesPage.vue'),
+    meta: { title: 'Queues' },
+  },
+  {
+    path: '/dynamo',
+    name: 'dynamo',
+    component: () => import('./pages/DynamoPage.vue'),
+    meta: { title: 'DynamoDB' },
+  },
+  {
+    path: '/dynamo/:name',
+    name: 'dynamo-table',
+    component: () => import('./pages/DynamoTablePage.vue'),
+    props: route => ({ tableName: String(route.params.name) }),
+    meta: { title: 'DynamoDB Table' },
+  },
+  { path: '/:pathMatch(.*)*', redirect: '/' },
+];
+
+export const router = createRouter({
+  history: createWebHistory(),
+  routes,
+});

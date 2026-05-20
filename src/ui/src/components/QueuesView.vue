@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
   TModal, TTag, TSpinner, TProgress, TDivider, TAlert, useToast,
@@ -10,6 +11,7 @@ import type { QueueSnapshot } from '../services/api';
 
 const toast = useToast();
 const queues = ref<QueueSnapshot[]>([]);
+const ownersByQueue = ref<Record<string, string>>({});
 const loading = ref(true);
 const error = ref<string | null>(null);
 const selectedQueueName = ref<string | null>(null);
@@ -17,6 +19,7 @@ let refreshTimer: number | null = null;
 
 const columns = [
   { key: 'name', label: 'Queue' },
+  { key: 'service', label: 'Service' },
   { key: 'available', label: 'Available', align: 'right' as const },
   { key: 'inFlight', label: 'In flight', align: 'right' as const },
   { key: 'processed', label: 'Processed', align: 'right' as const },
@@ -28,6 +31,7 @@ const rows = computed(() =>
   queues.value.map(q => ({
     ...q,
     consumersCount: q.consumers.length,
+    service: ownersByQueue.value[q.name] || '',
   })),
 );
 
@@ -61,7 +65,14 @@ const selectedDepthRatio = computed(() => {
 
 async function loadQueues() {
   try {
-    queues.value = await api.listQueues();
+    const [list, owners] = await Promise.all([
+      api.listQueues(),
+      api.listResourceOwners().catch(() => ({ tables: [], queues: [], topics: [] })),
+    ]);
+    queues.value = list;
+    const map: Record<string, string> = {};
+    for (const o of owners.queues) map[o.name] = o.service;
+    ownersByQueue.value = map;
     error.value = null;
   } catch (err: any) {
     error.value = err.message || 'Failed to load queues';
@@ -188,6 +199,17 @@ onBeforeUnmount(() => {
               {{ String(row.arn || row.url || '') }}
             </span>
           </TStack>
+        </template>
+
+        <template #cell-service="{ row }">
+          <RouterLink
+            v-if="row.service"
+            :to="`/services/${encodeURIComponent(String(row.service))}`"
+            style="text-decoration: none;"
+          >
+            <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
+          </RouterLink>
+          <span v-else class="muted" style="font-size: 0.75rem;">unmanaged</span>
         </template>
 
         <template #cell-available="{ row }">

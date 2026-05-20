@@ -1,12 +1,14 @@
 import express from 'express';
 import cors from 'cors';
 import path from 'path';
+import http from 'http';
 import { fileURLToPath } from 'url';
 import { servicesRouter, processManager } from './routes/services.js';
 import { resourcesRouter } from './routes/resources.js';
 import { queuesRouter } from './routes/queues.js';
 import { seedsRouter } from './routes/seeds.js';
 import { dynamoRouter } from './routes/dynamo.js';
+import { configRouter } from './routes/config.js';
 import { LocalStackManager } from './services/localstack-manager.js';
 import { ConfigManager } from './services/config-manager.js';
 import { QueueInspector } from './services/queue-inspector.js';
@@ -18,6 +20,7 @@ const __dirname = path.dirname(__filename);
 const app = express();
 const configManager = ConfigManager.getInstance();
 const PORT = configManager.getDashboardPort();
+let dynamoProxyServer: http.Server | null = null;
 
 // Middleware
 app.use(cors());
@@ -29,12 +32,18 @@ app.use('/api/resources', resourcesRouter);
 app.use('/api/queues', queuesRouter);
 app.use('/api/seeds', seedsRouter);
 app.use('/api/dynamo', dynamoRouter);
+app.use('/api/config', configRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {
   res.json({
     status: 'ok',
     localstack: LocalStackManager.getInstance().isRunning(),
+    dynamoProxy: {
+      enabled: configManager.isEnableDynamoProxy(),
+      running: Boolean(dynamoProxyServer?.listening),
+      port: configManager.getDynamoProxyPort(),
+    },
   });
 });
 
@@ -65,7 +74,7 @@ async function start() {
     // Optional DynamoDB proxy
     if (configManager.isEnableDynamoProxy()) {
       const proxyPort = configManager.getDynamoProxyPort();
-      startDynamoProxy(localstack.getEndpoint(), proxyPort);
+      dynamoProxyServer = startDynamoProxy(localstack.getEndpoint(), proxyPort);
     }
 
     // Print configuration summary

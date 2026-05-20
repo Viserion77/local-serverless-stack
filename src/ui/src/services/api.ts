@@ -145,13 +145,89 @@ export interface SeedClearResult {
   reason?: string;
 }
 
+export interface HealthInfo {
+  status: string;
+  localstack: boolean;
+  dynamoProxy: {
+    enabled: boolean;
+    running: boolean;
+    port: number;
+  };
+}
+
+export interface LssConfigSnapshot {
+  serverPort: number;
+  localstack: {
+    mode: string;
+    endpoint: string;
+    port: number;
+    edition: string;
+    version: string;
+    image: string;
+    hasAuthToken: boolean;
+  };
+  dynamoProxy: {
+    enabled: boolean;
+    port: number;
+  };
+  region: string;
+  services: string[];
+  persistence: boolean;
+  debug: boolean;
+  seedsDir: string;
+  autoPackage: boolean;
+  packageCommand: string;
+  packageTimeoutMs: number;
+  configPath: string;
+}
+
+export interface ResourceOwner {
+  name: string;
+  service: string;
+}
+
+export interface ResourceOwnersResponse {
+  tables: ResourceOwner[];
+  queues: ResourceOwner[];
+  topics: ResourceOwner[];
+}
+
+export interface ServiceResource {
+  type: 'lambda' | 'dynamodb' | 'sqs' | 'sns' | 'event-source';
+  name: string;
+}
+
+export interface ResourceBreakdown {
+  lambdas: number;
+  tables: number;
+  queues: number;
+  topics: number;
+}
+
+export interface ServiceSummary {
+  name: string;
+  status: 'registered' | 'running' | 'stopped' | 'error';
+  root: string;
+  lastUpdated: number;
+  resourcesCount?: number;
+  resourceBreakdown?: ResourceBreakdown;
+  pid?: number;
+  invokePort?: number;
+  region?: string;
+}
+
+export interface ServiceDetail extends ServiceSummary {
+  resources: ServiceResource[];
+}
+
 export const api = {
-  // Health
-  checkHealth: () => request<{ status: string; localstack: boolean }>('/api/health'),
+  // Health & config
+  checkHealth: () => request<HealthInfo>('/api/health'),
+  getConfig: () => request<LssConfigSnapshot>('/api/config'),
 
   // Services
-  listServices: () => request<any[]>('/api/services'),
-  getService: (name: string) => request<any>(`/api/services/${name}`),
+  listServices: () => request<ServiceSummary[]>('/api/services'),
+  getService: (name: string) => request<ServiceDetail>(`/api/services/${encodeURIComponent(name)}`),
   registerService: (servicePath: string) =>
     request<any>('/api/services/register', {
       method: 'POST',
@@ -181,6 +257,7 @@ export const api = {
 
   // Resources
   listResources: () => request<{ tables: string[]; queues: string[]; topics: string[] }>('/api/resources'),
+  listResourceOwners: () => request<ResourceOwnersResponse>('/api/resources/owners'),
 
   // Queues
   listQueues: () => request<QueueSnapshot[]>('/api/queues'),

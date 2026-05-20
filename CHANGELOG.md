@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.14] - 2026-05-20
+
+### Added
+- **Full-screen dashboard with URL-based navigation**: the Vue dashboard now uses `vue-router` instead of a single in-memory tab state. Every section is a real URL — `/`, `/services`, `/services/:name`, `/queues`, `/dynamo`, `/dynamo/:name` — so views are bookmarkable, shareable, and the browser back/forward buttons work as expected. DynamoDB table sub-tabs (Items / Indexes / Settings / Seed) are persisted via `?tab=...` so deep links land on the exact sub-view. Pages are code-split (lazy-loaded) so the initial bundle stays small.
+- **Landing-style Overview page**: replaces the old "Resources" tab. Shows a project pitch hero, a live "Server status" card (LocalStack running, Dynamo Proxy enabled/listening, Auto-package on/off, Persistence on/off), an "LESC configuration" card (default region, server port, enabled LocalStack services, seeds dir, active config file path), four totalizers (services running/total, tables, queues, topics) and a "What's covered" panel listing supported resource types — `✓ SNS Topics`, `✓ SQS Queues`, `✓ DynamoDB Tables`, `⏳ S3 Buckets` (planned).
+- **`/services/:name` detail page**: lifecycle controls (Start / Stop / Logs / Delete / Refresh), metadata block (path, region, invoke port, PID, last updated), and resources grouped by type (Lambda functions, DynamoDB tables, SQS queues, SNS topics, event-source mappings). Each declared DynamoDB table or SQS queue is a clickable tag that navigates to its detail view.
+- **"Service" column on the Queues and DynamoDB lists**: each row now shows which microservice declared that queue/table, with a tag that links back to the service detail page. Resources not declared by any registered service render as `unmanaged` / `—`. Powered by a new `GET /api/resources/owners` endpoint that joins the cached CloudFormation templates and filters by region.
+- **Seeds embedded in the DynamoDB explorer**: the standalone "Seeds" tab is gone. Tables that exist only as a seed file (no live table yet) now appear as **ghost rows** in the DynamoDB tables list (reduced opacity, `Not created` badge, "Register service to provision" hint). When a table has a matching seed file, its detail view gets a new **"Seed" sub-tab** with three actions: **Apply** (insert seed items), **Redo** (purge + re-apply, behind a confirmation), and **Purge** (delete every item in the table). Each destructive action goes through a `TConfirmDialog`.
+- **`GET /api/config`**: exposes the runtime LSS configuration snapshot to the UI — `serverPort`, `localstack` (mode/endpoint/port/edition/version/image and `hasAuthToken: boolean`), `dynamoProxy.enabled/port`, `region`, `services`, `persistence`, `debug`, `seedsDir`, `autoPackage`, `packageCommand`, `packageTimeoutMs`, and `configPath`. The actual LocalStack auth token is never returned, only whether one is set.
+- **`GET /api/resources/owners`**: returns `{ tables, queues, topics }` where each entry is `{ name, service }`, computed by parsing each cached CloudFormation template. Respects `?region=` and filters owner mappings to services registered in the requested region.
+- `GET /api/services` now includes `resourceBreakdown: { lambdas, tables, queues, topics }` so the Services table can render per-type chips (`λ`/`🗄`/`📨`/`📣`) instead of a single opaque resource count.
+- `GET /api/health` response now includes a `dynamoProxy: { enabled, running, port }` block so the navbar and Overview can show whether the proxy is actually listening, not just whether it was configured.
+
+### Changed
+- **Dashboard uses the full viewport width**. The old `<TContainer size="xl">` cap (~1200px) is gone — wide monitors no longer waste half the screen on margins. A sticky secondary nav bar sits under the navbar with `RouterLink`s for the top-level sections.
+- The DynamoDB tables view was refactored from a 2-column card grid to a denser **table layout** to accommodate the new Service and Seed columns and the ghost-row affordance.
+- The DynamoDB Proxy status is now surfaced as a soft badge in the navbar (when enabled) alongside the existing LocalStack status badge.
+- `Service` typing in the UI moved from inline `interface Service` to the shared `ServiceSummary` / `ServiceDetail` / `ResourceBreakdown` / `ResourceOwner` types in `src/ui/src/services/api.ts`, and the API client gained `getConfig()`, `listResourceOwners()` helpers.
+
+### Removed
+- The standalone **"Seeds" tab** and its top-level dashboard entry. All seed actions are now reached from inside the relevant DynamoDB table's detail view, and unprovisioned seeds are visible as ghost rows in the DynamoDB tables list.
+- `src/ui/src/components/ResourcesOverview.vue`, `src/ui/src/components/SeedsPanel.vue`, and `src/ui/src/components/dynamo/DynamoTab.vue` — replaced by the new routed pages (`pages/OverviewPage.vue`, `pages/DynamoPage.vue` + `pages/DynamoTablePage.vue`) and the new `components/dynamo/DynamoSeedPanel.vue`.
+
 ## [0.0.13] - 2026-05-19
 
 ### Added

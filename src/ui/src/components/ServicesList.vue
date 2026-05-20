@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
+import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TInput, TFormField, TBadge, TTable, TEmptyState,
-  TStack, TModal, TConfirmDialog, TSpinner, useToast,
+  TStack, TModal, TConfirmDialog, TSpinner, TTag, useToast,
 } from '@treeui/vue';
 import type { TreeBadgeTone } from '@treeui/vue';
 
@@ -14,17 +15,10 @@ interface TableColumn {
   width?: string;
 }
 import { api } from '../services/api';
-
-interface Service {
-  name: string;
-  status: 'registered' | 'running' | 'stopped';
-  root: string;
-  lastUpdated: number;
-  resourcesCount?: number;
-}
+import type { ServiceSummary } from '../services/api';
 
 const toast = useToast();
-const services = ref<Service[]>([]);
+const services = ref<ServiceSummary[]>([]);
 const loading = ref(true);
 const registering = ref(false);
 const newServicePath = ref('');
@@ -42,7 +36,7 @@ const columns: TableColumn[] = [
   { key: 'name', label: 'Name' },
   { key: 'status', label: 'Status' },
   { key: 'root', label: 'Path' },
-  { key: 'resourcesCount', label: 'Resources', align: 'right' },
+  { key: 'resourceBreakdown', label: 'Resources' },
   { key: 'lastUpdated', label: 'Last updated' },
   { key: 'actions', label: 'Actions', align: 'right' },
 ];
@@ -215,7 +209,14 @@ onBeforeUnmount(() => {
 
     <TTable v-else :columns="columns" :rows="rows">
       <template #cell-name="{ row }">
-        <strong>{{ row.name }}</strong>
+        <RouterLink
+          :to="`/services/${encodeURIComponent(String(row.name))}`"
+          style="color: inherit; text-decoration: none;"
+        >
+          <strong style="text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;">
+            {{ row.name }}
+          </strong>
+        </RouterLink>
       </template>
 
       <template #cell-status="{ row }">
@@ -228,8 +229,44 @@ onBeforeUnmount(() => {
         <span class="mono">{{ row.root }}</span>
       </template>
 
-      <template #cell-resourcesCount="{ row }">
-        {{ row.resourcesCount || 0 }}
+      <template #cell-resourceBreakdown="{ row }">
+        <TStack direction="horizontal" gap="0.25rem" wrap>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.lambdas"
+            size="sm"
+            variant="soft"
+          >
+            λ {{ (row.resourceBreakdown as any).lambdas }}
+          </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.tables"
+            size="sm"
+            variant="soft"
+          >
+            🗄 {{ (row.resourceBreakdown as any).tables }}
+          </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.queues"
+            size="sm"
+            variant="soft"
+          >
+            📨 {{ (row.resourceBreakdown as any).queues }}
+          </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.topics"
+            size="sm"
+            variant="soft"
+          >
+            📣 {{ (row.resourceBreakdown as any).topics }}
+          </TTag>
+          <span
+            v-if="!row.resourcesCount"
+            class="muted"
+            style="font-size: 0.75rem;"
+          >
+            none
+          </span>
+        </TStack>
       </template>
 
       <template #cell-lastUpdated="{ row }">

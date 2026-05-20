@@ -1,23 +1,48 @@
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount } from 'vue';
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { RouterView, useRoute, useRouter } from 'vue-router';
 import {
-  TNavbar, TContainer, TStack, TBadge, TTabs, TTabList, TTab, TTabPanel,
-  TToastProvider, TButton, TSelect,
+  TNavbar, TStack, TBadge, TToastProvider, TButton, TSelect,
+  TTabs, TTabList, TTab, TDropdown,
 } from '@treeui/vue';
 import { currentRegion, AWS_REGIONS } from './services/region';
-import ServicesList from './components/ServicesList.vue';
-import ResourcesOverview from './components/ResourcesOverview.vue';
-import QueuesView from './components/QueuesView.vue';
-import SeedsPanel from './components/SeedsPanel.vue';
-import DynamoTab from './components/dynamo/DynamoTab.vue';
 import { api } from './services/api';
+import type { HealthInfo } from './services/api';
 
-const health = ref({ status: 'unknown', localstack: false });
-const activeTab = ref('overview');
+const route = useRoute();
+const router = useRouter();
+
+const health = ref<HealthInfo>({
+  status: 'unknown',
+  localstack: false,
+  dynamoProxy: { enabled: false, running: false, port: 8000 },
+});
 const theme = ref<'dark' | 'light'>(
   (document.documentElement.getAttribute('data-tree-theme') as 'dark' | 'light') || 'dark',
 );
 let healthTimer: number | null = null;
+
+// Top-level segment so nested routes (e.g. /services/foo) still light up the
+// matching nav item.
+const activeTopLevel = computed(() => {
+  const segs = route.path.split('/').filter(Boolean);
+  return segs.length === 0 ? '/' : `/${segs[0]}`;
+});
+
+const menuItems = computed(() => [
+  { label: theme.value === 'dark' ? 'Switch to light' : 'Switch to dark', value: 'theme' },
+]);
+
+function onNavSelect(value: string) {
+  if (value && value !== activeTopLevel.value) router.push(value);
+}
+
+function onMenuSelect(value: string) {
+  if (value === 'theme') {
+    theme.value = theme.value === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-tree-theme', theme.value);
+  }
+}
 
 async function checkHealth() {
   try {
@@ -25,11 +50,6 @@ async function checkHealth() {
   } catch (error) {
     console.error('Health check failed:', error);
   }
-}
-
-function toggleTheme() {
-  theme.value = theme.value === 'dark' ? 'light' : 'dark';
-  document.documentElement.setAttribute('data-tree-theme', theme.value);
 }
 
 onMounted(() => {
@@ -54,8 +74,36 @@ onBeforeUnmount(() => {
             </span>
           </TStack>
         </template>
+
+        <template #center>
+          <TTabs
+            :model-value="activeTopLevel"
+            @update:model-value="onNavSelect"
+          >
+            <TTabList>
+              <TTab value="/">Overview</TTab>
+              <TTab value="/services">Services</TTab>
+              <TTab value="/queues">Queues</TTab>
+              <TTab value="/dynamo">DynamoDB</TTab>
+            </TTabList>
+          </TTabs>
+        </template>
+
         <template #end>
           <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TBadge
+              :tone="health.localstack ? 'success' : 'danger'"
+              variant="soft"
+            >
+              LocalStack: {{ health.localstack ? 'Running' : 'Offline' }}
+            </TBadge>
+            <TBadge
+              v-if="health.dynamoProxy?.enabled"
+              :tone="health.dynamoProxy.running ? 'success' : 'warning'"
+              variant="soft"
+            >
+              Dynamo Proxy: {{ health.dynamoProxy.running ? 'On' : 'Off' }}
+            </TBadge>
             <TSelect
               v-model="currentRegion"
               :options="AWS_REGIONS"
@@ -63,61 +111,26 @@ onBeforeUnmount(() => {
               style="min-width: 14rem;"
               aria-label="AWS Region"
             />
-            <TBadge
-              :tone="health.localstack ? 'success' : 'danger'"
-              variant="soft"
+            <TDropdown
+              :items="menuItems"
+              size="sm"
+              label="Open menu"
+              @select="onMenuSelect"
             >
-              LocalStack: {{ health.localstack ? 'Running' : 'Offline' }}
-            </TBadge>
-            <TButton size="sm" variant="ghost" @click="toggleTheme">
-              {{ theme === 'dark' ? 'Light' : 'Dark' }}
-            </TButton>
+              <template #trigger>
+                <TButton size="sm" variant="ghost" aria-label="Open menu">
+                  ⋮
+                </TButton>
+              </template>
+            </TDropdown>
           </TStack>
         </template>
       </TNavbar>
 
       <main class="app-main">
-        <TContainer size="xl" padded>
-          <TTabs v-model="activeTab">
-            <TTabList>
-              <TTab value="overview">Overview</TTab>
-              <TTab value="services">Services</TTab>
-              <TTab value="queues">Queues</TTab>
-              <TTab value="dynamodb">DynamoDB</TTab>
-              <TTab value="seeds">Seeds</TTab>
-            </TTabList>
-
-            <TTabPanel value="overview">
-              <div :key="currentRegion" style="padding-top: 1.25rem;">
-                <ResourcesOverview />
-              </div>
-            </TTabPanel>
-
-            <TTabPanel value="services">
-              <div style="padding-top: 1.25rem;">
-                <ServicesList />
-              </div>
-            </TTabPanel>
-
-            <TTabPanel value="queues">
-              <div style="padding-top: 1.25rem;">
-                <QueuesView />
-              </div>
-            </TTabPanel>
-
-            <TTabPanel value="dynamodb">
-              <div :key="currentRegion" style="padding-top: 1.25rem;">
-                <DynamoTab />
-              </div>
-            </TTabPanel>
-
-            <TTabPanel value="seeds">
-              <div :key="currentRegion" style="padding-top: 1.25rem;">
-                <SeedsPanel />
-              </div>
-            </TTabPanel>
-          </TTabs>
-        </TContainer>
+        <div :key="`${route.fullPath}-${currentRegion}`">
+          <RouterView />
+        </div>
       </main>
     </div>
   </TToastProvider>
