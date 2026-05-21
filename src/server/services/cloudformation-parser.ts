@@ -13,6 +13,7 @@ interface CloudFormationResource {
 
 export interface LambdaResource {
   type: 'lambda';
+  logicalId: string;
   name: string;
   handler: string;
   runtime: string;
@@ -23,6 +24,7 @@ export interface LambdaResource {
 
 export interface DynamoDBResource {
   type: 'dynamodb';
+  logicalId: string;
   name: string;
   keySchema: Array<{ AttributeName: string; KeyType: string }>;
   attributeDefinitions: Array<{ AttributeName: string; AttributeType: string }>;
@@ -44,6 +46,7 @@ export interface DynamoDBResource {
 
 export interface SQSResource {
   type: 'sqs';
+  logicalId: string;
   name: string;
   visibilityTimeout?: number;
   messageRetentionPeriod?: number;
@@ -53,6 +56,7 @@ export interface SQSResource {
 
 export interface SNSResource {
   type: 'sns';
+  logicalId: string;
   name: string;
 }
 
@@ -68,6 +72,7 @@ export interface S3NotificationConfig {
 
 export interface S3Resource {
   type: 's3';
+  logicalId: string;
   name: string;
   versioningEnabled?: boolean;
   notifications: S3NotificationConfig[];
@@ -112,6 +117,10 @@ export class CloudFormationParser {
       case 'AWS::SNS::Topic':
         return this.parseSNS(key, resource);
       case 'AWS::S3::Bucket':
+        // Skip the bucket Serverless Framework injects for its own deployment
+        // artifacts — its name lives behind CloudFormation pseudo-parameters
+        // that LSS doesn't resolve, and it isn't useful for local dev.
+        if (key === 'ServerlessDeploymentBucket') return null;
         return this.parseS3(key, resource);
       case 'AWS::Lambda::EventSourceMapping':
         return this.parseEventSource(key, resource);
@@ -124,6 +133,7 @@ export class CloudFormationParser {
     const props = (resource.Properties || {}) as Record<string, unknown>;
     return {
       type: 'lambda',
+      logicalId: key,
       name: (props.FunctionName as string) || key,
       handler: (props.Handler as string) || '',
       runtime: (props.Runtime as string) || 'nodejs20.x',
@@ -135,13 +145,20 @@ export class CloudFormationParser {
 
   private parseDynamoDB(key: string, resource: CloudFormationResource): DynamoDBResource {
     const props = (resource.Properties || {}) as Record<string, unknown>;
+    // In CloudFormation, the mere presence of StreamSpecification.StreamViewType
+    // turns streams on — there's no separate StreamEnabled boolean (AWS SDK has
+    // one for UpdateTable, but the CFN resource doesn't).
+    const streamSpec = props.StreamSpecification as { StreamEnabled?: boolean; StreamViewType?: string } | undefined;
+    const streamEnabled = streamSpec ? Boolean(streamSpec.StreamViewType || streamSpec.StreamEnabled) : false;
+
     return {
       type: 'dynamodb',
+      logicalId: key,
       name: (props.TableName as string) || key,
       keySchema: (props.KeySchema as Array<{ AttributeName: string; KeyType: string }>) || [],
       attributeDefinitions: (props.AttributeDefinitions as Array<{ AttributeName: string; AttributeType: string }>) || [],
       billingMode: props.BillingMode as string | undefined,
-      streamEnabled: ((props.StreamSpecification as { StreamEnabled?: boolean })?.StreamEnabled) || false,
+      streamEnabled,
       globalSecondaryIndexes: props.GlobalSecondaryIndexes as DynamoDBResource['globalSecondaryIndexes'] | undefined,
       localSecondaryIndexes: props.LocalSecondaryIndexes as DynamoDBResource['localSecondaryIndexes'] | undefined,
     };
@@ -151,6 +168,7 @@ export class CloudFormationParser {
     const props = (resource.Properties || {}) as Record<string, unknown>;
     return {
       type: 'sqs',
+      logicalId: key,
       name: (props.QueueName as string) || key,
       visibilityTimeout: props.VisibilityTimeout as number | undefined,
       messageRetentionPeriod: props.MessageRetentionPeriod as number | undefined,
@@ -163,6 +181,7 @@ export class CloudFormationParser {
     const props = (resource.Properties || {}) as Record<string, unknown>;
     return {
       type: 'sns',
+      logicalId: key,
       name: (props.TopicName as string) || key,
     };
   }
@@ -203,6 +222,7 @@ export class CloudFormationParser {
 
     return {
       type: 's3',
+      logicalId: key,
       name: (props.BucketName as string) || key,
       versioningEnabled: versioning?.Status === 'Enabled',
       notifications,

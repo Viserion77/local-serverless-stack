@@ -1,4 +1,4 @@
-import { DynamoDBClient, CreateTableCommand, ListTablesCommand, DeleteTableCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, CreateTableCommand, ListTablesCommand, DeleteTableCommand, DescribeTableCommand } from '@aws-sdk/client-dynamodb';
 import { SQSClient, CreateQueueCommand, ListQueuesCommand, GetQueueAttributesCommand, DeleteQueueCommand, GetQueueUrlCommand } from '@aws-sdk/client-sqs';
 import { SNSClient, CreateTopicCommand, ListTopicsCommand, DeleteTopicCommand } from '@aws-sdk/client-sns';
 import {
@@ -33,6 +33,12 @@ export class ResourceProvisioner {
   private s3Client!: S3Client;
   private lambdaClient!: LambdaClient;
   private currentRegion: string = 'us-east-1';
+  // CFN logical id → resource snapshot for the service currently being
+  // provisioned. Lets resolveEventSourceArn map Fn::GetAtt references
+  // (e.g. "OrderProcessingQueue") to the real resource name in LocalStack
+  // (e.g. "pro-sample-microservice-OrderProcessing") even when the user
+  // sets an explicit TableName/QueueName that doesn't match the logical id.
+  private resourcesByLogicalId = new Map<string, Resource>();
 
   private constructor() {
     this.initializeClients(this.currentRegion);
@@ -82,6 +88,15 @@ export class ResourceProvisioner {
 
     const invokeUrl = metadata?.invokeUrl
       || (metadata?.invokePort ? `http://host.docker.internal:${metadata.invokePort}` : undefined);
+
+    // Rebuild the logical id map for this service so resolveEventSourceArn can
+    // jump straight from "OrderProcessingQueue" to the actual queue name.
+    this.resourcesByLogicalId.clear();
+    for (const r of resources) {
+      if ('logicalId' in r && r.logicalId) {
+        this.resourcesByLogicalId.set(r.logicalId, r);
+      }
+    }
 
     let provisionedCount = 0;
 
@@ -292,9 +307,10 @@ export class ResourceProvisioner {
     const lambdaConfigurations = [];
 
     for (const notif of bucket.notifications) {
-      const actualFunctionName = this.resolveLambdaFunctionName(serviceName, notif.functionRef);
-      const invokeName = this.shortFunctionName(notif.functionRef);
-      await this.ensureLambdaProxyExists(serviceName, actualFunctionName, invokeName, invokeUrl);
+      // Both the LocalStack proxy and the offline invoke URL use the same
+      // fully-qualified Lambda name pulled straight from the CFN template.
+      const actualFunctionName = this.resolveLambdaName(serviceName, notif.functionRef);
+      await this.ensureLambdaProxyExists(serviceName, actualFunctionName, actualFunctionName, invokeUrl);
 
       // Allow S3 to invoke the Lambda. LocalStack enforces this when the bucket fires.
       try {
@@ -334,19 +350,42 @@ export class ResourceProvisioner {
       new PutBucketNotificationConfigurationCommand({
         Bucket: bucket.name,
         NotificationConfiguration: { LambdaFunctionConfigurations: lambdaConfigurations as any },
+        // LocalStack Pro performs the same test-invoke validation real S3 does,
+        // and rejects the config with "Unable to validate the following
+        // destination configurations" if the Lambda permission hasn't fully
+        // propagated yet. The community image is lax about this, but Pro isn't.
+        // We add the lambda:InvokeFunction permission above; this flag tells S3
+        // to trust us rather than synchronously probe the destination.
+        SkipDestinationValidation: true,
       }),
     );
     console.log(`  ✓ Wired ${lambdaConfigurations.length} S3 notification(s) on bucket: ${bucket.name}`);
   }
 
   // Strips Serverless's "LambdaFunction" CFN suffix and lowercases the first char.
-  // This is the short name that serverless-offline registers at /2015-03-31/functions/{name}/invocations.
+  // Used only as a fallback when we can't find the lambda in the parsed CFN.
   private shortFunctionName(cfnName: string): string {
     let funcName = cfnName;
     if (funcName.endsWith('LambdaFunction')) {
       funcName = funcName.slice(0, -14);
     }
     return funcName.charAt(0).toLowerCase() + funcName.slice(1);
+  }
+
+  // The fully-qualified Lambda name `${service}-${stage}-${key}` is what
+  // serverless-offline registers on its invoke port (lambdaPort). Anything
+  // shorter (short key, or wrong stage) makes offline return 404 "Function not
+  // found". The CFN template that `sls package` emits already sets this exact
+  // name in each Lambda's FunctionName property — read it from there rather
+  // than reconstructing it from pieces.
+  private resolveLambdaName(serviceName: string, logicalId: string): string {
+    const resource = this.resourcesByLogicalId.get(logicalId);
+    if (resource && resource.type === 'lambda') {
+      return resource.name;
+    }
+    // Fallback for templates whose Lambda block didn't reach the parser.
+    // Old default assumed stage "api"; keep it as last resort.
+    return `${serviceName}-api-${this.shortFunctionName(logicalId)}`;
   }
 
   // `proxyName` is the function name registered in LocalStack (the trigger target).
@@ -422,16 +461,17 @@ export const handler = async (event, context) => {
 
   private async createEventSourceMapping(serviceName: string, mapping: EventSourceMapping, invokeUrl?: string): Promise<void> {
     try {
-      // Convert CloudFormation function name to Serverless naming convention
-      // CloudFormation: ConsumerAppsQueueLambdaFunction -> Serverless: payment-reminder-api-consumerAppsQueue
-      const actualFunctionName = this.resolveLambdaFunctionName(serviceName, mapping.functionName);
-      const invokeName = this.shortFunctionName(mapping.functionName);
+      // Use the fully-qualified Lambda name straight from the CFN template
+      // (e.g. "pro-sample-microservice-dev-processOrderQueue"). This is what
+      // serverless-offline's invoke endpoint (lambdaPort) requires; shorter
+      // forms return 404 "Function not found".
+      const actualFunctionName = this.resolveLambdaName(serviceName, mapping.functionName);
 
       // Resolve queue ARN from queue name
       const eventSourceArn = await this.resolveEventSourceArn(mapping.eventSourceArn);
 
       // Create Lambda proxy function if it doesn't exist
-      await this.ensureLambdaProxyExists(serviceName, actualFunctionName, invokeName, invokeUrl);
+      await this.ensureLambdaProxyExists(serviceName, actualFunctionName, actualFunctionName, invokeUrl);
 
       // Check if mapping already exists
       const existingMappings = await this.lambdaClient.send(
@@ -445,12 +485,18 @@ export const handler = async (event, context) => {
         return;
       }
 
+      // Stream-based sources (DynamoDB Streams, Kinesis) require StartingPosition;
+      // SQS forbids it. Detect from the resolved ARN service segment.
+      const isStreamSource = eventSourceArn.startsWith('arn:aws:dynamodb:')
+        || eventSourceArn.startsWith('arn:aws:kinesis:');
+
       await this.lambdaClient.send(
         new CreateEventSourceMappingCommand({
           FunctionName: actualFunctionName,
           EventSourceArn: eventSourceArn,
           BatchSize: mapping.batchSize || 10,
           Enabled: mapping.enabled,
+          StartingPosition: isStreamSource ? 'TRIM_HORIZON' : undefined,
         }),
       );
       console.log(`  ✓ Created event source mapping: ${actualFunctionName} <- ${mapping.eventSourceArn}`);
@@ -515,26 +561,6 @@ export const handler = async (event, context) => {
     console.log(`  ✓ Created Lambda proxy: ${proxyName} -> ${invokeUrl}/2015-03-31/functions/${invokeName}/invocations`);
   }
 
-  private resolveLambdaFunctionName(serviceName: string, cfnName: string): string {
-    // CloudFormation names like "ConsumerAppsQueueLambdaFunction" are converted to Serverless naming
-    // by removing the "LambdaFunction" suffix, converting to camelCase, then to the serverless pattern
-    // Example: ConsumerAppsQueueLambdaFunction -> consumerAppsQueue -> payment-reminder-api-consumerAppsQueue
-
-    // Remove "LambdaFunction" suffix if present
-    let funcName = cfnName;
-    if (funcName.endsWith('LambdaFunction')) {
-      funcName = funcName.slice(0, -14); // Remove "LambdaFunction"
-    }
-
-    // Convert to camelCase (first letter lowercase)
-    funcName = funcName.charAt(0).toLowerCase() + funcName.slice(1);
-
-    // Serverless names follow pattern: {service}-{stage}-{functionName}
-    // We need to extract service and stage from the created Lambda names
-    // For now, assume standard naming: payment-reminder-api-{functionName}
-    return `${serviceName}-api-${funcName}`;
-  }
-
   private convertCamelCaseToKebab(camelCase: string): string {
     return camelCase
       .replace(/([A-Z])/g, '-$1')
@@ -548,14 +574,58 @@ export const handler = async (event, context) => {
       return arnRef;
     }
 
-    // Extract resource name from Fn::GetAtt reference (e.g., "paymentReminderApps::Arn")
-    let resourceName = arnRef.split('::')[0];
+    // Extract logical id + attribute from Fn::GetAtt (e.g. "OrderProcessingQueue::Arn")
+    const logicalId = arnRef.split('::')[0];
 
-    // Convert camelCase resource names to kebab-case (serverless convention)
-    // e.g., "paymentReminderApps" -> "payment-reminder-apps"
-    resourceName = this.convertCamelCaseToKebab(resourceName);
+    // Direct lookup via the CFN logical id map — this works regardless of any
+    // explicit QueueName/TableName/TopicName the user set, fixing the old bug
+    // where we kebab-cased the logical id and tried to fuzzy-match.
+    const direct = this.resourcesByLogicalId.get(logicalId);
+    if (direct) {
+      if (direct.type === 'sqs') {
+        try {
+          const urlResponse = await this.sqsClient.send(
+            new GetQueueUrlCommand({ QueueName: direct.name }),
+          );
+          if (urlResponse.QueueUrl) {
+            const attributes = await this.sqsClient.send(
+              new GetQueueAttributesCommand({
+                QueueUrl: urlResponse.QueueUrl,
+                AttributeNames: ['QueueArn'],
+              }),
+            );
+            const queueArn = attributes.Attributes?.QueueArn;
+            if (queueArn) return queueArn;
+          }
+        } catch {
+          // Fall through to the legacy fuzzy resolver below
+        }
+      } else if (direct.type === 'dynamodb') {
+        // The real stream ARN includes a timestamp suffix, not the view type —
+        // ask DynamoDB for LatestStreamArn rather than hand-crafting one.
+        // CreateTable returns before the stream becomes available, so retry a
+        // few times if the first describe comes back with no stream ARN.
+        for (let i = 0; i < 5; i++) {
+          try {
+            const described = await this.dynamoClient.send(
+              new DescribeTableCommand({ TableName: direct.name }),
+            );
+            const streamArn = described.Table?.LatestStreamArn;
+            if (streamArn) return streamArn;
+          } catch {
+            // table may still be creating — fall through to retry
+          }
+          await new Promise(r => setTimeout(r, 300));
+        }
+      } else if (direct.type === 'sns') {
+        return `arn:aws:sns:${this.currentRegion}:000000000000:${direct.name}`;
+      }
+    }
 
-    // Try to resolve as SQS queue
+    // Legacy fallback: kebab-case match on actual resource lists. Kept for
+    // templates whose logical ids weren't captured (e.g. handcrafted ARN refs).
+    const resourceName = this.convertCamelCaseToKebab(logicalId);
+
     try {
       const queues = await this.sqsClient.send(new ListQueuesCommand({}));
       const queueUrl = queues.QueueUrls?.find(url => url.includes(resourceName));
@@ -577,17 +647,18 @@ export const handler = async (event, context) => {
       // Continue to try other resource types
     }
 
-    // Try to resolve as DynamoDB stream
     try {
       const tables = await this.dynamoClient.send(new ListTablesCommand({}));
-      const tableMatch = tables.TableNames?.find(name => 
+      const tableMatch = tables.TableNames?.find(name =>
         this.convertCamelCaseToKebab(name) === resourceName
       );
 
       if (tableMatch) {
-        // Return DynamoDB Streams ARN (format: arn:aws:dynamodb:region:account:table/name/stream/type)
-        // For now, we'll construct a generic stream ARN
-        return `arn:aws:dynamodb:us-east-1:000000000000:table/${tableMatch}/stream/NEW_AND_OLD_IMAGES`;
+        const described = await this.dynamoClient.send(
+          new DescribeTableCommand({ TableName: tableMatch }),
+        );
+        const streamArn = described.Table?.LatestStreamArn;
+        if (streamArn) return streamArn;
       }
     } catch (_error) {
       // Continue to try other resource types

@@ -482,15 +482,15 @@ sequenceDiagram
 The `npx lss` CLI is implemented in `/bin/cli.js` and provides:
 
 - **Background Process Management**: Uses `spawn` with `detached: true` to run orchestrator independently
-- **PID File**: Stores process ID in `/tmp/lss-orchestrator.pid`
-- **Log File**: Redirects stdout/stderr to `/tmp/lss-orchestrator.log`
+- **PID File**: Stores process ID in `/tmp/lss-orchestrator-{serverPort}.pid` (or `/tmp/lss-orchestrator.pid` when serverPort is the default 3100). The port-scoped path lets multiple LSS instances coexist — one per project — without trampling each other.
+- **Log File**: Redirects stdout/stderr to `/tmp/lss-orchestrator-{serverPort}.log` (or `/tmp/lss-orchestrator.log` for the default port).
 - **Process Monitoring**: Checks if process is alive before starting/stopping
 - **Clean Shutdown**: Sends SIGTERM for graceful termination
 
 ### Files
 
-- **PID File**: `/tmp/lss-orchestrator.pid`
-- **Log File**: `/tmp/lss-orchestrator.log`
+- **PID File**: `/tmp/lss-orchestrator-{serverPort}.pid`
+- **Log File**: `/tmp/lss-orchestrator-{serverPort}.log`
 
 ## Troubleshooting
 

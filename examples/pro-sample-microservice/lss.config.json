@@ -1,9 +1,9 @@
 {
-  "serverPort": 3110,
-  "localstackPort": 4570,
-  "localstackEndpoint": "http://localhost:4570",
+  "serverPort": 3111,
+  "localstackPort": 4571,
+  "localstackEndpoint": "http://localhost:4571",
   "mode": "managed",
-  "localstackEdition": "community",
+  "localstackEdition": "pro",
   "region": "us-east-1",
   "services": ["dynamodb", "sqs", "sns", "s3", "lambda"],
   "persistence": true,

@@ -20,7 +20,7 @@ End-to-end test rig for **Local Serverless Stack (LSS)**. Exercises every integr
 - Docker (LocalStack runs in a container managed by LSS)
 - Node.js ≥ 18
 
-> **Heads up — PID file is global.** The LSS PID file lives at `/tmp/lss-orchestrator.pid` and is shared across all working directories, while `lss.config.json` is read from the *current* directory. If you already have an orchestrator running started from a different folder (e.g. the repo root), `npm run lss:start` from here will see the existing PID, report the **wrong** port (the example's config) but the real orchestrator will still be on the other folder's port. Always `npm run lss:stop` first so this example can boot a fresh orchestrator on **3100 / 4566**.
+> **Ports used by this example** — LSS server `3110`, LocalStack `4570`, `serverless-offline` HTTP `3000`, Lambda invoke `3001`. The non-default LocalStack port keeps this example out of the way of an external LocalStack you might have on `4566`. If you need to run two examples side by side (e.g. this one and `pro-sample-microservice`), they each have their own LSS PID/log file scoped by `serverPort`.
 
 > **Heads up — `serverless offline` does not write the CF template.** The LSS plugin reads `.serverless/cloudformation-template-update-stack.json` to discover resources, but `serverless offline start` packages in memory and skips the disk write. The `offline` script in this example chains `serverless package` first so the template is materialized before the orchestrator hook fires.
 
@@ -29,6 +29,10 @@ End-to-end test rig for **Local Serverless Stack (LSS)**. Exercises every integr
 ```bash
 cd examples/sample-microservice
 npm install
+
+# (Optional) Provide a LocalStack auth token — required for community images
+# from 2026.5 onward. Copy and edit the .env file:
+cp .env.example .env   # then fill LOCALSTACK_AUTH_TOKEN in your editor
 
 # 1. Start LSS (boots LocalStack via Docker; first run pulls the image, ~30s).
 npm run lss:start
@@ -42,7 +46,7 @@ npm run offline
 
 LSS auto-seeds DynamoDB tables when they are created if a matching JSON file exists in `./seeds`. The Users and Orders tables ship seeded; Sessions starts empty.
 
-Open the dashboard at <http://localhost:3100>:
+Open the dashboard at <http://localhost:3110>:
 
 - **Overview** → counts of every resource type
 - **Services** → this microservice + its routes

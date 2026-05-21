@@ -1,4 +1,4 @@
-service: sample-microservice
+service: pro-sample-microservice
 
 frameworkVersion: '3'
 
@@ -10,10 +10,10 @@ provider:
     USERS_TABLE: ${self:service}-Users
     SESSIONS_TABLE: ${self:service}-Sessions
     ORDERS_TABLE: ${self:service}-Orders
-    ORDER_QUEUE_URL: http://localhost:4570/000000000000/${self:service}-OrderProcessing
+    ORDER_QUEUE_URL: http://localhost:4571/000000000000/${self:service}-OrderProcessing
     ORDER_EVENTS_TOPIC_ARN: arn:aws:sns:us-east-1:000000000000:${self:service}-OrderEvents
-    UPLOADS_BUCKET: sample-microservice-uploads
-    AWS_ENDPOINT: http://localhost:4570
+    UPLOADS_BUCKET: pro-sample-microservice-uploads
+    AWS_ENDPOINT: http://localhost:4571
 
 plugins:
   - lss-serverless-plugin
@@ -22,10 +22,10 @@ plugins:
 custom:
   orchestrator:
     enabled: true
-    orchestratorUrl: http://localhost:3110
+    orchestratorUrl: http://localhost:3111
   serverless-offline:
-    httpPort: 3000
-    lambdaPort: 3001
+    httpPort: 3010
+    lambdaPort: 3011
 
 functions:
   health:
@@ -171,7 +171,7 @@ resources:
     UploadsBucket:
       Type: AWS::S3::Bucket
       Properties:
-        BucketName: sample-microservice-uploads
+        BucketName: pro-sample-microservice-uploads
         NotificationConfiguration:
           LambdaConfigurations:
             - Event: s3:ObjectCreated:*

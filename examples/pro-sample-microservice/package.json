@@ -1,8 +1,8 @@
 {
-  "name": "sample-microservice",
+  "name": "pro-sample-microservice",
   "version": "0.0.0",
   "private": true,
-  "description": "End-to-end test microservice for Local Serverless Stack — exercises DynamoDB (PK/SK, GSI, streams), SQS, SNS, S3, and Lambda event sources.",
+  "description": "Pro-edition copy of sample-microservice for Local Serverless Stack — same resources, runs against localstack/localstack-pro with LOCALSTACK_AUTH_TOKEN.",
   "scripts": {
     "offline": "dotenv -- serverless package && dotenv -- serverless offline start",
     "package": "dotenv -- serverless package",

@@ -5,8 +5,27 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 
-const PID_FILE = path.join(os.tmpdir(), 'lss-orchestrator.pid');
-const LOG_FILE = path.join(os.tmpdir(), 'lss-orchestrator.log');
+// Default paths used when no config is present. The actual paths are derived
+// per-invocation by runtimePaths() below, scoped to the configured serverPort
+// so multiple examples (each with their own lss.config.json) can run in parallel.
+const DEFAULT_PID_FILE = path.join(os.tmpdir(), 'lss-orchestrator.pid');
+const DEFAULT_LOG_FILE = path.join(os.tmpdir(), 'lss-orchestrator.log');
+
+// PID/log file paths scoped to the cwd's serverPort. Multiple examples sitting
+// in different folders no longer trample each other.
+function runtimePaths() {
+  const cfg = getConfig(loadConfig());
+  const port = cfg.serverPort;
+  // Keep the legacy global path when the default port is in use so existing
+  // installations don't lose their running process across an upgrade.
+  if (!port || port === 3100) {
+    return { pidFile: DEFAULT_PID_FILE, logFile: DEFAULT_LOG_FILE };
+  }
+  return {
+    pidFile: path.join(os.tmpdir(), `lss-orchestrator-${port}.pid`),
+    logFile: path.join(os.tmpdir(), `lss-orchestrator-${port}.log`),
+  };
+}
 
 /**
  * Load configuration from lss.config.json or .lssrc
@@ -82,8 +101,10 @@ function getOrchestratorPath() {
 }
 
 function startOrchestrator() {
-  if (fs.existsSync(PID_FILE)) {
-    const pid = fs.readFileSync(PID_FILE, 'utf8').trim();
+  const { pidFile, logFile } = runtimePaths();
+
+  if (fs.existsSync(pidFile)) {
+    const pid = fs.readFileSync(pidFile, 'utf8').trim();
     try {
       process.kill(pid, 0);
       const config = loadConfig();
@@ -96,7 +117,7 @@ function startOrchestrator() {
       }
       return;
     } catch (e) {
-      fs.unlinkSync(PID_FILE);
+      fs.unlinkSync(pidFile);
     }
   }
 
@@ -112,7 +133,7 @@ function startOrchestrator() {
     process.exit(1);
   }
 
-  const logFd = fs.openSync(LOG_FILE, 'a');
+  const logFd = fs.openSync(logFile, 'a');
   
   // Load config
   const config = loadConfig();
@@ -167,57 +188,59 @@ function startOrchestrator() {
   child.unref();
   
   fs.closeSync(logFd);
-  fs.writeFileSync(PID_FILE, child.pid.toString());
-  
+  fs.writeFileSync(pidFile, child.pid.toString());
+
   console.log('🚀 LSS Orchestrator started (PID:', child.pid + ')');
   console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
   console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort} (mode: ${mode}, edition: ${edition})`);
   if (enableDynamoProxy) {
     console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
   }
-  console.log('📝 Logs:', LOG_FILE);
-  
+  console.log('📝 Logs:', logFile);
+
   setTimeout(() => {
     try {
       process.kill(child.pid, 0);
       console.log('✅ Service is running');
     } catch (e) {
-      console.error('❌ Service failed to start. Check logs:', LOG_FILE);
-      if (fs.existsSync(PID_FILE)) {
-        fs.unlinkSync(PID_FILE);
+      console.error('❌ Service failed to start. Check logs:', logFile);
+      if (fs.existsSync(pidFile)) {
+        fs.unlinkSync(pidFile);
       }
     }
   }, 2000);
 }
 
 function stopOrchestrator() {
-  if (!fs.existsSync(PID_FILE)) {
+  const { pidFile } = runtimePaths();
+  if (!fs.existsSync(pidFile)) {
     console.log('⚠️  LSS Orchestrator is not running');
     return;
   }
 
-  const pid = fs.readFileSync(PID_FILE, 'utf8').trim();
-  
+  const pid = fs.readFileSync(pidFile, 'utf8').trim();
+
   try {
     process.kill(pid, 'SIGTERM');
-    fs.unlinkSync(PID_FILE);
+    fs.unlinkSync(pidFile);
     console.log('🛑 LSS Orchestrator stopped (PID:', pid + ')');
   } catch (e) {
     console.error('❌ Failed to stop process:', e.message);
-    if (fs.existsSync(PID_FILE)) {
-      fs.unlinkSync(PID_FILE);
+    if (fs.existsSync(pidFile)) {
+      fs.unlinkSync(pidFile);
     }
   }
 }
 
 function showStatus() {
-  if (!fs.existsSync(PID_FILE)) {
+  const { pidFile, logFile } = runtimePaths();
+  if (!fs.existsSync(pidFile)) {
     console.log('⚪ LSS Orchestrator: NOT RUNNING');
     return;
   }
 
-  const pid = fs.readFileSync(PID_FILE, 'utf8').trim();
-  
+  const pid = fs.readFileSync(pidFile, 'utf8').trim();
+
   try {
     process.kill(pid, 0);
     const config = loadConfig();
@@ -228,10 +251,10 @@ function showStatus() {
     if (cfg.enableDynamoProxy) {
       console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
     }
-    console.log('📝 Logs:', LOG_FILE);
+    console.log('📝 Logs:', logFile);
   } catch (e) {
     console.log('⚪ LSS Orchestrator: NOT RUNNING (stale PID file)');
-    fs.unlinkSync(PID_FILE);
+    fs.unlinkSync(pidFile);
   }
 }
 
@@ -276,7 +299,8 @@ function postJson(path, body) {
 }
 
 function ensureRunningOrExit() {
-  if (!fs.existsSync(PID_FILE)) {
+  const { pidFile } = runtimePaths();
+  if (!fs.existsSync(pidFile)) {
     console.error('❌ LSS Orchestrator is not running. Start it with: npx lss start');
     process.exit(1);
   }
@@ -392,14 +416,15 @@ Examples:
 }
 
 function showLogs() {
-  if (!fs.existsSync(LOG_FILE)) {
+  const { logFile } = runtimePaths();
+  if (!fs.existsSync(logFile)) {
     console.log('⚠️  No logs found');
     return;
   }
-  
-  console.log('📝 Logs from:', LOG_FILE);
+
+  console.log('📝 Logs from:', logFile);
   console.log('---');
-  const logs = fs.readFileSync(LOG_FILE, 'utf8');
+  const logs = fs.readFileSync(logFile, 'utf8');
   const lines = logs.split('\n');
   const lastLines = lines.slice(-50).join('\n');
   console.log(lastLines);

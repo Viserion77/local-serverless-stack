@@ -9,12 +9,18 @@ export class LocalStackManager {
   private process: ChildProcess | null = null;
   private _isRunning = false;
   private endpoint: string;
-  private readonly containerName = 'lss-localstack';
+  // Container name is scoped to the LocalStack port so multiple LSS instances
+  // (one per example/project) can launch their own container side by side.
+  // Falls back to "lss-localstack" when the default 4566 is in use to preserve
+  // existing teardown scripts that look for that name.
+  private readonly containerName: string;
   private readonly configManager: ConfigManager;
 
   private constructor() {
     this.configManager = ConfigManager.getInstance();
     this.endpoint = this.configManager.getLocalStackEndpoint();
+    const port = this.configManager.getLocalStackPort();
+    this.containerName = port === 4566 ? 'lss-localstack' : `lss-localstack-${port}`;
   }
 
   static getInstance(): LocalStackManager {
@@ -68,15 +74,19 @@ export class LocalStackManager {
       const persistence = this.configManager.isPersistence() ? '1' : '0';
       const debug = this.configManager.isDebug() ? '1' : '0';
 
+      // Persistence volume is scoped to the container so two LSS instances
+      // don't share (and corrupt) the same on-disk state.
+      const volumeName = this.containerName === 'lss-localstack'
+        ? 'lss-localstack-data'
+        : `${this.containerName}-data`;
+
       const dockerArgs = [
         'run',
         '--rm',
         '-p',
         `${port}:4566`,
-        '-p',
-        '4571:4571',
         '-v',
-        'lss-localstack-data:/var/lib/localstack',
+        `${volumeName}:/var/lib/localstack`,
         '-v',
         '/var/run/docker.sock:/var/run/docker.sock',
         '--name',
