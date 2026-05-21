@@ -5,6 +5,63 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.16] - 2026-05-21
+
+### Added
+- **S3 bucket support, end-to-end**: LSS now parses `AWS::S3::Bucket` from CloudFormation, provisions buckets in LocalStack, and (when present) wires `NotificationConfiguration.LambdaConfigurations` to a Lambda proxy that forwards into `serverless-offline`. Versioning, `Filter.S3Key.Rules` (prefix/suffix), and multiple lambda configurations per bucket are honored.
+  - **New service** `src/server/services/s3-explorer.ts` exposing `listBuckets`, `getBucket`, `listObjects`, `getObject`, `headObject`, `putObject`, `deleteObject`. Per-region client cache mirrors `QueueInspector`/`DynamoExplorer`. Client uses `forcePathStyle: true` so LocalStack receives the bucket name in the URL path rather than as a virtual-host subdomain.
+  - **New REST routes** under `/api/buckets`:
+    - `GET /api/buckets` — list buckets with enriched metadata (`objectCount`, `totalSize`, `region`, `createdAt`).
+    - `GET /api/buckets/:name` — describe a bucket (versioning, notifications count, object/size totals, region).
+    - `GET /api/buckets/:name/objects` — list objects with `prefix`, `delimiter`, `maxKeys`, `continuationToken` query params.
+    - `GET /api/buckets/:name/objects/content?key=...&download=0|1` — stream an object back. Sets `Content-Type` from the object's stored mime; `?download=1` flips to an attachment disposition. Used by the UI for preview and download.
+    - `POST /api/buckets/:name/objects` — upload `{ key, body, contentType?, encoding? }` (encoding `base64` flips the body decoder for binary uploads).
+    - `DELETE /api/buckets/:name/objects?key=...` — delete a single object.
+  - **New dashboard tab "S3"** in `App.vue` between Queues and DynamoDB.
+  - **`/buckets`** — lazy-loaded `BucketsPage.vue` wraps `BucketsView.vue`. Shows three stats (buckets, objects, total size), a service-owner column (links back to `/services/:name`), versioning + notifications counters, and refreshes every 10s.
+  - **`/buckets/:name`** — lazy-loaded `BucketDetailPage.vue` wraps `BucketDetail.vue`. Shows the four bucket stats, an **Upload object** card (key, optional content-type, free-form body) that POSTs through `/api/buckets/:name/objects`, and an **Objects** table with prefix filter, per-row open-in-tab preview, download, and delete (behind a confirm).
+  - **`@aws-sdk/client-s3`** added to the main package.
+  - **`/api/resources`** now returns `{ tables, queues, topics, buckets }` and **`/api/resources/owners`** returns a `buckets` array of `{ name, service }` pairs.
+  - **`GET /api/services`** `resourceBreakdown` now includes `buckets` count (rendered as `🪣` chip in `ServicesList.vue`).
+  - **Overview page** got a fifth stat column for S3 buckets and the **S3 Buckets** entry in "What's covered" is now `Supported` and links to `/buckets`.
+  - **Service detail page** got a Buckets stat and a clickable bucket list that navigates to `/buckets/:name`.
+  - `S3Resource` interface in `cloudformation-parser.ts` carries `versioningEnabled` and an array of `S3NotificationConfig { functionRef, events, filterPrefix?, filterSuffix? }`.
+
+- **`pro-sample-microservice` example**: same surface as `sample-microservice` (Users/Sessions/Orders tables, OrderProcessing queue, OrderEvents topic, uploads bucket with S3 → Lambda notification, full handler set) but pointed at `localstack/localstack-pro:latest`. Lives on its own ports (LSS `3111`, LocalStack `4571`, offline `3010 / 3011`) so it can run side by side with the community example and an external LocalStack on `4566`. Ships with `.env.example` documenting the required `LOCALSTACK_AUTH_TOKEN` and npm scripts wrapped in `dotenv-cli` so secrets reach both LSS and `serverless-offline` without polluting the shell.
+
+- **`.env` support in `sample-microservice`**: matching `.env.example` (with a note that recent community images ≥ 2026.5 also require a token), `.env` / `.env.local` added to `.gitignore`, and every npm script (`lss:start|stop|status|logs|seed*`, `package`, `offline`, `deploy`) wrapped in `dotenv -- ...` via the new `dotenv-cli` devDep.
+
+- **`sample-microservice` S3 handlers**: `aws.js` now exports an `S3Client` (with `forcePathStyle: true`), and three new handlers exercise the round-trip:
+  - `uploadFile.js` — `POST /uploads` → puts an object under `incoming/{filename}` (supports `encoding: "base64"`).
+  - `listUploads.js` — `GET /uploads?prefix=` → lists objects with metadata.
+  - `onUpload.js` — bound to the bucket's `s3:ObjectCreated:*` notification under the `incoming/` prefix; reads the object back and writes a synthetic row into the `Orders` table (`userId=s3-upload`) so the trigger is visible from the DynamoDB explorer.
+  - `serverless.yml` declares the bucket, the notification (with `Filter.S3Key.Rules` prefix), and adds the three corresponding `functions:`. Env var `UPLOADS_BUCKET` injected for the handlers.
+
+### Changed
+- **`bin/cli.js` PID and log files are now scoped to `serverPort`**: `/tmp/lss-orchestrator-{serverPort}.{pid,log}` instead of the previous global `/tmp/lss-orchestrator.{pid,log}`. The legacy global path is still used when `serverPort` is the default `3100`, so existing single-project setups keep working. This removes the old "PID file is global across all working directories" gotcha — multiple LSS instances (one per example/project) can now coexist on the same machine.
+- **`LocalStackManager` container and volume are scoped to the LocalStack port**: container name is `lss-localstack` for the default `4566` and `lss-localstack-{port}` otherwise; the persistence volume follows the same scheme (`{containerName}-data`). Two examples no longer collide on either the Docker container name or the persistence volume.
+- **Removed the hardcoded `-p 4571:4571` extra port binding** from the LocalStack Docker invocation. It clashed with examples whose LocalStack port is `4571`, and the legacy "edge" port it exposed is obsolete in modern LocalStack (everything flows through the primary port).
+- **`sample-microservice` ports moved off the defaults**: LSS dashboard now on `3110` (was `3101`), LocalStack now on `4570` (was `4566`). Avoids colliding with an external LocalStack on `4566`. The `serverless-offline` ports (`3000`/`3001`) are unchanged.
+- **`sample-microservice` package.json**: added `dotenv-cli` to `devDependencies`; every script wrapped in `dotenv -- ...`. Updated description to mention S3.
+- **Resource breakdown / owner types** in `src/ui/src/services/api.ts` gained the `buckets` fields. The `ServiceResource.type` union now includes `'s3'`, `ResourceBreakdown` includes `buckets: number`, and `ResourceOwnersResponse` includes `buckets: ResourceOwner[]`. Existing `.catch(() => ({...}))` fallbacks in `QueuesView.vue` and `DynamoTablesList.vue` were widened to include the new field.
+
+### Fixed
+- **`resolveLambdaName` now reads `FunctionName` straight from the parsed CFN** instead of hand-crafting `${service}-api-${shortName}`. The old heuristic only worked when the user's stage happened to be `api`; for any other stage (e.g. the default `dev`) the LocalStack proxy would forward to a name `serverless-offline` doesn't recognize and the invocation 404'd with `Function does not exist`. Both the LocalStack proxy and its invoke URL now use the same fully-qualified name (`pro-sample-microservice-dev-onUpload`) that `serverless-offline` exposes on its `lambdaPort`. The old `resolveLambdaFunctionName` helper was removed; `shortFunctionName` is kept only as a last-resort fallback when a logical id isn't present in the parsed CFN.
+- **Event source ARN resolution uses CFN `logicalId` instead of kebab-casing**: `Fn::GetAtt: [OrderProcessingQueue, Arn]` now looks up `OrderProcessingQueue` directly in a logical-id → resource map populated from the parsed template, then derives the real ARN from the resource's actual `QueueName` / `TableName` / `TopicName`. The previous kebab-case match (`order-processing-queue` vs `service-OrderProcessing`) silently failed whenever the user set an explicit `QueueName`/`TableName`, leaving SQS and DynamoDB stream consumers completely unwired.
+- **DynamoDB stream ARN is now fetched via `DescribeTable.LatestStreamArn`** (with up to 5 × 300ms retries while the stream provisions), rather than hand-crafting `arn:aws:dynamodb:...:table/X/stream/NEW_AND_OLD_IMAGES` — the real ARN has a timestamp suffix and the hand-crafted one was always rejected with `Stream not found`.
+- **`CreateEventSourceMappingCommand` now sets `StartingPosition: 'TRIM_HORIZON'` for stream sources** (any resolved ARN starting with `arn:aws:dynamodb:` or `arn:aws:kinesis:`). DynamoDB Streams and Kinesis require this field; SQS forbids it, so the flag is `undefined` for SQS mappings.
+- **CloudFormation parser detects DynamoDB streams via `StreamViewType`** (the field that actually lives in `AWS::DynamoDB::Table.StreamSpecification`) instead of the non-existent `StreamEnabled` boolean. Before, every parsed table came back with `streamEnabled: false`, which meant LSS created the table without streams even when CFN asked for them.
+- **S3 `PutBucketNotificationConfiguration` now passes `SkipDestinationValidation: true`**. LocalStack Pro implements the same synchronous test-invoke validation real S3 does, and was rejecting our config with `Unable to validate the following destination configurations` because the `lambda:InvokeFunction` permission for `s3.amazonaws.com` hadn't fully propagated by the time we wrote the notification. The flag tells S3 to trust the permission we just added rather than probing the destination. (Community LocalStack was lax about this; Pro isn't.)
+- **`ServerlessDeploymentBucket` is now skipped at parse time**. Serverless Framework injects this `AWS::S3::Bucket` for its own deployment artifacts; its name lives behind CloudFormation pseudo-parameters LSS doesn't resolve, so every registration was logging `Failed to provision s3:ServerlessDeploymentBucket: The specified bucket is not valid`. It isn't useful for local dev and is now filtered before provisioning ever runs.
+- **`provisionResources` rebuilds the logical-id map on each call**, so the fixes above don't leak resource lookups across services when the same `ResourceProvisioner` singleton is reused for multiple registrations.
+
+### Documentation
+- **`README.md`**: feature list now mentions S3, LocalStack `SERVICES` example updated to `dynamodb,sqs,sns,s3,lambda`, and the "CLI Implementation Details" section reflects the per-port PID/log paths.
+- **`docs/CONFIGURATION.md`**: default `services` array now includes `s3`, examples updated.
+- **`examples/sample-microservice/README.md`**: replaced the "PID file is global" warning with the new ports table; added an S3 section to the HTTP examples and the "Things to play with in the UI" tour.
+- **`examples/pro-sample-microservice/README.md`**: brand-new walkthrough — prerequisites, token setup, port table, run/reset commands, diff summary against the community example.
+- **Example configs** (`lss.config.json`, `lss.config.json.example`) now list `s3` in the default services array.
+
 ## [0.0.15] - 2026-05-21
 
 ### Added
