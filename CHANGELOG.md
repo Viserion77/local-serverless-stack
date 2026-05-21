@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-05-21
+
+### Added
+- **DynamoDB tables: search filter**: the DynamoDB tab now has a text input in the table-list header that filters rows by table name or owning service as you type, so finding a table no longer requires `Ctrl+F`. When a query matches nothing, an empty state shows the active query.
+
 ## [0.1.0] - 2026-05-21
 
 ### Added

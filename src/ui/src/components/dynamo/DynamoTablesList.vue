@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TBadge, TStack, TGrid, TStat, TEmptyState,
-  TSpinner, TAlert, TTag, TTable,
+  TSpinner, TAlert, TTag, TTable, TInput,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { DynamoTableSummary, SeedFileEntry } from '../../services/api';
@@ -30,6 +30,7 @@ const seeds = ref<SeedFileEntry[]>([]);
 const ownersByTable = ref<Record<string, string>>({});
 const loading = ref(true);
 const error = ref<string | null>(null);
+const search = ref('');
 let timer: number | null = null;
 
 const columns = [
@@ -84,6 +85,15 @@ const rows = computed<TableRow[]>(() => {
   }
 
   return merged.sort((a, b) => a.name.localeCompare(b.name));
+});
+
+const filteredRows = computed<TableRow[]>(() => {
+  const q = search.value.trim().toLowerCase();
+  if (!q) return rows.value;
+  return rows.value.filter(r =>
+    r.name.toLowerCase().includes(q) ||
+    (r.service || '').toLowerCase().includes(q),
+  );
 });
 
 const totals = computed(() => ({
@@ -153,11 +163,18 @@ onBeforeUnmount(() => {
 
     <TCard variant="outline">
       <template #header>
-        <TStack direction="horizontal" justify="space-between" align="center">
+        <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
           <strong>DynamoDB tables</strong>
-          <span class="muted" style="font-size: 0.75rem;">
-            Rows with reduced opacity exist only as a seed file
-          </span>
+          <TStack direction="horizontal" align="center" gap="1rem">
+            <TInput
+              v-model="search"
+              placeholder="Filter tables..."
+              style="min-width: 16rem;"
+            />
+            <span class="muted" style="font-size: 0.75rem;">
+              Rows with reduced opacity exist only as a seed file
+            </span>
+          </TStack>
         </TStack>
       </template>
 
@@ -171,10 +188,16 @@ onBeforeUnmount(() => {
         description="Register a microservice with DynamoDB resources or drop a seed file into the seeds directory."
       />
 
+      <TEmptyState
+        v-else-if="!filteredRows.length"
+        title="No matching tables"
+        :description="`No tables match &quot;${search}&quot;.`"
+      />
+
       <TTable
         v-else
         :columns="columns"
-        :rows="rows"
+        :rows="filteredRows"
         :row-class="(row: any) => row.exists ? '' : 'dim-row'"
       >
         <template #cell-name="{ row }">
