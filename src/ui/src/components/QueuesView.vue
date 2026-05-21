@@ -1,20 +1,19 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { RouterLink } from 'vue-router';
+import { RouterLink, useRouter } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TModal, TTag, TSpinner, TProgress, TDivider, TAlert, useToast,
+  TTag, TSpinner, TAlert,
 } from '@treeui/vue';
 import type { TreeBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
 import type { QueueSnapshot } from '../services/api';
 
-const toast = useToast();
+const router = useRouter();
 const queues = ref<QueueSnapshot[]>([]);
 const ownersByQueue = ref<Record<string, string>>({});
 const loading = ref(true);
 const error = ref<string | null>(null);
-const selectedQueueName = ref<string | null>(null);
 let refreshTimer: number | null = null;
 
 const columns = [
@@ -42,27 +41,6 @@ const totals = computed(() => ({
   processed: queues.value.reduce((s, q) => s + q.processed, 0),
 }));
 
-const selectedQueue = computed(() =>
-  selectedQueueName.value
-    ? queues.value.find(q => q.name === selectedQueueName.value) || null
-    : null,
-);
-
-const detailModalOpen = computed({
-  get: () => selectedQueueName.value !== null,
-  set: (value: boolean) => {
-    if (!value) selectedQueueName.value = null;
-  },
-});
-
-const selectedDepthRatio = computed(() => {
-  const q = selectedQueue.value;
-  if (!q) return 0;
-  const all = q.available + q.inFlight + q.processed;
-  if (!all) return 0;
-  return Math.round((q.processed / all) * 100);
-});
-
 async function loadQueues() {
   try {
     const [list, owners] = await Promise.all([
@@ -82,25 +60,7 @@ async function loadQueues() {
 }
 
 function openDetail(name: string) {
-  selectedQueueName.value = name;
-}
-
-async function resetProcessed(name: string) {
-  try {
-    await api.resetQueueProcessed(name);
-    toast.add({
-      title: 'Processed counter reset',
-      description: name,
-      variant: 'info',
-    });
-    await loadQueues();
-  } catch (err: any) {
-    toast.add({
-      title: 'Failed to reset counter',
-      description: err.message,
-      variant: 'danger',
-    });
-  }
+  router.push(`/queues/${encodeURIComponent(name)}`);
 }
 
 function activityTone(queue: QueueSnapshot): TreeBadgeTone {
@@ -115,19 +75,6 @@ function activityLabel(queue: QueueSnapshot): string {
   if (queue.inFlight > 0) return 'Processing';
   if (!queue.consumers.length) return 'No consumers';
   return 'Idle';
-}
-
-function formatSeconds(value?: number): string {
-  if (value === undefined) return '—';
-  if (value < 60) return `${value}s`;
-  if (value < 3600) return `${Math.round(value / 60)}m`;
-  if (value < 86400) return `${Math.round(value / 3600)}h`;
-  return `${Math.round(value / 86400)}d`;
-}
-
-function formatDate(ts?: number): string {
-  if (!ts) return '—';
-  return new Date(ts).toLocaleString();
 }
 
 onMounted(() => {
@@ -194,7 +141,13 @@ onBeforeUnmount(() => {
       <TTable v-else :columns="columns" :rows="rows">
         <template #cell-name="{ row }">
           <TStack direction="vertical" gap="0.125rem">
-            <strong>{{ row.name }}</strong>
+            <a
+              href="#"
+              style="text-decoration: none; font-weight: 600;"
+              @click.prevent="openDetail(String(row.name))"
+            >
+              {{ row.name }}
+            </a>
             <span class="muted mono" style="font-size: 0.75rem;">
               {{ String(row.arn || row.url || '') }}
             </span>
@@ -256,120 +209,11 @@ onBeforeUnmount(() => {
               {{ activityLabel(row as any) }}
             </TBadge>
             <TButton size="sm" variant="ghost" @click="openDetail(String(row.name))">
-              Details
+              Open
             </TButton>
           </TStack>
         </template>
       </TTable>
     </TCard>
-
-    <TModal
-      v-model:open="detailModalOpen"
-      size="lg"
-      :title="selectedQueue ? selectedQueue.name : 'Queue details'"
-      :description="selectedQueue?.arn || ''"
-    >
-      <TStack v-if="selectedQueue" direction="vertical" gap="1rem">
-        <TGrid :columns="3" gap="0.75rem">
-          <TStat
-            label="Available"
-            :value="selectedQueue.available"
-            tone="warning"
-          />
-          <TStat
-            label="In flight"
-            :value="selectedQueue.inFlight"
-            tone="info"
-          />
-          <TStat
-            label="Processed (this session)"
-            :value="selectedQueue.processed"
-            tone="success"
-          />
-        </TGrid>
-
-        <TStack direction="vertical" gap="0.25rem">
-          <TStack direction="horizontal" justify="space-between" align="center">
-            <span class="muted">Throughput share (processed)</span>
-            <span class="mono">{{ selectedDepthRatio }}%</span>
-          </TStack>
-          <TProgress :value="selectedDepthRatio" />
-        </TStack>
-
-        <TDivider />
-
-        <TStack direction="vertical" gap="0.5rem">
-          <strong>Consumers</strong>
-          <TStack
-            v-if="selectedQueue.consumers.length"
-            direction="vertical"
-            gap="0.5rem"
-          >
-            <TCard
-              v-for="c in selectedQueue.consumers"
-              :key="c.uuid || c.functionName"
-              variant="soft"
-            >
-              <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-                <TStack direction="vertical" gap="0.125rem">
-                  <span class="mono">{{ c.functionName }}</span>
-                  <span class="muted" style="font-size: 0.75rem;">
-                    UUID: {{ c.uuid || '—' }} · batch size {{ c.batchSize ?? '—' }}
-                  </span>
-                </TStack>
-                <TBadge :tone="c.enabled ? 'success' : 'neutral'" variant="soft">
-                  {{ c.state || (c.enabled ? 'Enabled' : 'Disabled') }}
-                </TBadge>
-              </TStack>
-            </TCard>
-          </TStack>
-          <TEmptyState
-            v-else
-            title="No consumers attached"
-            description="No Lambda event-source mapping currently points at this queue."
-          />
-        </TStack>
-
-        <TDivider />
-
-        <TStack direction="vertical" gap="0.25rem">
-          <strong>Attributes</strong>
-          <TStack direction="horizontal" gap="0.5rem" wrap>
-            <TTag size="sm" variant="soft">
-              FIFO: {{ selectedQueue.fifo ? 'yes' : 'no' }}
-            </TTag>
-            <TTag size="sm" variant="soft">
-              Visibility timeout: {{ formatSeconds(selectedQueue.visibilityTimeout) }}
-            </TTag>
-            <TTag size="sm" variant="soft">
-              Retention: {{ formatSeconds(selectedQueue.messageRetentionPeriod) }}
-            </TTag>
-            <TTag size="sm" variant="soft">
-              Delayed: {{ selectedQueue.delayed }}
-            </TTag>
-          </TStack>
-          <span class="muted" style="font-size: 0.75rem;">
-            Created {{ formatDate(selectedQueue.createdAt) }} · last polled
-            {{ formatDate(selectedQueue.lastPolledAt) }}
-          </span>
-        </TStack>
-      </TStack>
-
-      <template #footer>
-        <TStack direction="horizontal" gap="0.5rem" justify="flex-end">
-          <TButton
-            v-if="selectedQueue"
-            variant="ghost"
-            size="sm"
-            @click="resetProcessed(selectedQueue.name)"
-          >
-            Reset processed counter
-          </TButton>
-          <TButton variant="soft" size="sm" @click="detailModalOpen = false">
-            Close
-          </TButton>
-        </TStack>
-      </template>
-    </TModal>
   </TStack>
 </template>

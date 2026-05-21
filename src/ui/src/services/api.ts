@@ -52,6 +52,41 @@ export interface QueueSnapshot {
   lastPolledAt: number;
 }
 
+export interface SqsMessageAttributeInput {
+  name: string;
+  type?: 'String' | 'Number' | 'Binary';
+  value: string;
+}
+
+export interface SendQueueMessageInput {
+  body: string;
+  delaySeconds?: number;
+  messageAttributes?: SqsMessageAttributeInput[];
+  messageGroupId?: string;
+  messageDeduplicationId?: string;
+}
+
+export interface SendQueueMessageResult {
+  messageId?: string;
+  sequenceNumber?: string;
+  md5OfBody?: string;
+}
+
+export interface ReceiveQueueMessagesInput {
+  maxNumberOfMessages?: number;
+  visibilityTimeout?: number;
+  waitTimeSeconds?: number;
+}
+
+export interface SqsMessage {
+  messageId?: string;
+  receiptHandle?: string;
+  body?: string;
+  md5OfBody?: string;
+  attributes?: Record<string, string>;
+  messageAttributes?: Record<string, { type?: string; value?: string }>;
+}
+
 export interface DynamoKeyAttr {
   AttributeName?: string;
   KeyType?: string;
@@ -261,9 +296,28 @@ export const api = {
 
   // Queues
   listQueues: () => request<QueueSnapshot[]>('/api/queues'),
-  getQueue: (name: string) => request<QueueSnapshot>(`/api/queues/${name}`),
+  getQueue: (name: string) => request<QueueSnapshot>(`/api/queues/${encodeURIComponent(name)}`),
   resetQueueProcessed: (name: string) =>
-    request<{ success: boolean }>(`/api/queues/${name}/reset-processed`, {
+    request<{ success: boolean }>(`/api/queues/${encodeURIComponent(name)}/reset-processed`, {
+      method: 'POST',
+    }),
+  sendQueueMessage: (name: string, input: SendQueueMessageInput) =>
+    request<SendQueueMessageResult>(`/api/queues/${encodeURIComponent(name)}/messages`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  receiveQueueMessages: (name: string, input: ReceiveQueueMessagesInput) =>
+    request<{ messages: SqsMessage[] }>(
+      `/api/queues/${encodeURIComponent(name)}/messages/receive`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  deleteQueueMessage: (name: string, receiptHandle: string) =>
+    request<{ success: boolean }>(
+      `/api/queues/${encodeURIComponent(name)}/messages/delete`,
+      { method: 'POST', body: JSON.stringify({ receiptHandle }) },
+    ),
+  purgeQueue: (name: string) =>
+    request<{ success: boolean }>(`/api/queues/${encodeURIComponent(name)}/purge`, {
       method: 'POST',
     }),
 

@@ -27,6 +27,13 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Queues' },
   },
   {
+    path: '/queues/:name',
+    name: 'queue-detail',
+    component: () => import('./pages/QueueDetailPage.vue'),
+    props: route => ({ queueName: String(route.params.name) }),
+    meta: { title: 'Queue' },
+  },
+  {
     path: '/dynamo',
     name: 'dynamo',
     component: () => import('./pages/DynamoPage.vue'),

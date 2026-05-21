@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.0.15] - 2026-05-21
+
+### Added
+- **Queue detail page with AWS-style send/receive workflow**: clicking a queue in `/queues` now opens `/queues/:name` (lazy-loaded, follows the same routed-page + tabs pattern as the DynamoDB explorer) instead of the old read-only modal. The new page exposes three tabs:
+  - **Send & receive** — the headline upgrade. Send arbitrary messages (body, optional `DelaySeconds`, message attributes with `String`/`Number`/`Binary` types). For FIFO queues the form auto-switches to `MessageGroupId` + optional `MessageDeduplicationId` and hides the `DelaySeconds` field (FIFO rejects it). Poll the queue with configurable `MaxNumberOfMessages` (1–10), `VisibilityTimeout`, and `WaitTimeSeconds` (long polling, 0–20). Received messages appear in a table with body preview, message ID, `SentTimestamp`, attribute count, and expandable JSON pretty-print of the full body plus AWS-side attributes (sender, receive count, etc.) and message attributes. Each row supports **Copy body** to clipboard and **Delete** by `ReceiptHandle`. A **Purge queue** action lives under the poll panel, behind a `TConfirmDialog` (warns about the AWS 60s rate limit).
+  - **Consumers** — the existing Lambda event-source mapping list, promoted to a dedicated tab.
+  - **Attributes** — Identity (queue URL + ARN), Configuration (FIFO, visibility timeout, retention, delayed counter, created/last-polled timestamps), and a Throughput card with the processed-share progress bar and the **Reset processed counter** action that used to live in the modal footer.
+- **`POST /api/queues/:name/messages`**: send a message. Body is `{ body, delaySeconds?, messageAttributes?: [{ name, type, value }], messageGroupId?, messageDeduplicationId? }`. Validates `delaySeconds` is 0–900, ignores it for FIFO queues, and auto-injects `messageGroupId: 'default'` when the queue is FIFO and the field is omitted.
+- **`POST /api/queues/:name/messages/receive`**: poll. Body is `{ maxNumberOfMessages?, visibilityTimeout?, waitTimeSeconds? }` (clamped server-side to 1–10 and 0–20). Returns `{ messages: SqsMessage[] }` with `messageId`, `receiptHandle`, `body`, `md5OfBody`, AWS `attributes` (`SentTimestamp`, `ApproximateReceiveCount`, etc.) and `messageAttributes`.
+- **`POST /api/queues/:name/messages/delete`**: delete a single message by `receiptHandle`.
+- **`POST /api/queues/:name/purge`**: PurgeQueue passthrough.
+- API client helpers `sendQueueMessage`, `receiveQueueMessages`, `deleteQueueMessage`, `purgeQueue` in `src/ui/src/services/api.ts`, plus the supporting `SendQueueMessageInput` / `ReceiveQueueMessagesInput` / `SqsMessage` / `SqsMessageAttributeInput` types.
+
+### Changed
+- `QueueInspector` now keeps a per-region cache of `SQSClient` and `LambdaClient` instances (same pattern `DynamoExplorer` already uses). `listQueues`, `getQueue`, and the new send/receive/delete/purge methods all accept an optional `region` argument, and every `/api/queues/*` route forwards `?region=` through. Background metric polling still uses the default region.
+- `QueuesView.vue` row click and the trailing **Details** button now navigate to `/queues/:name` instead of opening the in-page modal. The modal, the local `selectedQueueName` state, and the modal-only "Reset processed counter" button were removed from the list view; the reset action lives on the new Attributes tab.
+
 ## [0.0.14] - 2026-05-20
 
 ### Added
