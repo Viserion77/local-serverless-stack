@@ -8,7 +8,7 @@ LSS provides a unified local development environment for serverless microservice
 
 ## Features
 
-- **Centralized LocalStack**: Single LocalStack instance manages DynamoDB, SQS, SNS, and Lambda
+- **Centralized LocalStack**: Single LocalStack instance manages DynamoDB, SQS, SNS, S3, and Lambda
 - **Auto-provisioning**: Parses CloudFormation templates from `sls package` and provisions resources automatically
 - **Event source mappings**: Automatically connects SQS queues to Lambda handlers via LocalStack
 - **Lambda proxies**: Generated proxy functions forward events to serverless-offline invoke endpoints
@@ -218,7 +218,7 @@ local-serverless-stack/
 ### LocalStack Settings
 
 LocalStack is configured with:
-- Services: `dynamodb,sqs,sns,lambda`
+- Services: `dynamodb,sqs,sns,s3,lambda`
 - Persistence: Enabled (volume: `lss-localstack-data`)
 - Lambda executor: `local` (no Docker-in-Docker required)
 - Docker socket: Mounted from host

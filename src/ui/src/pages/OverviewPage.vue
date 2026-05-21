@@ -12,10 +12,11 @@ import type {
 const health = ref<HealthInfo | null>(null);
 const config = ref<LssConfigSnapshot | null>(null);
 const services = ref<ServiceSummary[]>([]);
-const resources = ref<{ tables: string[]; queues: string[]; topics: string[] }>({
+const resources = ref<{ tables: string[]; queues: string[]; topics: string[]; buckets: string[] }>({
   tables: [],
   queues: [],
   topics: [],
+  buckets: [],
 });
 const loading = ref(true);
 let timer: number | null = null;
@@ -68,9 +69,9 @@ const coveredResources = [
   },
   {
     type: 'S3 Buckets',
-    description: 'Object storage browser',
-    status: 'planned' as const,
-    to: null,
+    description: 'Buckets, objects browser, upload/download, Lambda notifications',
+    status: 'covered' as const,
+    to: '/buckets',
   },
 ];
 
@@ -228,7 +229,7 @@ onBeforeUnmount(() => {
       </TGrid>
 
       <!-- Totalizers -->
-      <TGrid :columns="4" gap="1rem">
+      <TGrid :columns="5" gap="1rem">
         <TStat
           label="Services running"
           :value="`${runningServices} / ${totalServices}`"
@@ -248,6 +249,11 @@ onBeforeUnmount(() => {
           label="SNS topics"
           :value="resources.topics.length"
           tone="info"
+        />
+        <TStat
+          label="S3 buckets"
+          :value="resources.buckets.length"
+          tone="neutral"
         />
       </TGrid>
 

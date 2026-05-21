@@ -259,6 +259,13 @@ onBeforeUnmount(() => {
           >
             📣 {{ (row.resourceBreakdown as any).topics }}
           </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.buckets"
+            size="sm"
+            variant="soft"
+          >
+            🪣 {{ (row.resourceBreakdown as any).buckets }}
+          </TTag>
           <span
             v-if="!row.resourcesCount"
             class="muted"

@@ -56,6 +56,23 @@ export interface SNSResource {
   name: string;
 }
 
+export interface S3NotificationConfig {
+  // CloudFormation function reference (Fn::GetAtt logical id) or already-resolved name.
+  functionRef: string;
+  // S3 event types (e.g. "s3:ObjectCreated:*", "s3:ObjectRemoved:*").
+  events: string[];
+  // Optional prefix/suffix filters (only Key.FilterRules supported).
+  filterPrefix?: string;
+  filterSuffix?: string;
+}
+
+export interface S3Resource {
+  type: 's3';
+  name: string;
+  versioningEnabled?: boolean;
+  notifications: S3NotificationConfig[];
+}
+
 export interface EventSourceMapping {
   type: 'event-source';
   functionName: string;
@@ -64,7 +81,7 @@ export interface EventSourceMapping {
   enabled: boolean;
 }
 
-export type Resource = LambdaResource | DynamoDBResource | SQSResource | SNSResource | EventSourceMapping;
+export type Resource = LambdaResource | DynamoDBResource | SQSResource | SNSResource | S3Resource | EventSourceMapping;
 
 export class CloudFormationParser {
   parse(template: CloudFormationTemplate): Resource[] {
@@ -94,6 +111,8 @@ export class CloudFormationParser {
         return this.parseSQS(key, resource);
       case 'AWS::SNS::Topic':
         return this.parseSNS(key, resource);
+      case 'AWS::S3::Bucket':
+        return this.parseS3(key, resource);
       case 'AWS::Lambda::EventSourceMapping':
         return this.parseEventSource(key, resource);
       default:
@@ -145,6 +164,48 @@ export class CloudFormationParser {
     return {
       type: 'sns',
       name: (props.TopicName as string) || key,
+    };
+  }
+
+  private parseS3(key: string, resource: CloudFormationResource): S3Resource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    const versioning = props.VersioningConfiguration as { Status?: string } | undefined;
+    const notificationProp = props.NotificationConfiguration as
+      | { LambdaConfigurations?: unknown[] }
+      | undefined;
+
+    const notifications: S3NotificationConfig[] = [];
+    const lambdaConfigs = notificationProp?.LambdaConfigurations || [];
+    for (const raw of lambdaConfigs) {
+      const cfg = raw as Record<string, unknown>;
+      const functionRef = this.extractFunctionName(cfg.Function);
+      if (!functionRef) continue;
+
+      const eventField = cfg.Event ?? cfg.Events;
+      const events: string[] = Array.isArray(eventField)
+        ? (eventField as string[])
+        : eventField
+          ? [eventField as string]
+          : ['s3:ObjectCreated:*'];
+
+      const filter = cfg.Filter as { S3Key?: { Rules?: Array<{ Name?: string; Value?: string }> } } | undefined;
+      const rules = filter?.S3Key?.Rules || [];
+      let filterPrefix: string | undefined;
+      let filterSuffix: string | undefined;
+      for (const rule of rules) {
+        const name = (rule.Name || '').toLowerCase();
+        if (name === 'prefix') filterPrefix = rule.Value;
+        else if (name === 'suffix') filterSuffix = rule.Value;
+      }
+
+      notifications.push({ functionRef, events, filterPrefix, filterSuffix });
+    }
+
+    return {
+      type: 's3',
+      name: (props.BucketName as string) || key,
+      versioningEnabled: versioning?.Status === 'Enabled',
+      notifications,
     };
   }
 

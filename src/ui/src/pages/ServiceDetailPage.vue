@@ -27,7 +27,7 @@ const deleteDialogOpen = ref(false);
 
 const grouped = computed(() => {
   const byType: Record<string, ServiceResource[]> = {
-    lambda: [], dynamodb: [], sqs: [], sns: [], 'event-source': [],
+    lambda: [], dynamodb: [], sqs: [], sns: [], s3: [], 'event-source': [],
   };
   for (const r of service.value?.resources || []) {
     if (!byType[r.type]) byType[r.type] = [];
@@ -184,11 +184,12 @@ watch(() => props.serviceName, load);
     </div>
 
     <template v-else-if="service">
-      <TGrid :columns="4" gap="1rem">
+      <TGrid :columns="5" gap="1rem">
         <TStat label="Lambdas" :value="grouped.lambda?.length || 0" tone="info" />
         <TStat label="Tables" :value="grouped.dynamodb?.length || 0" tone="info" />
         <TStat label="Queues" :value="grouped.sqs?.length || 0" tone="warning" />
         <TStat label="Topics" :value="grouped.sns?.length || 0" tone="info" />
+        <TStat label="Buckets" :value="grouped.s3?.length || 0" tone="neutral" />
       </TGrid>
 
       <TCard variant="outline">
@@ -284,6 +285,23 @@ watch(() => props.serviceName, load);
               >
                 {{ r.name }}
               </TTag>
+            </TStack>
+          </TStack>
+
+          <TStack v-if="grouped.s3?.length" direction="vertical" gap="0.5rem">
+            <TStack direction="horizontal" gap="0.5rem" align="center">
+              <TBadge tone="neutral" variant="soft">S3 buckets</TBadge>
+              <span class="muted">{{ grouped.s3.length }}</span>
+            </TStack>
+            <TStack direction="horizontal" gap="0.375rem" wrap>
+              <RouterLink
+                v-for="r in grouped.s3"
+                :key="`b-${r.name}`"
+                :to="`/buckets/${encodeURIComponent(r.name)}`"
+                style="text-decoration: none;"
+              >
+                <TTag size="sm" variant="soft" clickable>{{ r.name }}</TTag>
+              </RouterLink>
             </TStack>
           </TStack>
 

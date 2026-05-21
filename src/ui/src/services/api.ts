@@ -225,10 +225,11 @@ export interface ResourceOwnersResponse {
   tables: ResourceOwner[];
   queues: ResourceOwner[];
   topics: ResourceOwner[];
+  buckets: ResourceOwner[];
 }
 
 export interface ServiceResource {
-  type: 'lambda' | 'dynamodb' | 'sqs' | 'sns' | 'event-source';
+  type: 'lambda' | 'dynamodb' | 'sqs' | 'sns' | 's3' | 'event-source';
   name: string;
 }
 
@@ -237,6 +238,41 @@ export interface ResourceBreakdown {
   tables: number;
   queues: number;
   topics: number;
+  buckets: number;
+}
+
+export interface BucketSnapshot {
+  name: string;
+  createdAt?: number;
+  objectCount?: number;
+  totalSize?: number;
+  versioning?: boolean;
+  notifications?: number;
+  region?: string;
+}
+
+export interface BucketObject {
+  key: string;
+  size: number;
+  lastModified?: number;
+  etag?: string;
+  storageClass?: string;
+}
+
+export interface ListBucketObjectsResult {
+  bucket: string;
+  prefix?: string;
+  objects: BucketObject[];
+  commonPrefixes: string[];
+  isTruncated: boolean;
+  nextContinuationToken?: string;
+}
+
+export interface PutBucketObjectInput {
+  key: string;
+  body: string;
+  contentType?: string;
+  encoding?: 'base64';
 }
 
 export interface ServiceSummary {
@@ -291,8 +327,46 @@ export const api = {
   getServiceLogs: (name: string) => request<any>(`/api/services/${name}/logs`),
 
   // Resources
-  listResources: () => request<{ tables: string[]; queues: string[]; topics: string[] }>('/api/resources'),
+  listResources: () =>
+    request<{ tables: string[]; queues: string[]; topics: string[]; buckets: string[] }>(
+      '/api/resources',
+    ),
   listResourceOwners: () => request<ResourceOwnersResponse>('/api/resources/owners'),
+
+  // S3 buckets
+  listBuckets: () => request<BucketSnapshot[]>('/api/buckets'),
+  getBucket: (name: string) => request<BucketSnapshot>(`/api/buckets/${encodeURIComponent(name)}`),
+  listBucketObjects: (
+    name: string,
+    options?: { prefix?: string; continuationToken?: string; maxKeys?: number; delimiter?: string },
+  ) => {
+    const params = new URLSearchParams();
+    if (options?.prefix) params.set('prefix', options.prefix);
+    if (options?.continuationToken) params.set('continuationToken', options.continuationToken);
+    if (options?.maxKeys !== undefined) params.set('maxKeys', String(options.maxKeys));
+    if (options?.delimiter) params.set('delimiter', options.delimiter);
+    const qs = params.toString();
+    return request<ListBucketObjectsResult>(
+      `/api/buckets/${encodeURIComponent(name)}/objects${qs ? `?${qs}` : ''}`,
+    );
+  },
+  bucketObjectContentUrl: (name: string, key: string, download = false) => {
+    const params = new URLSearchParams({ key });
+    if (download) params.set('download', '1');
+    const r = currentRegion.value;
+    if (r) params.set('region', r);
+    return `${API_BASE}/api/buckets/${encodeURIComponent(name)}/objects/content?${params.toString()}`;
+  },
+  putBucketObject: (name: string, input: PutBucketObjectInput) =>
+    request<{ success: boolean }>(`/api/buckets/${encodeURIComponent(name)}/objects`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  deleteBucketObject: (name: string, key: string) =>
+    request<{ success: boolean }>(
+      `/api/buckets/${encodeURIComponent(name)}/objects?key=${encodeURIComponent(key)}`,
+      { method: 'DELETE' },
+    ),
 
   // Queues
   listQueues: () => request<QueueSnapshot[]>('/api/queues'),

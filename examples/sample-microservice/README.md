@@ -8,10 +8,12 @@ End-to-end test rig for **Local Serverless Stack (LSS)**. Exercises every integr
   - `sample-microservice-Orders` — composite key (`userId` + `orderId`), a **GSI** on `status`, and a **DynamoDB Stream** (NEW_AND_OLD_IMAGES)
 - **SQS** — `sample-microservice-OrderProcessing` queue with a Lambda consumer (`processOrderQueue`)
 - **SNS** — `sample-microservice-OrderEvents` topic, published to from the stream consumer
+- **S3** — `sample-microservice-uploads` bucket with a notification on the `incoming/` prefix that fires the `onUpload` Lambda
 - **Lambda event sources**:
   - HTTP routes via `serverless-offline`
   - SQS → Lambda (provisioned in LocalStack, proxied back to `serverless-offline` by LSS)
   - DynamoDB Stream → Lambda (same proxying)
+  - S3 ObjectCreated → Lambda (bucket notification → Lambda proxy → `serverless-offline`)
 
 ## Prerequisites
 
@@ -66,9 +68,20 @@ curl http://localhost:3000/dev/users
 curl -X POST http://localhost:3000/dev/orders \
   -H 'Content-Type: application/json' \
   -d '{"userId":"u-alice","items":[{"sku":"BOOK-02","price":42,"qty":1}]}'
+
+# Upload to S3 → triggers the onUpload Lambda (object lands under "incoming/")
+# which reads the object back and indexes it into the Orders table.
+curl -X POST http://localhost:3000/dev/uploads \
+  -H 'Content-Type: application/json' \
+  -d '{"filename":"hello.txt","content":"hello from s3"}'
+
+# List objects in the bucket
+curl http://localhost:3000/dev/uploads
 ```
 
 After enqueueing an order: watch the **Queues** tab (queue depth ticks up then back to zero), then refresh the **DynamoDB** → **Orders** → **Items** view and you should see the new row.
+
+After uploading: refresh the **S3** tab — the bucket's object count ticks up, and on **Orders** in the DynamoDB explorer you'll find a row with `userId="s3-upload"` written by the `onUpload` trigger.
 
 ## Things to play with in the UI
 
@@ -82,6 +95,9 @@ After enqueueing an order: watch the **Queues** tab (queue depth ticks up then b
   - Click **Clear** on `sample-microservice-Users`, then **Apply** to re-seed.
 - **Queues tab**
   - Send several `/orders` requests in a row to build a small backlog before the consumer drains it.
+- **S3 tab**
+  - Open `sample-microservice-uploads`, use the **Upload object** card to put an object under `incoming/test.txt` directly from the UI. The `onUpload` Lambda will fire and you'll see a new row appear in **DynamoDB → Orders**.
+  - Try uploading under a different prefix (e.g. `other/foo.txt`) — the notification has a `prefix=incoming/` filter, so the Lambda should NOT fire for those.
 
 ## Reset
 
@@ -104,6 +120,9 @@ src/handlers/
   enqueueOrder.js              ← POST /orders → SQS
   processOrderQueue.js         ← SQS consumer → DynamoDB
   onOrderStream.js             ← DynamoDB stream consumer → SNS
+  uploadFile.js                ← POST /uploads → S3 (key under incoming/)
+  listUploads.js               ← GET  /uploads → list S3 objects
+  onUpload.js                  ← S3 ObjectCreated:* consumer → DynamoDB
 seeds/                         ← auto-applied when tables are created
 lss.config.json                ← LSS config local to this example
 ```

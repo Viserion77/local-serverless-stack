@@ -30,7 +30,7 @@ Both files should contain valid JSON with the following optional properties:
   "enableDynamoProxy": false,
   "dynamoProxyPort": 8000,
   "region": "us-east-1",
-  "services": ["dynamodb", "sqs", "sns", "lambda"],
+  "services": ["dynamodb", "sqs", "sns", "s3", "lambda"],
   "persistence": true,
   "debug": false,
   "autoPackage": false,
@@ -88,9 +88,9 @@ Both files should contain valid JSON with the following optional properties:
   - AWS region for LocalStack
   - Example: `"us-east-1"`
 
-- **services** (array, default: ["dynamodb", "sqs", "sns", "lambda"])
+- **services** (array, default: ["dynamodb", "sqs", "sns", "s3", "lambda"])
   - AWS services to enable in LocalStack
-  - Example: `["dynamodb", "sqs", "sns", "lambda", "s3"]`
+  - Example: `["dynamodb", "sqs", "sns", "lambda", "s3", "secretsmanager"]`
 
 - **persistence** (boolean, default: true)
   - Whether to persist LocalStack data between restarts

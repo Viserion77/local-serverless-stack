@@ -164,6 +164,7 @@ router.get('/', async (_req: Request, res: Response) => {
           tables: resources.filter(r => r.type === 'dynamodb').length,
           queues: resources.filter(r => r.type === 'sqs').length,
           topics: resources.filter(r => r.type === 'sns').length,
+          buckets: resources.filter(r => r.type === 's3').length,
         };
         return { ...s, resourcesCount: resources.length, resourceBreakdown };
       }),

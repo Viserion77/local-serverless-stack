@@ -8,7 +8,7 @@
   "enableDynamoProxy": false,
   "dynamoProxyPort": 8001,
   "region": "us-east-1",
-  "services": ["dynamodb", "sqs", "sns", "lambda"],
+  "services": ["dynamodb", "sqs", "sns", "s3", "lambda"],
   "persistence": true,
   "debug": true
 }

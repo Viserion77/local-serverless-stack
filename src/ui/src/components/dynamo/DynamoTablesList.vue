@@ -98,7 +98,7 @@ async function load() {
     const [tablesRes, seedsRes, owners] = await Promise.all([
       api.listDynamoTables(),
       api.listSeeds().catch(() => ({ seedsDir: '', entries: [] })),
-      api.listResourceOwners().catch(() => ({ tables: [], queues: [], topics: [] })),
+      api.listResourceOwners().catch(() => ({ tables: [], queues: [], topics: [], buckets: [] })),
     ]);
     tables.value = tablesRes.tables;
     seeds.value = seedsRes.entries;

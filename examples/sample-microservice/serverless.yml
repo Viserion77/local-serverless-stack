@@ -12,6 +12,7 @@ provider:
     ORDERS_TABLE: ${self:service}-Orders
     ORDER_QUEUE_URL: http://localhost:4566/000000000000/${self:service}-OrderProcessing
     ORDER_EVENTS_TOPIC_ARN: arn:aws:sns:us-east-1:000000000000:${self:service}-OrderEvents
+    UPLOADS_BUCKET: sample-microservice-uploads
     AWS_ENDPOINT: http://localhost:4566
 
 plugins:
@@ -75,6 +76,25 @@ functions:
               - OrdersTable
               - StreamArn
           batchSize: 10
+
+  uploadFile:
+    handler: src/handlers/uploadFile.handler
+    events:
+      - http:
+          path: /uploads
+          method: post
+
+  listUploads:
+    handler: src/handlers/listUploads.handler
+    events:
+      - http:
+          path: /uploads
+          method: get
+
+  # Triggered when an object is created in the uploads bucket.
+  # The bucket notification is wired via NotificationConfiguration below.
+  onUpload:
+    handler: src/handlers/onUpload.handler
 
 resources:
   Resources:
@@ -145,6 +165,25 @@ resources:
       Type: AWS::SNS::Topic
       Properties:
         TopicName: ${self:service}-OrderEvents
+
+    # S3 bucket with a notification that fires the onUpload Lambda whenever a
+    # new object is created under the "incoming/" prefix.
+    UploadsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: sample-microservice-uploads
+        NotificationConfiguration:
+          LambdaConfigurations:
+            - Event: s3:ObjectCreated:*
+              Function:
+                Fn::GetAtt:
+                  - OnUploadLambdaFunction
+                  - Arn
+              Filter:
+                S3Key:
+                  Rules:
+                    - Name: prefix
+                      Value: incoming/
 
 package:
   individually: false

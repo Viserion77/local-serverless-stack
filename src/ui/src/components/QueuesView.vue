@@ -45,7 +45,7 @@ async function loadQueues() {
   try {
     const [list, owners] = await Promise.all([
       api.listQueues(),
-      api.listResourceOwners().catch(() => ({ tables: [], queues: [], topics: [] })),
+      api.listResourceOwners().catch(() => ({ tables: [], queues: [], topics: [], buckets: [] })),
     ]);
     queues.value = list;
     const map: Record<string, string> = {};

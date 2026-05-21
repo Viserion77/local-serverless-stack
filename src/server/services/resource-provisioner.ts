@@ -1,7 +1,17 @@
 import { DynamoDBClient, CreateTableCommand, ListTablesCommand, DeleteTableCommand } from '@aws-sdk/client-dynamodb';
 import { SQSClient, CreateQueueCommand, ListQueuesCommand, GetQueueAttributesCommand, DeleteQueueCommand, GetQueueUrlCommand } from '@aws-sdk/client-sqs';
 import { SNSClient, CreateTopicCommand, ListTopicsCommand, DeleteTopicCommand } from '@aws-sdk/client-sns';
-import { LambdaClient, CreateFunctionCommand, GetFunctionCommand, DeleteFunctionCommand } from '@aws-sdk/client-lambda';
+import {
+  S3Client,
+  CreateBucketCommand,
+  ListBucketsCommand,
+  DeleteBucketCommand,
+  PutBucketVersioningCommand,
+  PutBucketNotificationConfigurationCommand,
+  ListObjectsV2Command,
+  DeleteObjectCommand,
+} from '@aws-sdk/client-s3';
+import { LambdaClient, CreateFunctionCommand, GetFunctionCommand, DeleteFunctionCommand, AddPermissionCommand } from '@aws-sdk/client-lambda';
 import { CreateEventSourceMappingCommand, ListEventSourceMappingsCommand, DeleteEventSourceMappingCommand } from '@aws-sdk/client-lambda';
 import { LocalStackManager } from './localstack-manager.js';
 import { SeedManager } from './seed-manager.js';
@@ -10,6 +20,7 @@ import type {
   DynamoDBResource,
   SQSResource,
   SNSResource,
+  S3Resource,
   EventSourceMapping,
 } from './cloudformation-parser.js';
 import AdmZip from 'adm-zip';
@@ -19,6 +30,7 @@ export class ResourceProvisioner {
   private dynamoClient!: DynamoDBClient;
   private sqsClient!: SQSClient;
   private snsClient!: SNSClient;
+  private s3Client!: S3Client;
   private lambdaClient!: LambdaClient;
   private currentRegion: string = 'us-east-1';
 
@@ -42,7 +54,18 @@ export class ResourceProvisioner {
     this.dynamoClient = new DynamoDBClient(config);
     this.sqsClient = new SQSClient(config);
     this.snsClient = new SNSClient(config);
+    // forcePathStyle is required so LocalStack receives bucket name in the URL path
+    // rather than as a virtual-host subdomain (which resolves to host.docker.internal).
+    this.s3Client = new S3Client({ ...config, forcePathStyle: true });
     this.lambdaClient = new LambdaClient(config);
+  }
+
+  getS3Client(): S3Client {
+    return this.s3Client;
+  }
+
+  getCurrentRegion(): string {
+    return this.currentRegion;
   }
 
   async provisionResources(
@@ -62,7 +85,7 @@ export class ResourceProvisioner {
 
     let provisionedCount = 0;
 
-    // First pass: Create infrastructure resources (DynamoDB, SQS, SNS)
+    // First pass: Create infrastructure resources (DynamoDB, SQS, SNS, S3)
     // Lambda functions are handled by Serverless Offline, not LocalStack
     for (const resource of resources) {
       try {
@@ -77,6 +100,10 @@ export class ResourceProvisioner {
             break;
           case 'sns':
             await this.createSNSTopic(resource);
+            provisionedCount++;
+            break;
+          case 's3':
+            await this.createS3Bucket(resource);
             provisionedCount++;
             break;
         }
@@ -100,6 +127,20 @@ export class ResourceProvisioner {
         if (!errorMessage.includes('already exists') && errorName !== 'ResourceConflictException') {
           console.error(`Failed to provision event-source for ${eventSource.functionName}:`, errorMessage);
         }
+      }
+    }
+
+    // Third pass: Wire S3 bucket notifications to Lambda proxies.
+    // Done after event-source pass so proxies created there are available; the
+    // wiring also creates a proxy on demand when only S3 (no SQS/Dynamo) triggers it.
+    const s3Resources = resources.filter(r => r.type === 's3') as S3Resource[];
+    for (const bucket of s3Resources) {
+      if (!bucket.notifications || bucket.notifications.length === 0) continue;
+      try {
+        await this.configureS3Notifications(serviceName, bucket, invokeUrl);
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`Failed to configure S3 notifications for ${bucket.name}:`, errorMessage);
       }
     }
 
@@ -215,7 +256,103 @@ export class ResourceProvisioner {
     }
   }
 
-  private generateProxyLambdaCode(functionName: string, invokeUrl: string): string {
+  private async createS3Bucket(resource: S3Resource): Promise<void> {
+    try {
+      await this.s3Client.send(new CreateBucketCommand({ Bucket: resource.name }));
+      console.log(`  ✓ Created S3 bucket: ${resource.name}`);
+    } catch (error: any) {
+      const name = error?.name || '';
+      if (name === 'BucketAlreadyOwnedByYou' || name === 'BucketAlreadyExists') {
+        console.log(`  ⚠ S3 bucket already exists: ${resource.name}`);
+      } else {
+        throw error;
+      }
+    }
+
+    if (resource.versioningEnabled) {
+      try {
+        await this.s3Client.send(
+          new PutBucketVersioningCommand({
+            Bucket: resource.name,
+            VersioningConfiguration: { Status: 'Enabled' },
+          }),
+        );
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : 'Unknown error';
+        console.warn(`  ⚠ Failed to enable versioning on ${resource.name}: ${msg}`);
+      }
+    }
+  }
+
+  private async configureS3Notifications(
+    serviceName: string,
+    bucket: S3Resource,
+    invokeUrl?: string,
+  ): Promise<void> {
+    const lambdaConfigurations = [];
+
+    for (const notif of bucket.notifications) {
+      const actualFunctionName = this.resolveLambdaFunctionName(serviceName, notif.functionRef);
+      const invokeName = this.shortFunctionName(notif.functionRef);
+      await this.ensureLambdaProxyExists(serviceName, actualFunctionName, invokeName, invokeUrl);
+
+      // Allow S3 to invoke the Lambda. LocalStack enforces this when the bucket fires.
+      try {
+        await this.lambdaClient.send(
+          new AddPermissionCommand({
+            FunctionName: actualFunctionName,
+            StatementId: `s3-invoke-${bucket.name}`,
+            Action: 'lambda:InvokeFunction',
+            Principal: 's3.amazonaws.com',
+            SourceArn: `arn:aws:s3:::${bucket.name}`,
+          }),
+        );
+      } catch (error: any) {
+        // ResourceConflictException = statement already exists, which is fine.
+        if (error?.name !== 'ResourceConflictException') {
+          console.warn(`  ⚠ Could not add S3 invoke permission for ${actualFunctionName}: ${error?.message || error}`);
+        }
+      }
+
+      const lambdaArn = `arn:aws:lambda:${this.currentRegion}:000000000000:function:${actualFunctionName}`;
+      const filterRules: Array<{ Name: 'prefix' | 'suffix'; Value: string }> = [];
+      if (notif.filterPrefix) filterRules.push({ Name: 'prefix', Value: notif.filterPrefix });
+      if (notif.filterSuffix) filterRules.push({ Name: 'suffix', Value: notif.filterSuffix });
+
+      lambdaConfigurations.push({
+        LambdaFunctionArn: lambdaArn,
+        Events: notif.events as any,
+        Filter: filterRules.length
+          ? { Key: { FilterRules: filterRules } }
+          : undefined,
+      });
+    }
+
+    if (lambdaConfigurations.length === 0) return;
+
+    await this.s3Client.send(
+      new PutBucketNotificationConfigurationCommand({
+        Bucket: bucket.name,
+        NotificationConfiguration: { LambdaFunctionConfigurations: lambdaConfigurations as any },
+      }),
+    );
+    console.log(`  ✓ Wired ${lambdaConfigurations.length} S3 notification(s) on bucket: ${bucket.name}`);
+  }
+
+  // Strips Serverless's "LambdaFunction" CFN suffix and lowercases the first char.
+  // This is the short name that serverless-offline registers at /2015-03-31/functions/{name}/invocations.
+  private shortFunctionName(cfnName: string): string {
+    let funcName = cfnName;
+    if (funcName.endsWith('LambdaFunction')) {
+      funcName = funcName.slice(0, -14);
+    }
+    return funcName.charAt(0).toLowerCase() + funcName.slice(1);
+  }
+
+  // `proxyName` is the function name registered in LocalStack (the trigger target).
+  // `invokeName` is the function key serverless-offline exposes — must be the short
+  // form (without service/stage prefix) because that's what offline routes on.
+  private generateProxyLambdaCode(_proxyName: string, invokeName: string, invokeUrl: string): string {
     return `
 export const handler = async (event, context) => {
   const http = await import('http');
@@ -243,7 +380,7 @@ export const handler = async (event, context) => {
     const options = {
       hostname: parsedUrl.hostname,
       port: parsedUrl.port,
-      path: '/2015-03-31/functions/${functionName}/invocations',
+      path: '/2015-03-31/functions/${invokeName}/invocations',
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -288,12 +425,13 @@ export const handler = async (event, context) => {
       // Convert CloudFormation function name to Serverless naming convention
       // CloudFormation: ConsumerAppsQueueLambdaFunction -> Serverless: payment-reminder-api-consumerAppsQueue
       const actualFunctionName = this.resolveLambdaFunctionName(serviceName, mapping.functionName);
+      const invokeName = this.shortFunctionName(mapping.functionName);
 
       // Resolve queue ARN from queue name
       const eventSourceArn = await this.resolveEventSourceArn(mapping.eventSourceArn);
 
       // Create Lambda proxy function if it doesn't exist
-      await this.ensureLambdaProxyExists(serviceName, actualFunctionName, invokeUrl);
+      await this.ensureLambdaProxyExists(serviceName, actualFunctionName, invokeName, invokeUrl);
 
       // Check if mapping already exists
       const existingMappings = await this.lambdaClient.send(
@@ -325,12 +463,17 @@ export const handler = async (event, context) => {
     }
   }
 
-  private async ensureLambdaProxyExists(serviceName: string, functionName: string, invokeUrl?: string): Promise<void> {
+  private async ensureLambdaProxyExists(
+    serviceName: string,
+    proxyName: string,
+    invokeName: string,
+    invokeUrl?: string,
+  ): Promise<void> {
     try {
       // Check if function already exists
       await this.lambdaClient.send(
         new GetFunctionCommand({
-          FunctionName: functionName,
+          FunctionName: proxyName,
         }),
       );
       // Function exists, no need to create
@@ -342,17 +485,17 @@ export const handler = async (event, context) => {
     }
 
     if (!invokeUrl) {
-      throw new Error(`Cannot create Lambda proxy for ${functionName}: no invoke URL configured for ${serviceName}`);
+      throw new Error(`Cannot create Lambda proxy for ${proxyName}: no invoke URL configured for ${serviceName}`);
     }
 
-    const proxyCode = this.generateProxyLambdaCode(functionName, invokeUrl);
+    const proxyCode = this.generateProxyLambdaCode(proxyName, invokeName, invokeUrl);
     const zip = new AdmZip();
     zip.addFile('index.mjs', Buffer.from(proxyCode, 'utf-8'));
     const zipBuffer = zip.toBuffer();
 
     await this.lambdaClient.send(
       new CreateFunctionCommand({
-        FunctionName: functionName,
+        FunctionName: proxyName,
         Runtime: 'nodejs20.x',
         Role: 'arn:aws:iam::000000000000:role/lambda-role',
         Handler: 'index.handler',
@@ -362,14 +505,14 @@ export const handler = async (event, context) => {
         Environment: {
           Variables: {
             INVOKE_URL: invokeUrl,
-            FUNCTION_NAME: functionName,
+            FUNCTION_NAME: invokeName,
           },
         },
         MemorySize: 256,
         Timeout: 60,
       }),
     );
-    console.log(`  ✓ Created Lambda proxy: ${functionName} -> ${invokeUrl}`);
+    console.log(`  ✓ Created Lambda proxy: ${proxyName} -> ${invokeUrl}/2015-03-31/functions/${invokeName}/invocations`);
   }
 
   private resolveLambdaFunctionName(serviceName: string, cfnName: string): string {
@@ -472,20 +615,25 @@ export const handler = async (event, context) => {
     tables: string[];
     queues: string[];
     topics: string[];
+    buckets: string[];
   }> {
     const baseConfig = LocalStackManager.getInstance().getConfig();
     const config = region ? { ...baseConfig, region } : { ...baseConfig, region: this.currentRegion };
     const dynamo = region && region !== this.currentRegion ? new DynamoDBClient(config) : this.dynamoClient;
     const sqs = region && region !== this.currentRegion ? new SQSClient(config) : this.sqsClient;
     const sns = region && region !== this.currentRegion ? new SNSClient(config) : this.snsClient;
+    const s3 = region && region !== this.currentRegion
+      ? new S3Client({ ...config, forcePathStyle: true })
+      : this.s3Client;
 
-    const [tables, queues, topics] = await Promise.all([
+    const [tables, queues, topics, buckets] = await Promise.all([
       this.listDynamoDBTables(dynamo),
       this.listSQSQueues(sqs),
       this.listSNSTopics(sns),
+      this.listS3Buckets(s3),
     ]);
 
-    return { tables, queues, topics };
+    return { tables, queues, topics, buckets };
   }
 
   private async listDynamoDBTables(client: DynamoDBClient = this.dynamoClient): Promise<string[]> {
@@ -518,6 +666,15 @@ export const handler = async (event, context) => {
     }
   }
 
+  private async listS3Buckets(client: S3Client = this.s3Client): Promise<string[]> {
+    try {
+      const response = await client.send(new ListBucketsCommand({}));
+      return response.Buckets?.map(b => b.Name || '').filter(n => n !== '') || [];
+    } catch {
+      return [];
+    }
+  }
+
   async cleanupResources(serviceName: string, resources: Resource[]): Promise<void> {
     if (!resources || resources.length === 0) {
       console.log(`No resources to clean up for ${serviceName}`);
@@ -538,6 +695,10 @@ export const handler = async (event, context) => {
             break;
           case 'sns':
             await this.deleteSNSTopic(resource.name);
+            cleaned++;
+            break;
+          case 's3':
+            await this.deleteS3Bucket(resource.name);
             cleaned++;
             break;
           case 'event-source':
@@ -579,6 +740,28 @@ export const handler = async (event, context) => {
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       if (!errorMessage.includes('NonExistentQueue')) {
+        throw error;
+      }
+    }
+  }
+
+  private async deleteS3Bucket(bucketName: string): Promise<void> {
+    try {
+      // S3 buckets must be empty before deletion. Best-effort: drain a single page
+      // of objects (this is cleanup for dev environments, not production data).
+      const objects = await this.s3Client.send(
+        new ListObjectsV2Command({ Bucket: bucketName }),
+      );
+      for (const obj of objects.Contents || []) {
+        if (obj.Key) {
+          await this.s3Client.send(new DeleteObjectCommand({ Bucket: bucketName, Key: obj.Key }));
+        }
+      }
+      await this.s3Client.send(new DeleteBucketCommand({ Bucket: bucketName }));
+      console.log(`Deleted S3 bucket: ${bucketName}`);
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      if (!errorMessage.includes('NoSuchBucket')) {
         throw error;
       }
     }

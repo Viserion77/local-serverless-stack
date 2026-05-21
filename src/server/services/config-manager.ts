@@ -248,7 +248,7 @@ export class ConfigManager {
   }
 
   getServices(): string[] {
-    return this.config.services ?? ['dynamodb', 'sqs', 'sns', 'lambda'];
+    return this.config.services ?? ['dynamodb', 'sqs', 'sns', 's3', 'lambda'];
   }
 
   isPersistence(): boolean {

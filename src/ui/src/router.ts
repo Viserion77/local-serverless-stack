@@ -34,6 +34,19 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Queue' },
   },
   {
+    path: '/buckets',
+    name: 'buckets',
+    component: () => import('./pages/BucketsPage.vue'),
+    meta: { title: 'S3 Buckets' },
+  },
+  {
+    path: '/buckets/:name',
+    name: 'bucket-detail',
+    component: () => import('./pages/BucketDetailPage.vue'),
+    props: route => ({ bucketName: String(route.params.name) }),
+    meta: { title: 'S3 Bucket' },
+  },
+  {
     path: '/dynamo',
     name: 'dynamo',
     component: () => import('./pages/DynamoPage.vue'),
