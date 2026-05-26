@@ -328,7 +328,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Requires Docker for LocalStack
 - Tested on Linux (Ubuntu/Debian)
 - Node.js >= 18 required
-- Serverless Framework >= 3.0 required
+- Serverless Framework 3.40.0 required
 
 ### Breaking Changes
 None (initial release)

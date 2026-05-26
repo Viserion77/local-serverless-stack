@@ -16,7 +16,7 @@ provider:
     AWS_ENDPOINT: http://localhost:4570
 
 plugins:
-  - lss-serverless-plugin
+  - serverless-lss
   - serverless-offline
 
 custom:

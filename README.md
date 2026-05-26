@@ -50,7 +50,7 @@ local-serverless-stack/
 
 - Node.js >= 18
 - Docker (for LocalStack)
-- Serverless Framework >= 3.0
+- Serverless Framework 3.40.0
 
 ### Installation
 
@@ -74,7 +74,7 @@ The `npm link` command makes the `lss` CLI available globally via `npx`.
 To automatically register your microservices with LSS, install the Serverless plugin:
 
 ```bash
-npm install --save-dev lss-serverless-plugin
+npm install --save-dev serverless-lss
 ```
 
 See the [plugin documentation](packages/serverless-plugin/README.md) for configuration details.
@@ -146,7 +146,7 @@ npm link local-serverless-stack
 In each microservice directory:
 
 ```bash
-npm link lss-serverless-plugin
+npm link serverless-lss
 ```
 
 ### 3. Configure serverless.yml
@@ -159,7 +159,7 @@ plugins:
   - serverless-esbuild
   - serverless-offline
   - serverless-localstack
-  - lss-serverless-plugin  # Add this line
+  - serverless-lss  # Add this line
 
 custom:
   orchestrator:

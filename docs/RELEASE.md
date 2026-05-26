@@ -9,7 +9,7 @@ LSS uses GitHub Actions to automatically publish packages to NPM when version nu
 ## Current Versions
 
 - **Root Package** (`local-serverless-stack`): `0.0.1`
-- **Plugin** (`lss-serverless-plugin`): `0.0.1`
+- **Plugin** (`serverless-lss`): `0.0.1`
 - **Orchestrator** (`lss-orchestrator`): `0.0.1` (private, not published)
 
 ## Quick Release
@@ -146,7 +146,7 @@ Monitor releases at:
 ## Package Scopes
 
 - **Root package**: `local-serverless-stack` (unscoped)
-- **Plugin**: `lss-serverless-plugin` (unscoped)
+- **Plugin**: `serverless-lss` (unscoped)
 
 Both use `--access public` flag for publishing.
 

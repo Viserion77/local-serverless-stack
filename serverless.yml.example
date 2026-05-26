@@ -18,7 +18,7 @@ functions:
           method: get
 
 plugins:
-  - lss-serverless-plugin
+  - serverless-lss
   - serverless-offline
 
 custom:

@@ -1,13 +1,13 @@
 # Serverless Orchestrator Plugin
 
-[![npm version](https://img.shields.io/npm/v/lss-serverless-plugin.svg)](https://www.npmjs.com/package/lss-serverless-plugin)
+[![npm version](https://img.shields.io/npm/v/serverless-lss.svg)](https://www.npmjs.com/package/serverless-lss)
 
 Automatically register your Serverless microservices with the Local Serverless Stack Local Orchestrator.
 
 ## Installation
 
 ```bash
-npm install --save-dev lss-serverless-plugin
+npm install --save-dev serverless-lss
 ```
 
 ## Usage
@@ -16,7 +16,7 @@ Add the plugin to your `serverless.yml`:
 
 ```yaml
 plugins:
-  - lss-serverless-plugin
+  - serverless-lss
 
 custom:
   orchestrator:
@@ -41,7 +41,7 @@ After running `sls package` or `sls deploy`:
 
 ```yaml
 plugins:
-  - lss-serverless-plugin
+  - serverless-lss
 
 custom:
   orchestrator:

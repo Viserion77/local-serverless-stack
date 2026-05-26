@@ -120,7 +120,7 @@ The Serverless Plugin needs to know where to find the LSS server. Configure it i
 
 ```yaml
 plugins:
-  - lss-serverless-plugin
+  - serverless-lss
 
 custom:
   orchestrator:

@@ -23,8 +23,8 @@
   },
   "devDependencies": {
     "dotenv-cli": "^7.4.4",
-    "lss-serverless-plugin": "file:../../packages/serverless-plugin",
-    "serverless": "^3.39.0",
+    "serverless-lss": "file:../../packages/serverless-plugin",
+    "serverless": "3.40.0",
     "serverless-offline": "^13.6.0"
   }
 }
