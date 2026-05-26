@@ -22,10 +22,15 @@ function getRegion(req: Request): string | undefined {
 
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const entries = await seeds.list(getRegion(req));
+    const region = getRegion(req);
+    const [entries, liveTables] = await Promise.all([
+      seeds.list(region),
+      seeds.listLiveTables(region),
+    ]);
     res.json({
       seedsDir: ConfigManager.getInstance().getSeedsDir(),
       entries,
+      liveTables,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : 'Failed to list seeds';

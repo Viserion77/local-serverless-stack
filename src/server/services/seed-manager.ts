@@ -70,6 +70,46 @@ export class SeedManager {
     return client;
   }
 
+  // Defensive guard against destructive ops ever hitting a non-local endpoint.
+  // Architecture already pins us to LocalStack, but `clearTable`/`clearAllSeeded`
+  // are explicit deletes — verify the endpoint hostname every time and refuse
+  // anything that isn't loopback/local before issuing a DeleteRequest.
+  private assertLocalEndpoint(): void {
+    const endpoint = LocalStackManager.getInstance().getEndpoint();
+    let hostname: string;
+    try {
+      hostname = new URL(endpoint).hostname.toLowerCase();
+      // URL.hostname wraps IPv6 in brackets (e.g. "[::1]"). Normalize them out
+      // so the allowlist matches "::1" directly.
+      if (hostname.startsWith('[') && hostname.endsWith(']')) {
+        hostname = hostname.slice(1, -1);
+      }
+    } catch {
+      throw new Error(
+        `Refusing destructive operation: invalid LocalStack endpoint "${endpoint}".`,
+      );
+    }
+    const allowed = new Set([
+      'localhost',
+      '127.0.0.1',
+      '::1',
+      '0.0.0.0',
+      'host.docker.internal',
+      'localstack',
+      'lss-localstack',
+    ]);
+    const isAllowed =
+      allowed.has(hostname) ||
+      hostname.endsWith('.localhost') ||
+      hostname.startsWith('lss-localstack-');
+    if (!isAllowed) {
+      throw new Error(
+        `Refusing destructive operation: endpoint "${endpoint}" is not a recognized local LocalStack host. ` +
+          `seed:clear may ONLY run against LocalStack — never against AWS.`,
+      );
+    }
+  }
+
   private getSeedsDir(): string {
     return ConfigManager.getInstance().getSeedsDir();
   }
@@ -96,6 +136,10 @@ export class SeedManager {
 
   hasSeedFile(tableName: string): boolean {
     return fs.existsSync(this.seedFilePath(tableName));
+  }
+
+  async listLiveTables(region?: string): Promise<string[]> {
+    return this.listTables(region);
   }
 
   async list(region?: string): Promise<SeedFileEntry[]> {
@@ -182,6 +226,7 @@ export class SeedManager {
   }
 
   async clearTable(tableName: string, region?: string): Promise<ClearResult> {
+    this.assertLocalEndpoint();
     const keyAttrs = await this.getTableKeyAttributes(tableName, region);
     if (!keyAttrs) {
       return { tableName, deleted: 0, skipped: true, reason: 'table not found' };
@@ -224,6 +269,7 @@ export class SeedManager {
   }
 
   async clearAllSeeded(region?: string): Promise<ClearResult[]> {
+    this.assertLocalEndpoint();
     const entries = await this.list(region);
     const results: ClearResult[] = [];
     for (const entry of entries) {

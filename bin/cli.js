@@ -263,6 +263,30 @@ function getServerPort() {
   return cfg.serverPort;
 }
 
+// Produce a usable error string for the user. Errors from the http stack
+// occasionally carry an empty `.message` (e.g. socket resets during the
+// orchestrator startup window) — fall back through every signal we have so
+// `formatError` is guaranteed not to return an empty string.
+function formatError(e) {
+  if (!e) return 'erro desconhecido (sem detalhes)';
+  if (typeof e === 'string') return e.trim() || 'erro desconhecido (sem detalhes)';
+  if (e.message && String(e.message).trim()) return String(e.message).trim();
+  if (e.code) return `erro de I/O (${e.code})`;
+  if (e.name) return e.name;
+  const s = String(e);
+  return s && s !== '[object Object]' ? s : 'erro desconhecido (sem detalhes)';
+}
+
+function buildHttpError(res, data) {
+  let parsed;
+  try { parsed = data ? JSON.parse(data) : {}; } catch { parsed = null; }
+  const fromBody = parsed && (parsed.error || parsed.message);
+  if (fromBody && String(fromBody).trim()) return new Error(String(fromBody).trim());
+  const snippet = data && data.length < 300 ? data.trim() : '';
+  const statusText = res.statusMessage ? `${res.statusCode} ${res.statusMessage}` : `${res.statusCode}`;
+  return new Error(snippet ? `HTTP ${statusText}: ${snippet}` : `HTTP ${statusText} (sem corpo de erro)`);
+}
+
 function postJson(path, body) {
   return new Promise((resolve, reject) => {
     const http = require('http');
@@ -282,17 +306,17 @@ function postJson(path, body) {
         let data = '';
         res.on('data', chunk => (data += chunk));
         res.on('end', () => {
-          let parsed;
-          try { parsed = data ? JSON.parse(data) : {}; } catch { parsed = { raw: data }; }
           if (res.statusCode >= 200 && res.statusCode < 300) {
+            let parsed;
+            try { parsed = data ? JSON.parse(data) : {}; } catch { parsed = { raw: data }; }
             resolve(parsed);
           } else {
-            reject(new Error(parsed.error || `HTTP ${res.statusCode}`));
+            reject(buildHttpError(res, data));
           }
         });
       },
     );
-    req.on('error', reject);
+    req.on('error', err => reject(err && err.message ? err : new Error(`falha na conexão HTTP com o orchestrator: ${formatError(err)}`)));
     req.write(payload);
     req.end();
   });
@@ -307,12 +331,52 @@ function ensureRunningOrExit() {
 }
 
 function printSeedRunResults(results) {
+  let missingTables = 0;
   for (const r of results) {
     if (r.skipped) {
       console.log(`  ⚠ ${r.tableName}: skipped (${r.reason})`);
+      if (r.reason && r.reason.includes('does not exist in LocalStack')) {
+        missingTables++;
+      }
     } else {
       console.log(`  ✓ ${r.tableName}: ${r.inserted} item(s) inserted`);
     }
+  }
+  return { missingTables };
+}
+
+// Show the user both sides of the comparison: the seed files we found, and
+// the DynamoDB tables actually living in LocalStack. This is the difference
+// between "I didn't deploy yet" (no live tables at all) and "my seed file
+// name doesn't match the CFN TableName" (live tables exist, just not those).
+function printSeedMismatchDiagnostic({ entries, liveTables, focusTable }) {
+  const seedNames = entries.map(e => e.tableName);
+  const focusList = focusTable ? [focusTable] : seedNames;
+
+  console.log('');
+  if (focusTable) {
+    console.log(`📂 Arquivo de seed inspecionado: ${focusTable}.json`);
+  } else if (focusList.length > 0) {
+    console.log('📂 Arquivos de seed inspecionados (tabela esperada):');
+    for (const name of focusList) console.log(`     - ${name}`);
+  } else {
+    console.log('📂 Nenhum arquivo *.json encontrado no seedsDir.');
+  }
+
+  if (liveTables && liveTables.length > 0) {
+    console.log('');
+    console.log(`🗂️  Tabelas vivas no LocalStack (${liveTables.length}):`);
+    for (const name of liveTables) console.log(`     - ${name}`);
+    console.log('');
+    console.log('💡 Os nomes dos arquivos de seed precisam bater EXATAMENTE com o `TableName` no CloudFormation.');
+    console.log('   Confira se há prefixo/sufixo divergente entre o arquivo e a tabela.');
+  } else {
+    console.log('');
+    console.log('🗂️  Nenhuma tabela viva no LocalStack ainda.');
+    console.log('💡 Provavelmente o stack ainda não foi provisionado. Tente:');
+    console.log('     npx lss start                # garante LocalStack rodando');
+    console.log('     npx serverless deploy        # cria as tabelas');
+    console.log('   E rode `npx lss seed` novamente.');
   }
 }
 
@@ -331,21 +395,130 @@ async function runSeed(tableName) {
   try {
     console.log(tableName ? `🌱 Seeding ${tableName}...` : '🌱 Seeding all tables with seed files...');
     const res = await postJson('/api/seeds/run', tableName ? { tableName } : {});
-    printSeedRunResults(res.results || []);
+    const { missingTables } = printSeedRunResults(res.results || []);
+    if (missingTables > 0) {
+      try {
+        const list = await getJson('/api/seeds');
+        printSeedMismatchDiagnostic({
+          entries: (list.entries || []).filter(e => !e.tableExists),
+          liveTables: list.liveTables || [],
+          focusTable: tableName,
+        });
+      } catch (diagErr) {
+        // Diagnostic is best-effort; don't fail the seed because the hint failed.
+        console.log(`(não consegui detalhar tabelas vivas: ${formatError(diagErr)})`);
+      }
+    }
   } catch (e) {
-    console.error('❌ Seed failed:', e.message);
+    console.error('❌ Seed failed:', formatError(e));
     process.exit(1);
   }
 }
 
+function getJson(path) {
+  return new Promise((resolve, reject) => {
+    const http = require('http');
+    const req = http.request(
+      {
+        hostname: 'localhost',
+        port: getServerPort(),
+        path,
+        method: 'GET',
+      },
+      res => {
+        let data = '';
+        res.on('data', chunk => (data += chunk));
+        res.on('end', () => {
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            let parsed;
+            try { parsed = data ? JSON.parse(data) : {}; } catch { parsed = { raw: data }; }
+            resolve(parsed);
+          } else {
+            reject(buildHttpError(res, data));
+          }
+        });
+      },
+    );
+    req.on('error', err => reject(err && err.message ? err : new Error(`falha na conexão HTTP com o orchestrator: ${formatError(err)}`)));
+    req.end();
+  });
+}
+
+function promptConfirmation(expectedWord) {
+  return new Promise(resolve => {
+    const readline = require('readline');
+    const rl = readline.createInterface({
+      input: process.stdin,
+      output: process.stdout,
+    });
+    rl.question(`Digite "${expectedWord}" para prosseguir (ou qualquer outra coisa para cancelar): `, answer => {
+      rl.close();
+      resolve(answer.trim() === expectedWord);
+    });
+  });
+}
+
 async function clearSeed(tableName) {
   ensureRunningOrExit();
+
+  const skipConfirm = process.argv.includes('--yes') || process.argv.includes('-y');
+  const cfg = getConfig(loadConfig());
+
+  // Show the user exactly what's about to be wiped before they confirm.
+  // Hitting the orchestrator's GET /api/seeds also implicitly proves we're
+  // talking to LocalStack and not AWS — the orchestrator only ever connects
+  // to the configured local LocalStack endpoint.
+  let scopeDescription;
+  try {
+    const list = await getJson('/api/seeds');
+    const entries = list.entries || [];
+    const liveTables = list.liveTables || [];
+    const targets = tableName ? entries.filter(e => e.tableName === tableName) : entries;
+    const liveTargets = targets.filter(e => e.tableExists);
+
+    if (liveTargets.length === 0) {
+      if (tableName) {
+        console.log(`⚠️  Nenhuma tabela "${tableName}" existente no LocalStack para limpar.`);
+      } else if (entries.length === 0) {
+        console.log('⚠️  Nenhum arquivo de seed (*.json) encontrado no seedsDir — nada para limpar.');
+      } else {
+        console.log(`⚠️  ${entries.length} arquivo(s) de seed encontrados, mas NENHUMA das tabelas correspondentes existe no LocalStack.`);
+      }
+      printSeedMismatchDiagnostic({ entries, liveTables, focusTable: tableName });
+      return;
+    }
+
+    scopeDescription = tableName
+      ? `a tabela "${tableName}"`
+      : `${liveTargets.length} tabela(s): ${liveTargets.map(e => e.tableName).join(', ')}`;
+
+    console.log('');
+    console.log('⚠️  ATENÇÃO: operação destrutiva');
+    console.log(`   Alvo:      ${scopeDescription}`);
+    console.log(`   LocalStack: http://localhost:${cfg.localstackPort}`);
+    console.log('   Esta ação NÃO toca em nenhuma conta AWS — apenas o LocalStack acima.');
+    console.log('');
+  } catch (e) {
+    console.error('❌ Não consegui listar as tabelas antes de limpar:', formatError(e));
+    process.exit(1);
+  }
+
+  if (!skipConfirm) {
+    const ok = await promptConfirmation('confirmar');
+    if (!ok) {
+      console.log('🚫 Cancelado — nenhuma alteração feita.');
+      return;
+    }
+  } else {
+    console.log('↳ --yes informado, pulando confirmação interativa.');
+  }
+
   try {
     console.log(tableName ? `🧹 Clearing ${tableName}...` : '🧹 Clearing all seeded tables...');
     const res = await postJson('/api/seeds/clear', tableName ? { tableName } : {});
     printSeedClearResults(res.results || []);
   } catch (e) {
-    console.error('❌ Clear failed:', e.message);
+    console.error('❌ Clear failed:', formatError(e));
     process.exit(1);
   }
 }
@@ -364,7 +537,9 @@ Commands:
   seed [table]       Apply seed file(s) from seedsDir into DynamoDB
                      (no args = all matching tables)
   seed:clear [table] Delete all items from the given table (or all
-                     tables with a seed file when no arg is given)
+                     tables with a seed file when no arg is given).
+                     Pede confirmação interativa (digitar "confirmar")
+                     antes de qualquer escrita.
   help               Show this help message
 
 Options:
@@ -372,6 +547,7 @@ Options:
   --external                   Connect to a LocalStack already running, do not spawn a container
   --pro                        Use the LocalStack Pro image (requires LOCALSTACK_AUTH_TOKEN)
   --localstack-token <token>   Pass a LOCALSTACK_AUTH_TOKEN to the container
+  --yes, -y                    Skip interactive confirmation on seed:clear (use only in CI)
 
 Environment:
   LOCALSTACK_AUTH_TOKEN        Token forwarded to LocalStack (Pro and >=2026.5 community)
@@ -411,7 +587,8 @@ Examples:
   npx lss logs                               # View logs
   npx lss seed                               # Seed every table that has a {name}.json file
   npx lss seed users                         # Seed only the "users" table
-  npx lss seed:clear users                   # Delete all items from "users"
+  npx lss seed:clear users                   # Delete all items from "users" (com confirmação)
+  npx lss seed:clear users --yes             # Mesma coisa, sem prompt (CI)
 `);
 }
 
@@ -432,6 +609,17 @@ function showLogs() {
 
 const command = process.argv[2];
 
+// First positional arg after the command (e.g. table name for `seed`/`seed:clear`).
+// Skip anything that looks like a flag so `seed:clear --yes` doesn't pass
+// "--yes" as the table name.
+function firstPositional() {
+  for (let i = 3; i < process.argv.length; i++) {
+    const arg = process.argv[i];
+    if (!arg.startsWith('-')) return arg;
+  }
+  return undefined;
+}
+
 switch (command) {
   case 'start':
     startOrchestrator();
@@ -446,10 +634,10 @@ switch (command) {
     showLogs();
     break;
   case 'seed':
-    runSeed(process.argv[3]);
+    runSeed(firstPositional());
     break;
   case 'seed:clear':
-    clearSeed(process.argv[3]);
+    clearSeed(firstPositional());
     break;
   case 'help':
   case '--help':

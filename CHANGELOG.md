@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-05-26
+
+### Added
+- **`npx lss seed:clear` now requires interactive confirmation**: before issuing any `DeleteRequest`, the CLI lists the exact LocalStack tables it would wipe, prints the LocalStack URL, makes the "this never touches AWS" guarantee explicit, and waits for the user to type `confirmar` (case-sensitive, exact match after trim). Anything else cancels with `🚫 Cancelado — nenhuma alteração feita.` and no clear call is made. `--yes` / `-y` skips the prompt for CI use.
+- **Defensive endpoint guard in `SeedManager`**: `clearTable` and `clearAllSeeded` now refuse to run unless the resolved DynamoDB endpoint hostname is on a hardcoded local allowlist (`localhost`, `127.0.0.1`, `::1`, `0.0.0.0`, `host.docker.internal`, `localstack`, `lss-localstack`, `lss-localstack-<port>`, `*.localhost`). If a future refactor ever pointed `LocalStackManager.getConfig()` at a real AWS endpoint, the guard would throw `Refusing destructive operation: endpoint "..." is not a recognized local LocalStack host. seed:clear may ONLY run against LocalStack — never against AWS.` before any AWS SDK call. Architecture already pinned writes to LocalStack via fake credentials; this is belt-and-braces.
+- **Seed/clear mismatch diagnostic**: `GET /api/seeds` now also returns `liveTables: string[]` (every DynamoDB table currently in LocalStack). When `npx lss seed` skips tables or `npx lss seed:clear` finds no live targets, the CLI prints a two-column diagnostic — seed files inspected on one side, live LocalStack tables on the other — with the hint "Os nomes dos arquivos de seed precisam bater EXATAMENTE com o `TableName` no CloudFormation." This makes seed-name/table-name typos obvious instead of "nothing happened, why?". When the live-tables list is empty, the CLI falls back to the older "run `npx lss start` + `npx serverless deploy` first" hint.
+- **Test infrastructure**: new `tests/unit/seed-manager-guard.test.ts` (27 tests covering the endpoint allowlist matrix, IPv6 bracket handling, malformed URLs, and that `clearTable`/`clearAllSeeded` invoke the guard) and `tests/unit/cli-seed.test.ts` (21 tests spawning `bin/cli.js` against an in-process HTTP stub of the orchestrator — covers confirmation flow, `--yes`/`-y` bypass, "no live tables" diagnostic, name-mismatch diagnostic, and `formatError` robustness against 500-with-empty-body / 500-with-non-JSON / `{error: ""}` responses).
+
+### Changed
+- **`bin/cli.js` error handling never leaves the user with an empty message**: new `formatError(e)` and `buildHttpError(res, data)` helpers walk a fallback chain (`e.message` → `e.code` → `e.name` → body snippet → HTTP status text → "erro desconhecido (sem detalhes)") so a response 500 with no body, a socket reset during orchestrator startup, or an `Error` with empty `.message` all produce a useful CLI line instead of `❌ Não consegui listar as tabelas antes de limpar:` with a blank suffix. Applied to every `console.error` path in `seed`, `seed:clear`, and the underlying `getJson`/`postJson` helpers.
+- **`npx lss seed` hint when tables are missing in LocalStack**: previously printed a generic "tabelas foram puladas" footer. Now it fetches `liveTables` and shows the same mismatch diagnostic as `seed:clear`, so the user sees whether the cause is "I haven't deployed yet" (no live tables) or "my seed file name is wrong" (live tables exist but don't match).
+- **`firstPositional()` arg parser in the CLI**: commands that accept an optional table name (`seed`, `seed:clear`) now skip args starting with `-`. Without this, `npx lss seed:clear --yes` was interpreting `--yes` as the table name.
+- **`SeedManager.assertLocalEndpoint` normalizes IPv6 brackets** so URLs like `http://[::1]:4566` (which `new URL().hostname` reports as `[::1]`) match the `::1` entry in the allowlist instead of being rejected as non-local.
+- **`jest.config.js` `moduleNameMapper`**: strips `.js` from relative imports during tests so the server's NodeNext-style ESM imports (`import { Foo } from './foo.js'`) resolve to TypeScript sources under ts-jest. Without this, no unit test could import from `src/server/`.
+
+### Fixed
+- **`examples/pro-sample-microservice/seeds/`**: renamed `sample-microservice-Users.json` → `pro-sample-microservice-Users.json` and `sample-microservice-Orders.json` → `pro-sample-microservice-Orders.json` (via `git mv` to preserve history). The files had been copied from `sample-microservice` but never renamed, so the seed prefix didn't match the example's actual `${self:service}-*` `TableName`s in `serverless.yml` — `npx lss seed` and `npx lss seed:clear` always found `tableExists: false` and silently did nothing.
+
 ## [0.1.1] - 2026-05-21
 
 ### Added
