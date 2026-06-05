@@ -331,12 +331,12 @@ describe('hold / captured / release', () => {
     expect(lambdaMock.commandCalls(UpdateEventSourceMappingCommand)[0].args[0].input).toMatchObject({ UUID: 'u1', Enabled: false });
   });
 
-  it('getCaptured returns null when not held / when url unresolved', async () => {
+  it('getCaptured distinguishes not-held (queue exists) from not-found (unresolved)', async () => {
     sqsMock.on(GetQueueUrlCommand).resolves({ QueueUrl: URL_Q });
-    expect(await inspector.getCaptured('q')).toBeNull(); // not held
+    expect(await inspector.getCaptured('q')).toBe('not-held'); // exists but not held
     sqsMock.reset();
     sqsMock.on(GetQueueUrlCommand).rejects(new Error('nope'));
-    expect(await inspector.getCaptured('q')).toBeNull(); // unresolved
+    expect(await inspector.getCaptured('q')).toBe('not-found'); // unresolved
   });
 
   it('captures messages while held (drains and deletes), bounded over multiple receive batches', async () => {
@@ -367,9 +367,9 @@ describe('hold / captured / release', () => {
     expect(captured).toHaveLength(1);
   });
 
-  it('releaseQueue returns null when not held', async () => {
+  it("releaseQueue returns 'not-held' when the queue exists but isn't held", async () => {
     sqsMock.on(GetQueueUrlCommand).resolves({ QueueUrl: URL_Q });
-    expect(await inspector.releaseQueue('q')).toBeNull();
+    expect(await inspector.releaseQueue('q')).toBe('not-held');
   });
 
   it('releaseQueue re-enables mappings and re-dispatches captured messages', async () => {
@@ -496,9 +496,9 @@ describe('defensive fallback branches', () => {
     expect(byUuid.e1.functionName).toBe('arn:aws:lambda:us-east-1:000:function:'); // fell back to full arn
   });
 
-  it('releaseQueue returns null when the url cannot be resolved', async () => {
+  it("releaseQueue returns 'not-found' when the url cannot be resolved", async () => {
     sqsMock.on(GetQueueUrlCommand).rejects(new Error('nope'));
-    expect(await inspector.releaseQueue('q')).toBeNull();
+    expect(await inspector.releaseQueue('q')).toBe('not-found');
   });
 
   it('re-dispatches captured messages with empty body fallback and group/dedup fallbacks', async () => {

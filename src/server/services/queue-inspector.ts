@@ -380,30 +380,33 @@ export class QueueInspector {
   /**
    * Return the messages captured while a queue is held, draining anything
    * currently in the queue into the buffer first (capture is pull-based — there
-   * is no background receiver). Returns null when the queue is not held.
+   * is no background receiver). Returns 'not-found' when the queue doesn't exist
+   * and 'not-held' when it exists but isn't held, so the route can distinguish
+   * 404 from 409 (consistent with the other queue endpoints).
    */
-  async getCaptured(queueName: string, region?: string): Promise<CapturedMessage[] | null> {
+  async getCaptured(queueName: string, region?: string): Promise<CapturedMessage[] | 'not-found' | 'not-held'> {
     const url = await this.resolveQueueUrl(queueName, region);
-    if (!url) return null;
+    if (!url) return 'not-found';
     const state = this.held.get(url);
-    if (!state) return null;
+    if (!state) return 'not-held';
     await this.drainCaptured(queueName, state, region);
     return state.captured;
   }
 
   /**
    * Release a held queue: re-enable its consumer mapping(s) and re-dispatch the
-   * captured messages so the consumer processes them. Returns null when the
-   * queue is not held.
+   * captured messages so the consumer processes them. Returns 'not-found' when
+   * the queue doesn't exist and 'not-held' when it exists but isn't held (404 vs
+   * 409 at the route layer).
    */
   async releaseQueue(
     queueName: string,
     region?: string,
-  ): Promise<{ queue: string; dispatched: number; released: boolean } | null> {
+  ): Promise<{ queue: string; dispatched: number; released: boolean } | 'not-found' | 'not-held'> {
     const url = await this.resolveQueueUrl(queueName, region);
-    if (!url) return null;
+    if (!url) return 'not-found';
     const state = this.held.get(url);
-    if (!state) return null;
+    if (!state) return 'not-held';
 
     // Capture anything still in the queue before flipping the consumer back on.
     await this.drainCaptured(queueName, state, region);

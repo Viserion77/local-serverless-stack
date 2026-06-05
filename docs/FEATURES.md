@@ -13,10 +13,10 @@ by the live integration suite (`npm run test:integration`).
 
 | Feature | Promise | Asserted by |
 |---|---|---|
-| `lss start` | Starts the orchestrator (managed LocalStack by default) in the background; writes a PID file and logs. | integration (`cli.test.ts`) |
-| `lss stop` | Gracefully stops the orchestrator addressed by the active config. | integration |
-| `lss status` | Reports RUNNING/NOT RUNNING + ports for the addressed instance. | integration |
-| `lss logs` | Prints the tail of the instance log. | integration |
+| `lss start` | Starts the orchestrator (managed LocalStack by default) in the background; writes a PID file and logs. | integration (`features.test.ts` boots via `lss start --config`) + unit (`cli`) |
+| `lss stop` | Gracefully stops the orchestrator addressed by the active config. | integration (`features.test.ts` teardown) + unit (`cli`) |
+| `lss status` | Reports RUNNING/NOT RUNNING + ports for the addressed instance. | unit (`cli`) |
+| `lss logs` | Prints the tail of the instance log. | unit (`cli`) |
 | `lss seed [table]` | Applies `{table}.json` seed files from `seedsDir` into DynamoDB (all matching tables, or one). | unit (`cli-seed`) + integration |
 | `lss seed:clear [table]` | Deletes seeded items after an interactive `confirmar` prompt (or `--yes`); refuses any non-local endpoint. | unit (`cli-seed`, `seed-manager-guard`) |
 | `--config <path>` | Loads config from an explicit file, taking precedence over the cwd/home search; also via `LSS_CONFIG`. | unit (`cli`) + integration |

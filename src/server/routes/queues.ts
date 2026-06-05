@@ -115,7 +115,8 @@ router.get('/:name/captured', async (req: Request, res: Response) => {
   if (!isValidName(name)) return fail(res, new Error('Invalid queue name'), 400);
   try {
     const captured = await inspector.getCaptured(name, getRegion(req));
-    if (!captured) return res.status(409).json({ error: 'Queue is not held' });
+    if (captured === 'not-found') return res.status(404).json({ error: 'Queue not found' });
+    if (captured === 'not-held') return res.status(409).json({ error: 'Queue is not held' });
     return res.json(captured);
   } catch (error) {
     return fail(res, error);
@@ -127,7 +128,8 @@ router.post('/:name/release', async (req: Request, res: Response) => {
   if (!isValidName(name)) return fail(res, new Error('Invalid queue name'), 400);
   try {
     const result = await inspector.releaseQueue(name, getRegion(req));
-    if (!result) return res.status(409).json({ error: 'Queue is not held' });
+    if (result === 'not-found') return res.status(404).json({ error: 'Queue not found' });
+    if (result === 'not-held') return res.status(409).json({ error: 'Queue is not held' });
     return res.json(result);
   } catch (error) {
     return fail(res, error);

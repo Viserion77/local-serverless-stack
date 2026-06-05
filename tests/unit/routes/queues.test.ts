@@ -253,10 +253,17 @@ describe('GET /api/queues/:name/captured', () => {
   });
 
   it('409 when the queue is not held', async () => {
-    jest.spyOn(inspector, 'getCaptured').mockResolvedValue(undefined as never);
+    jest.spyOn(inspector, 'getCaptured').mockResolvedValue('not-held' as never);
     const res = await request(appWith()).get('/api/queues/q1/captured');
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: 'Queue is not held' });
+  });
+
+  it('404 when the queue does not exist', async () => {
+    jest.spyOn(inspector, 'getCaptured').mockResolvedValue('not-found' as never);
+    const res = await request(appWith()).get('/api/queues/q1/captured');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Queue not found' });
   });
 
   it('500 when inspector throws', async () => {
@@ -280,10 +287,17 @@ describe('POST /api/queues/:name/release', () => {
   });
 
   it('409 when the queue is not held', async () => {
-    jest.spyOn(inspector, 'releaseQueue').mockResolvedValue(undefined as never);
+    jest.spyOn(inspector, 'releaseQueue').mockResolvedValue('not-held' as never);
     const res = await request(appWith()).post('/api/queues/q1/release');
     expect(res.status).toBe(409);
     expect(res.body).toEqual({ error: 'Queue is not held' });
+  });
+
+  it('404 when the queue does not exist', async () => {
+    jest.spyOn(inspector, 'releaseQueue').mockResolvedValue('not-found' as never);
+    const res = await request(appWith()).post('/api/queues/q1/release');
+    expect(res.status).toBe(404);
+    expect(res.body).toEqual({ error: 'Queue not found' });
   });
 
   it('500 when inspector throws', async () => {
