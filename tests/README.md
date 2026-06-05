@@ -1,272 +1,67 @@
-# LSS Integration Tests
+# LSS Tests
 
-Comprehensive integration tests for the Local Serverless Stack (LSS) project.
+Two separated test types:
 
-## Overview
+| Type | Command | Docker? | What it does |
+|---|---|---|---|
+| **Unit** | `npm run test:unit` (alias of `npm test`) | no | Hermetic. Enforces a **100% coverage gate** (statements/branches/functions/lines) over the unit-testable server code. |
+| **Integration** | `npm run test:integration` | yes | Boots a real isolated LSS + LocalStack and validates the promised features end-to-end (see [../docs/FEATURES.md](../docs/FEATURES.md)). |
 
-These tests validate the entire LSS system, including:
-
-- **CLI**: All commands (start, stop, status, logs, help)
-- **Orchestrator API**: Service registration, resource management, health checks
-- **Serverless Plugin**: CloudFormation parsing, resource provisioning, Lambda proxy creation
-
-## Structure
+## Layout
 
 ```
 tests/
-├── integration/           # Integration test suites
-│   ├── cli.test.ts       # CLI command tests
-│   ├── orchestrator.test.ts  # Orchestrator API tests
-│   └── plugin.test.ts    # Plugin registration tests
-├── fixtures/             # Test data and templates
-│   └── sample-cloudformation.json
-├── helpers/              # Test utilities
-│   └── test-utils.ts    # Common test helpers
-└── setup.ts             # Global test setup
+├── unit/                     # Unit suites (mirror src/), run in CI, 100% gate
+│   ├── services/             # one *.test.ts per src/server/services module
+│   ├── routes/               # one *.test.ts per src/server/routes module
+│   ├── dev/ · plugin/ · cli/ # dynamo-proxy, serverless-lss plugin, bin/cli.js
+│   ├── cli-seed.test.ts      # CLI seed/seed:clear (spawns the built CLI)
+│   ├── seed-manager-guard.test.ts · serverless-packager.test.ts · smoke.test.ts
+├── integration/
+│   ├── features.test.ts      # promised-features validation (the integration suite)
+│   └── fixtures/lss.integration.config.json
+├── fixtures/                 # committed CFN templates used by the parser tests
+├── setup.matchers.ts         # shared custom matchers (+ jest type augmentation)
+├── setup.unit.ts             # unit setup (matchers only)
+└── setup.integration.ts      # integration setup (orchestrator stop/cleanup lifecycle)
 ```
 
-## Running Tests
-
-### All Tests
+## Unit tests (100% gate)
 
 ```bash
-npm test
-```
-
-### Specific Test Suites
-
-```bash
-# CLI tests only
-npm run test:cli
-
-# Orchestrator API tests only
-npm run test:orchestrator
-
-# Plugin tests only
-npm run test:plugin
-
-# All integration tests
-npm run test:integration
-```
-
-### Watch Mode
-
-```bash
+npm run test:unit        # fast, no Docker
+npm run test:coverage    # same + enforces the 100% gate (what CI runs)
 npm run test:watch
 ```
 
-### Coverage Report
+Coverage scope (`jest.config.js` → `collectCoverageFrom`): `src/server/services/**` (except the
+Docker-driven `localstack-manager.ts`), `src/server/routes/**`, `src/server/dev/**`,
+`packages/serverless-plugin/src/**`, and `bin/cli.js`. `src/server/index.ts` is excluded because it
+bootstraps the server at import. Genuinely-unreachable defensive lines are marked with a justified
+`/* istanbul ignore next */`.
+
+**Patterns** (copy the existing exemplars):
+- AWS-SDK services → [`aws-sdk-client-mock`](https://github.com/m-radzikowski/aws-sdk-client-mock):
+  `mockClient(SQSClient)` patches the client prototype, so it intercepts the clients the singletons cache.
+  Reset singleton state and use `jest.useFakeTimers()` for sleep/poll loops. See `services/queue-inspector.test.ts`.
+- Express routes → `supertest` + `jest.spyOn(Singleton.getInstance(), method)`. See `routes/config.test.ts`.
+- The plugin → mock global `fetch`. See `plugin/index.test.ts`.
+
+## Integration tests
 
 ```bash
-npm run test:coverage
+# community LocalStack images >= 2026.5 require a token
+export LOCALSTACK_AUTH_TOKEN=ls-xxxx
+npm run test:integration
 ```
 
-## Prerequisites
+`features.test.ts` starts an isolated instance via `lss start --config tests/integration/fixtures/lss.integration.config.json`
+(own ports 3399/4599, own `stateDir`, managed mode), registers `examples/sample-microservice`, asserts the
+provisioned resources + queue `await-idle`/hold-capture-release + seeds + S3 round-trip via the HTTP API, then
+stops the instance and removes the scoped container/volume. The whole suite **skips automatically** when no
+`LOCALSTACK_AUTH_TOKEN` is present, so a token-less run never fails.
 
-Before running tests:
+## CI
 
-1. **Docker must be running** (for LocalStack) - Required only for orchestrator.test.ts
-2. **Ports 3100 and 4566 must be available**
-3. **Build the project**: `npm run build`
-4. **Install dependencies**: `npm install`
-
-**Note**: By default, `orchestrator.test.ts` is skipped because it requires LocalStack/Docker. To enable it, remove `.skip` from the describe block.
-
-## Test Suites
-
-### 1. CLI Tests (`cli.test.ts`)
-
-Tests all CLI commands:
-
-- ✅ `npx lss start` - Starts orchestrator successfully
-- ✅ `npx lss status` - Shows correct status (running/not running)
-- ✅ `npx lss stop` - Stops orchestrator gracefully
-- ✅ `npx lss logs` - Displays logs
-- ✅ `npx lss help` - Shows help information
-- ✅ LocalStack container startup
-- ✅ PID file management
-- ✅ Process lifecycle
-
-### 2. Orchestrator API Tests (`orchestrator.test.ts`) - **SKIPPED BY DEFAULT**
-
-**⚠️ Requires Docker/LocalStack running**
-
-To run these tests:
-1. Ensure Docker is running
-2. Remove `.skip` from `describe.skip` in orchestrator.test.ts
-3. Run `npm test`
-
-Tests the orchestrator REST API:
-
-- ✅ Health check endpoint
-- ✅ Service registration (`POST /api/services/register`)
-- ✅ Service listing (`GET /api/services`)
-- ✅ Resource listing (`GET /api/resources`)
-- ✅ Service deletion (`DELETE /api/services/:name`)
-- ✅ Error handling (404, malformed JSON, validation)
-- ✅ CloudFormation template validation
-
-### 3. Plugin Tests (`plugin.test.ts`)
-
-Tests the Serverless Framework plugin integration:
-
-- ✅ Service registration flow
-- ✅ DynamoDB table provisioning
-- ✅ SQS queue provisioning
-- ✅ SNS topic provisioning
-- ✅ Lambda proxy creation
-- ✅ Event source mapping creation
-- ✅ Duplicate service handling
-- ✅ CloudFormation parsing
-
-## Test Utilities
-
-### `TestUtils` Class
-
-Located in `tests/helpers/test-utils.ts`:
-
-- `waitFor(condition, timeout)` - Wait for a condition to be true
-- `waitForPort(port)` - Wait for a port to be open
-- `waitForProcessExit(pid)` - Wait for a process to exit
-- `isPortInUse(port)` - Check if a port is in use
-- `killProcessOnPort(port)` - Kill process using a port
-- `readPidFile()` - Read the orchestrator PID file
-- `isProcessRunning(pid)` - Check if a process is running
-- `execCli(command)` - Execute LSS CLI command
-- `createTempCfnTemplate(serviceName)` - Create test CloudFormation template
-- `cleanupTempFiles()` - Clean up temporary files
-- `waitForLocalStack()` - Wait for LocalStack to be ready
-
-### Custom Jest Matchers
-
-- `toBeValidPort()` - Check if number is a valid port (1-65535)
-- `toBeValidPid()` - Check if number is a valid process ID (> 0)
-
-## Test Workflow
-
-Each test suite follows this pattern:
-
-```typescript
-describe('Test Suite', () => {
-  beforeAll(async () => {
-    // Start orchestrator once
-    await TestUtils.execCli('start');
-    await TestUtils.waitForPort(3100);
-  });
-
-  afterAll(async () => {
-    // Stop orchestrator once
-    await TestUtils.execCli('stop');
-  });
-
-  it('should do something', async () => {
-    // Test implementation
-  });
-});
-```
-
-## Debugging Tests
-
-### Run Single Test
-
-```bash
-npx jest tests/integration/cli.test.ts -t "should start the orchestrator"
-```
-
-### Verbose Output
-
-```bash
-npx jest --verbose
-```
-
-### Check Logs
-
-During tests, orchestrator logs are written to `/tmp/lss-orchestrator.log`:
-
-```bash
-tail -f /tmp/lss-orchestrator.log
-```
-
-### Check LocalStack
-
-```bash
-# LocalStack health
-curl http://localhost:4566/_localstack/health
-
-# List DynamoDB tables
-aws --endpoint-url=http://localhost:4566 dynamodb list-tables --region us-east-1
-```
-
-## Common Issues
-
-### Port Already in Use
-
-```bash
-# Kill process on port 3100
-lsof -ti :3100 | xargs kill -9
-
-# Or use test utility
-npm run test:cli  # Will automatically clean up
-```
-
-### Tests Timeout
-
-- Increase timeout in test: `it('test', async () => {...}, 60000)`
-- Check if Docker is running
-- Check if LocalStack started: `docker ps | grep localstack`
-
-### Tests Hang
-
-- Tests might not clean up properly
-- Run: `npx lss stop`
-- Kill any hanging processes: `ps aux | grep node`
-
-## CI/CD Integration
-
-For CI pipelines:
-
-```yaml
-name: Tests
-on: [push, pull_request]
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      - uses: actions/setup-node@v3
-        with:
-          node-version: '18'
-      - run: npm install
-      - run: npm run build
-      - run: npm run test:coverage
-      - uses: codecov/codecov-action@v3
-        with:
-          files: ./coverage/lcov.info
-```
-
-## Coverage Goals
-
-Target coverage levels:
-
-- **Statements**: > 80%
-- **Branches**: > 75%
-- **Functions**: > 80%
-- **Lines**: > 80%
-
-## Contributing
-
-When adding new features:
-
-1. Add corresponding integration tests
-2. Ensure all tests pass: `npm test`
-3. Check coverage: `npm run test:coverage`
-4. Update this README if adding new test utilities
-
-## Future Improvements
-
-- [ ] Add unit tests for individual components
-- [ ] Add E2E tests with real Serverless projects
-- [ ] Add performance/load tests
-- [ ] Add snapshot tests for UI
-- [ ] Add contract tests for API
-- [ ] Add mutation testing
+`.github/workflows/tests.yml`: an always-on **unit** job (the 100% gate on every PR), a **lint** job, a **build**
+job, and an **integration** job gated on the `LOCALSTACK_AUTH_TOKEN` repository secret.

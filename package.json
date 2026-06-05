@@ -43,9 +43,6 @@
     "test:watch": "jest -c jest.config.js --watch",
     "test:coverage": "jest -c jest.config.js --coverage",
     "test:integration": "jest -c jest.integration.config.js",
-    "test:cli": "jest -c jest.integration.config.js tests/integration/cli.test.ts",
-    "test:orchestrator": "jest -c jest.integration.config.js tests/integration/orchestrator.test.ts",
-    "test:plugin": "jest -c jest.integration.config.js tests/integration/plugin.test.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix"
   },

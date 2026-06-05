@@ -11,6 +11,9 @@ module.exports = {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   testTimeout: 120000,
+  // Docker-bound suites must not run in parallel workers (they would fight over
+  // LocalStack containers/ports). Run serially.
+  maxWorkers: 1,
   setupFilesAfterEnv: ['<rootDir>/tests/setup.integration.ts'],
   verbose: true,
   detectOpenHandles: true,
