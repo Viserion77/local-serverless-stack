@@ -1,0 +1,538 @@
+// Unit tests for SeedManager. Complements seed-manager-guard.test.ts (the
+// destructive-op endpoint guard) by covering listing, seeding (batch + 25-item
+// chunking + UnprocessedItems retry), clearing (scan/delete pagination),
+// liveTables, table-existence checks, and the error/fallback arms.
+//
+// Pattern (see queue-inspector.test.ts): mockClient(DynamoDBClient) patches the
+// SDK client prototype so the calls the singleton makes through its cached
+// clients are intercepted. `fs` is mocked so seed files can be crafted in-memory.
+import { mockClient } from 'aws-sdk-client-mock';
+import 'aws-sdk-client-mock-jest';
+import {
+  DynamoDBClient,
+  ListTablesCommand,
+  DescribeTableCommand,
+  BatchWriteItemCommand,
+  ScanCommand,
+} from '@aws-sdk/client-dynamodb';
+
+jest.mock('fs');
+import fs from 'fs';
+
+import { SeedManager } from '../../../src/server/services/seed-manager';
+import { LocalStackManager } from '../../../src/server/services/localstack-manager';
+import { ConfigManager } from '../../../src/server/services/config-manager';
+
+const ddbMock = mockClient(DynamoDBClient);
+
+const SEEDS_DIR = '/tmp/seeds';
+
+const mockedFs = fs as unknown as Record<string, jest.Mock>;
+
+let manager: SeedManager;
+let logSpy: jest.SpyInstance;
+let warnSpy: jest.SpyInstance;
+let seedsDirSpy: jest.SpyInstance;
+
+// File contents keyed by absolute path; drives the fs mock.
+let files: Record<string, string>;
+
+beforeEach(() => {
+  ddbMock.reset();
+  manager = SeedManager.getInstance();
+  // Reset singleton client cache + region.
+  const m = manager as any;
+  m.clients.clear();
+  m.defaultRegion = 'us-east-1';
+
+  files = {};
+
+  mockedFs.existsSync = jest.fn((p: string) => p === SEEDS_DIR || p in files);
+  mockedFs.readFileSync = jest.fn((p: string) => {
+    if (p in files) return files[p];
+    throw new Error(`ENOENT: ${p}`);
+  });
+  mockedFs.readdirSync = jest.fn(() =>
+    Object.keys(files).map(p => p.slice(SEEDS_DIR.length + 1)),
+  );
+
+  seedsDirSpy = jest
+    .spyOn(ConfigManager.getInstance(), 'getSeedsDir')
+    .mockReturnValue(SEEDS_DIR);
+
+  logSpy = jest.spyOn(console, 'log').mockImplementation(() => {});
+  warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  seedsDirSpy.mockRestore();
+  logSpy.mockRestore();
+  warnSpy.mockRestore();
+  jest.restoreAllMocks();
+});
+
+afterAll(() => {
+  ddbMock.restore();
+});
+
+function writeSeedFile(table: string, content: unknown): void {
+  files[`${SEEDS_DIR}/${table}.json`] = JSON.stringify(content);
+}
+
+describe('getInstance / region setters', () => {
+  it('is a singleton', () => {
+    expect(SeedManager.getInstance()).toBe(manager);
+  });
+
+  it('setDefaultRegion ignores empty, accepts a value', () => {
+    manager.setDefaultRegion('');
+    expect((manager as any).defaultRegion).toBe('us-east-1');
+    manager.setDefaultRegion('eu-west-1');
+    expect((manager as any).defaultRegion).toBe('eu-west-1');
+  });
+
+  it('setRegion delegates to setDefaultRegion', () => {
+    manager.setRegion('sa-east-1');
+    expect((manager as any).defaultRegion).toBe('sa-east-1');
+  });
+});
+
+describe('clientFor caching', () => {
+  it('reuses a cached client for the same region and builds per-region', () => {
+    const m = manager as any;
+    const c1 = m.clientFor();
+    const c1b = m.clientFor('us-east-1');
+    expect(c1).toBe(c1b);
+    const c2 = m.clientFor('eu-west-1');
+    expect(c2).not.toBe(c1);
+  });
+});
+
+describe('hasSeedFile', () => {
+  it('returns true when the seed file exists, false otherwise', () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    expect(manager.hasSeedFile('Users')).toBe(true);
+    expect(manager.hasSeedFile('Missing')).toBe(false);
+  });
+});
+
+describe('listLiveTables / listTables', () => {
+  it('returns the live table names', async () => {
+    ddbMock.on(ListTablesCommand).resolves({ TableNames: ['A', 'B'] });
+    expect(await manager.listLiveTables()).toEqual(['A', 'B']);
+  });
+
+  it('returns [] when ListTables has no TableNames', async () => {
+    ddbMock.on(ListTablesCommand).resolves({});
+    expect(await manager.listLiveTables()).toEqual([]);
+  });
+
+  it('returns [] when ListTables fails (catch arm)', async () => {
+    ddbMock.on(ListTablesCommand).rejects(new Error('down'));
+    expect(await manager.listLiveTables()).toEqual([]);
+  });
+});
+
+describe('list', () => {
+  it('returns [] when the seeds dir does not exist', async () => {
+    mockedFs.existsSync = jest.fn(() => false);
+    expect(await manager.list()).toEqual([]);
+  });
+
+  it('lists entries with item counts and tableExists flags', async () => {
+    writeSeedFile('Users', [{ id: '1' }, { id: '2' }]);
+    writeSeedFile('Orders', []);
+    ddbMock.on(ListTablesCommand).resolves({ TableNames: ['Users'] });
+
+    const entries = await manager.list();
+    const byName = Object.fromEntries(entries.map(e => [e.tableName, e]));
+    expect(byName.Users).toMatchObject({
+      tableName: 'Users',
+      file: `${SEEDS_DIR}/Users.json`,
+      itemCount: 2,
+      tableExists: true,
+    });
+    expect(byName.Orders).toMatchObject({
+      itemCount: 0,
+      tableExists: false,
+    });
+  });
+
+  it('ignores non-json files and reports itemCount -1 for an unreadable file', async () => {
+    files[`${SEEDS_DIR}/Bad.json`] = 'not json {';
+    files[`${SEEDS_DIR}/notes.txt`] = 'ignore me';
+    ddbMock.on(ListTablesCommand).resolves({ TableNames: [] });
+
+    const entries = await manager.list();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({ tableName: 'Bad', itemCount: -1 });
+  });
+
+  it('treats a missing items array as itemCount 0 (readSeedFile returns null after delete)', async () => {
+    // File appears in readdir but existsSync says it is gone → readSeedFile null.
+    files[`${SEEDS_DIR}/Ghost.json`] = '[]';
+    mockedFs.existsSync = jest.fn((p: string) => p === SEEDS_DIR);
+    mockedFs.readdirSync = jest.fn(() => ['Ghost.json']);
+    ddbMock.on(ListTablesCommand).resolves({ TableNames: [] });
+
+    const entries = await manager.list();
+    expect(entries[0]).toMatchObject({ tableName: 'Ghost', itemCount: 0 });
+  });
+});
+
+describe('readSeedFile (via seedTable)', () => {
+  it('returns skipped "no seed file" when the file is missing', async () => {
+    const res = await manager.seedTable('Nope');
+    expect(res).toEqual({
+      tableName: 'Nope',
+      inserted: 0,
+      skipped: true,
+      reason: 'no seed file',
+    });
+  });
+
+  it('returns skipped "empty seed file" for an empty array', async () => {
+    writeSeedFile('Empty', []);
+    const res = await manager.seedTable('Empty');
+    expect(res).toEqual({
+      tableName: 'Empty',
+      inserted: 0,
+      skipped: true,
+      reason: 'empty seed file',
+    });
+  });
+
+  it('throws a wrapped error when the seed file is not a JSON array', async () => {
+    writeSeedFile('Obj', { not: 'array' });
+    await expect(manager.seedTable('Obj')).rejects.toThrow(
+      /Failed to read seed file .*: seed file must contain a JSON array/,
+    );
+  });
+
+  it('wraps non-Error throws with "unknown error"', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    // Make JSON.parse throw a non-Error value.
+    mockedFs.readFileSync = jest.fn(() => '{bad');
+    const parseSpy = jest.spyOn(JSON, 'parse').mockImplementation(() => {
+      throw 'string failure';
+    });
+    await expect(manager.seedTable('Users')).rejects.toThrow(
+      /Failed to read seed file .*: unknown error/,
+    );
+    parseSpy.mockRestore();
+  });
+});
+
+describe('seedTable', () => {
+  it('inserts items in a single batch', async () => {
+    writeSeedFile('Users', [{ id: '1' }, { id: '2' }]);
+    ddbMock.on(BatchWriteItemCommand).resolves({});
+    const res = await manager.seedTable('Users');
+    expect(res).toEqual({ tableName: 'Users', inserted: 2 });
+    expect(ddbMock.commandCalls(BatchWriteItemCommand)).toHaveLength(1);
+  });
+
+  it('chunks more than 25 items into multiple batches', async () => {
+    const items = Array.from({ length: 60 }, (_, n) => ({ id: String(n) }));
+    writeSeedFile('Big', items);
+    ddbMock.on(BatchWriteItemCommand).resolves({});
+    const res = await manager.seedTable('Big');
+    expect(res.inserted).toBe(60);
+    // 60 -> 25 + 25 + 10 = 3 batches
+    expect(ddbMock.commandCalls(BatchWriteItemCommand)).toHaveLength(3);
+  });
+
+  it('throws when an item is not a plain object (null/array/primitive)', async () => {
+    writeSeedFile('Users', [{ id: '1' }, null]);
+    await expect(manager.seedTable('Users')).rejects.toThrow(
+      /Item at index 1 in Users.json is not a plain object/,
+    );
+
+    writeSeedFile('Users2', [['arr']]);
+    await expect(manager.seedTable('Users2')).rejects.toThrow(
+      /Item at index 0 in Users2.json is not a plain object/,
+    );
+  });
+});
+
+describe('writeBatchWithRetry (via seedTable)', () => {
+  beforeEach(() => jest.useFakeTimers());
+  afterEach(() => jest.useRealTimers());
+
+  it('retries UnprocessedItems then succeeds', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    const leftover = [{ PutRequest: { Item: { id: { S: '1' } } } }];
+    ddbMock
+      .on(BatchWriteItemCommand)
+      .resolvesOnce({ UnprocessedItems: { Users: leftover } })
+      .resolves({});
+    const p = manager.seedTable('Users');
+    await jest.advanceTimersByTimeAsync(500);
+    await expect(p).resolves.toEqual({ tableName: 'Users', inserted: 1 });
+    expect(ddbMock.commandCalls(BatchWriteItemCommand)).toHaveLength(2);
+  });
+
+  it('treats a missing UnprocessedItems map entry as done (?? [])', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    // UnprocessedItems present but no entry for this table → `?? []` → empty.
+    ddbMock.on(BatchWriteItemCommand).resolves({ UnprocessedItems: {} });
+    const res = await manager.seedTable('Users');
+    expect(res.inserted).toBe(1);
+    expect(ddbMock.commandCalls(BatchWriteItemCommand)).toHaveLength(1);
+  });
+
+  it('gives up after 5 retries with leftover unprocessed items', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    const leftover = [{ PutRequest: { Item: { id: { S: '1' } } } }];
+    ddbMock.on(BatchWriteItemCommand).resolves({ UnprocessedItems: { Users: leftover } });
+    const p = manager.seedTable('Users');
+    // Attach rejection handler before advancing timers to avoid unhandled rejection.
+    const assertion = expect(p).rejects.toThrow(
+      /BatchWriteItem left 1 unprocessed item\(s\) after 5 retries/,
+    );
+    await jest.advanceTimersByTimeAsync(100 * (2 + 4 + 8 + 16 + 32) + 50);
+    await assertion;
+  });
+});
+
+describe('seedAll', () => {
+  it('skips tables that do not exist and seeds the ones that do', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    writeSeedFile('Ghost', [{ id: '1' }]);
+    ddbMock.on(ListTablesCommand).resolves({ TableNames: ['Users'] });
+    ddbMock.on(BatchWriteItemCommand).resolves({});
+
+    const results = await manager.seedAll();
+    const byName = Object.fromEntries(results.map(r => [r.tableName, r]));
+    expect(byName.Users).toEqual({ tableName: 'Users', inserted: 1 });
+    expect(byName.Ghost).toEqual({
+      tableName: 'Ghost',
+      inserted: 0,
+      skipped: true,
+      reason: 'table does not exist in LocalStack',
+    });
+  });
+
+  it('captures a per-table seed error and reports it as skipped', async () => {
+    writeSeedFile('Users', [{ id: '1' }, null]);
+    ddbMock.on(ListTablesCommand).resolves({ TableNames: ['Users'] });
+
+    const results = await manager.seedAll();
+    expect(results[0]).toMatchObject({
+      tableName: 'Users',
+      inserted: 0,
+      skipped: true,
+    });
+    expect(results[0].reason).toMatch(/not a plain object/);
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it('reports "unknown error" when seedTable throws a non-Error', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    ddbMock.on(ListTablesCommand).resolves({ TableNames: ['Users'] });
+    jest.spyOn(manager, 'seedTable').mockRejectedValue('boom-string' as never);
+
+    const results = await manager.seedAll();
+    expect(results[0]).toMatchObject({
+      tableName: 'Users',
+      inserted: 0,
+      skipped: true,
+      reason: 'unknown error',
+    });
+  });
+});
+
+describe('getTableKeyAttributes (via clearTable)', () => {
+  // Pin the endpoint to a local host so the guard always passes here.
+  let endpointSpy: jest.SpyInstance;
+  beforeEach(() => {
+    endpointSpy = jest
+      .spyOn(LocalStackManager.getInstance(), 'getEndpoint')
+      .mockReturnValue('http://localhost:4566');
+  });
+  afterEach(() => endpointSpy.mockRestore());
+
+  it('returns skipped "table not found" when DescribeTable fails (catch → null)', async () => {
+    ddbMock.on(DescribeTableCommand).rejects(new Error('no table'));
+    const res = await manager.clearTable('Missing');
+    expect(res).toEqual({
+      tableName: 'Missing',
+      deleted: 0,
+      skipped: true,
+      reason: 'table not found',
+    });
+  });
+
+  it('returns skipped "table not found" when the key schema is empty', async () => {
+    ddbMock.on(DescribeTableCommand).resolves({ Table: { KeySchema: [] } });
+    const res = await manager.clearTable('NoKeys');
+    expect(res.skipped).toBe(true);
+    expect(res.reason).toBe('table not found');
+  });
+
+  it('returns skipped "table not found" when Table is absent (?? [] fallback)', async () => {
+    ddbMock.on(DescribeTableCommand).resolves({});
+    const res = await manager.clearTable('NoTable');
+    expect(res.reason).toBe('table not found');
+  });
+});
+
+describe('clearTable', () => {
+  let endpointSpy: jest.SpyInstance;
+  beforeEach(() => {
+    endpointSpy = jest
+      .spyOn(LocalStackManager.getInstance(), 'getEndpoint')
+      .mockReturnValue('http://localhost:4566');
+  });
+  afterEach(() => endpointSpy.mockRestore());
+
+  it('scans and deletes items across pagination, filtering missing key attrs', async () => {
+    ddbMock.on(DescribeTableCommand).resolves({
+      Table: { KeySchema: [{ AttributeName: 'pk' }, { AttributeName: 'sk' }] },
+    });
+    ddbMock
+      .on(ScanCommand)
+      .resolvesOnce({
+        Items: [
+          { pk: { S: 'a' }, sk: { S: '1' } },
+          { pk: { S: 'b' } }, // missing sk → only pk copied into the delete key
+        ],
+        LastEvaluatedKey: { pk: { S: 'b' } },
+      })
+      .resolves({ Items: [{ pk: { S: 'c' }, sk: { S: '2' } }] });
+    ddbMock.on(BatchWriteItemCommand).resolves({});
+
+    const res = await manager.clearTable('T');
+    expect(res).toEqual({ tableName: 'T', deleted: 3 });
+    // 2 scan pages → 2 batch writes
+    expect(ddbMock.commandCalls(BatchWriteItemCommand)).toHaveLength(2);
+  });
+
+  it('handles a scan with no Items (?? [] fallback) → deletes 0', async () => {
+    ddbMock.on(DescribeTableCommand).resolves({
+      Table: { KeySchema: [{ AttributeName: 'pk' }] },
+    });
+    ddbMock.on(ScanCommand).resolves({}); // no Items, no LastEvaluatedKey
+    const res = await manager.clearTable('T');
+    expect(res).toEqual({ tableName: 'T', deleted: 0 });
+    expect(ddbMock.commandCalls(BatchWriteItemCommand)).toHaveLength(0);
+  });
+
+  it('filters out a KeySchema entry with a falsy AttributeName', async () => {
+    ddbMock.on(DescribeTableCommand).resolves({
+      Table: {
+        // Second entry has empty AttributeName → filtered by .filter(Boolean).
+        KeySchema: [{ AttributeName: 'pk' }, { AttributeName: '' }],
+      },
+    });
+    ddbMock.on(ScanCommand).resolves({ Items: [{ pk: { S: 'a' } }] });
+    ddbMock.on(BatchWriteItemCommand).resolves({});
+    const res = await manager.clearTable('T');
+    expect(res.deleted).toBe(1);
+  });
+});
+
+describe('clearAllSeeded', () => {
+  let endpointSpy: jest.SpyInstance;
+  beforeEach(() => {
+    endpointSpy = jest
+      .spyOn(LocalStackManager.getInstance(), 'getEndpoint')
+      .mockReturnValue('http://localhost:4566');
+  });
+  afterEach(() => endpointSpy.mockRestore());
+
+  it('clears existing tables and skips missing ones', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    writeSeedFile('Ghost', [{ id: '1' }]);
+    ddbMock.on(ListTablesCommand).resolves({ TableNames: ['Users'] });
+    ddbMock.on(DescribeTableCommand).resolves({
+      Table: { KeySchema: [{ AttributeName: 'id' }] },
+    });
+    ddbMock.on(ScanCommand).resolves({ Items: [{ id: { S: '1' } }] });
+    ddbMock.on(BatchWriteItemCommand).resolves({});
+
+    const results = await manager.clearAllSeeded();
+    const byName = Object.fromEntries(results.map(r => [r.tableName, r]));
+    expect(byName.Users).toEqual({ tableName: 'Users', deleted: 1 });
+    expect(byName.Ghost).toEqual({
+      tableName: 'Ghost',
+      deleted: 0,
+      skipped: true,
+      reason: 'table does not exist in LocalStack',
+    });
+  });
+
+  it('captures a per-table clear error and reports it as skipped', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    ddbMock.on(ListTablesCommand).resolves({ TableNames: ['Users'] });
+    ddbMock.on(DescribeTableCommand).resolves({
+      Table: { KeySchema: [{ AttributeName: 'id' }] },
+    });
+    ddbMock.on(ScanCommand).rejects(new Error('scan boom'));
+
+    const results = await manager.clearAllSeeded();
+    expect(results[0]).toMatchObject({
+      tableName: 'Users',
+      deleted: 0,
+      skipped: true,
+      reason: 'scan boom',
+    });
+    expect(warnSpy).toHaveBeenCalled();
+  });
+
+  it('reports "unknown error" when clearTable throws a non-Error', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    ddbMock.on(ListTablesCommand).resolves({ TableNames: ['Users'] });
+    jest.spyOn(manager, 'clearTable').mockRejectedValue(42 as never);
+
+    const results = await manager.clearAllSeeded();
+    expect(results[0]).toMatchObject({
+      tableName: 'Users',
+      deleted: 0,
+      skipped: true,
+      reason: 'unknown error',
+    });
+  });
+});
+
+describe('seedOnTableCreated', () => {
+  it('does nothing when there is no seed file', () => {
+    const spy = jest.spyOn(manager, 'seedTable');
+    manager.seedOnTableCreated('Missing');
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it('fires seedTable in the background when a seed file exists', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    const seedSpy = jest
+      .spyOn(manager, 'seedTable')
+      .mockResolvedValue({ tableName: 'Users', inserted: 1 });
+    manager.seedOnTableCreated('Users');
+    await Promise.resolve();
+    expect(seedSpy).toHaveBeenCalledWith('Users', undefined);
+  });
+
+  it('swallows a background seed failure and warns (Error)', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    jest
+      .spyOn(manager, 'seedTable')
+      .mockRejectedValue(new Error('background boom'));
+    manager.seedOnTableCreated('Users');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('auto-seed for Users failed: background boom'),
+    );
+  });
+
+  it('swallows a background seed failure with "unknown error" (non-Error)', async () => {
+    writeSeedFile('Users', [{ id: '1' }]);
+    jest.spyOn(manager, 'seedTable').mockRejectedValue('nope' as never);
+    manager.seedOnTableCreated('Users');
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('auto-seed for Users failed: unknown error'),
+    );
+  });
+});

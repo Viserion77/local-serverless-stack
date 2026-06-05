@@ -6,6 +6,7 @@ export function startDynamoProxy(targetEndpoint: string, port = 8000) {
   const targetBase = targetEndpoint.replace(/\/$/, '');
 
   const server = http.createServer((req, res) => {
+    /* istanbul ignore next: Node's http server always populates req.url; defensive guard only */
     if (!req.url) {
       res.statusCode = 400;
       res.end('Bad Request');
@@ -13,6 +14,7 @@ export function startDynamoProxy(targetEndpoint: string, port = 8000) {
     }
 
     const url = `${targetBase}${req.url}`;
+    /* istanbul ignore next: req.headers is always populated by Node's http server */
     const headers = { ...(req.headers || {}) } as http.OutgoingHttpHeaders;
     delete (headers as any)['host'];
 
@@ -23,6 +25,7 @@ export function startDynamoProxy(targetEndpoint: string, port = 8000) {
         headers,
       },
       upstreamRes => {
+        /* istanbul ignore next: a real upstream response always carries a statusCode */
         res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers as http.OutgoingHttpHeaders);
         upstreamRes.pipe(res);
       },
@@ -30,6 +33,7 @@ export function startDynamoProxy(targetEndpoint: string, port = 8000) {
 
     upstream.on('error', err => {
       console.error('Proxy error:', err);
+      /* istanbul ignore next: headers are not yet sent when the upstream connection fails */
       if (!res.headersSent) res.writeHead(502);
       res.end('Bad Gateway');
     });

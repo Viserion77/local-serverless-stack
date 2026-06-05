@@ -18,6 +18,10 @@ Testability features for downstream e2e suites: an isolated test instance and a 
 ### Changed
 - **`serverless-lss` plugin honors `LSS_DASHBOARD_PORT`**: when set (and `ORCHESTRATOR_URL` is not), the plugin registers the service at `http://localhost:${LSS_DASHBOARD_PORT}`. Precedence is `ORCHESTRATOR_URL` (full URL) > `LSS_DASHBOARD_PORT` (port) > `custom.orchestrator.orchestratorUrl` > default `http://localhost:3100`. This lets the same `serverless.yml` register against an isolated test orchestrator at runtime without editing the file.
 
+### Tests
+- **Two separated test types**: `npm run test:unit` (default `npm test`) is hermetic, runs in CI, and enforces a **100% coverage gate** (statements/branches/functions/lines) over the unit-testable server code — `src/server/services/**` (except the Docker-driven `localstack-manager.ts`), `src/server/routes/**`, `src/server/dev/**`, `packages/serverless-plugin/src/**` and `bin/cli.js` (`index.ts` is excluded as it bootstraps the server at import). `npm run test:integration` boots a real isolated LSS + LocalStack and validates the promised features end-to-end. Added `aws-sdk-client-mock` + `supertest` as dev deps; split `tests/setup.ts` into shared matchers + per-type setup; `bin/cli.js` now guards its dispatch behind `require.main === module` and exports its helpers for in-process testing. ~750 unit tests.
+- **`docs/FEATURES.md`**: a single inventory of the project's promised features (CLI, HTTP API, resource provisioning, plugin, seeds, queue primitives, config/isolation), doubling as the integration suite's checklist. The integration suite provisions `examples/sample-microservice` and asserts each capability; it runs locally and in a CI job gated on a `LOCALSTACK_AUTH_TOKEN` secret.
+
 ## [0.1.2] - 2026-05-26
 
 ### Added

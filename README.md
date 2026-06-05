@@ -17,6 +17,8 @@ LSS provides a unified local development environment for serverless microservice
 - **Process management**: Start/stop microservices from the orchestrator
 - **CLI Tool**: Simple commands to manage the orchestrator (start/stop/status/logs)
 
+See [docs/FEATURES.md](docs/FEATURES.md) for the complete feature inventory and how each capability is tested.
+
 ## Architecture
 
 ```

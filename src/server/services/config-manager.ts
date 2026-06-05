@@ -122,6 +122,7 @@ export class ConfigManager {
   private loadFromEnv(): void {
     // Load configuration from environment variables
     if (process.env.LSS_DASHBOARD_PORT || process.env.PORT) {
+      /* istanbul ignore next: the enclosing if guarantees one of these is truthy, so the `|| ''` fallback is unreachable */
       this.config.serverPort = parseInt(process.env.LSS_DASHBOARD_PORT || process.env.PORT || '', 10);
     }
     if (process.env.LSS_LOCALSTACK_PORT) {

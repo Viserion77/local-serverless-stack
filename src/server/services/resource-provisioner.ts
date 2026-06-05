@@ -175,6 +175,7 @@ export class ResourceProvisioner {
     const gsiList = resource.globalSecondaryIndexes || [];
     const lsiList = resource.localSecondaryIndexes || [];
     const collectIndexKeys = (indexes: DynamoDBResource['globalSecondaryIndexes']) => {
+      /* istanbul ignore next: callers always pass `?? []` arrays, so `indexes` is never nullish */
       if (!indexes) return;
       indexes.forEach(idx => {
         (idx.KeySchema || []).forEach(k => required.add(k.AttributeName));

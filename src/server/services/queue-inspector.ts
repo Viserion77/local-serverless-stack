@@ -151,7 +151,8 @@ export class QueueInspector {
   startPolling(): void {
     if (this.pollInterval) return;
     this.pollInterval = setInterval(() => {
-      this.refreshMetrics().catch(() => undefined);
+      // refreshMetrics swallows its own errors, so this catch arm never fires.
+      this.refreshMetrics().catch(/* istanbul ignore next */ () => undefined);
     }, this.pollFrequencyMs);
   }
 
@@ -183,6 +184,7 @@ export class QueueInspector {
       const eventSourceMap = await this.fetchEventSourceMappingsByQueueArn(region);
       return await this.buildSnapshot(url, eventSourceMap, region);
     } catch {
+      /* istanbul ignore next: resolveQueueUrl/fetchEventSourceMappings/buildSnapshot all swallow their own errors */
       return null;
     }
   }

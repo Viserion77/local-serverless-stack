@@ -190,24 +190,30 @@ function startOrchestrator() {
 
   // Build environment variables from config
   const env = { ...process.env };
+  /* istanbul ignore else: getConfig() always defaults serverPort to 3100, so the else is unreachable */
   if (cfg.serverPort) {
     env.PORT = cfg.serverPort;
   }
+  /* istanbul ignore else: getConfig() always defaults localstackPort to 4566, so the else is unreachable */
   if (cfg.localstackPort) {
     env.LSS_LOCALSTACK_PORT = cfg.localstackPort;
   }
   if (enableDynamoProxy) {
     env.LSS_ENABLE_DYNAMO_PROXY = 'true';
   }
+  /* istanbul ignore else: getConfig() always defaults dynamoProxyPort to 8000, so the else is unreachable */
   if (cfg.dynamoProxyPort) {
     env.LSS_DYNAMO_PROXY_PORT = cfg.dynamoProxyPort;
   }
+  /* istanbul ignore else: mode resolves to cfg.mode which getConfig() defaults to 'managed', so the else is unreachable */
   if (mode) {
     env.LSS_LOCALSTACK_MODE = mode;
   }
+  /* istanbul ignore else: edition resolves to localstackEdition which getConfig() defaults to 'community', so the else is unreachable */
   if (edition) {
     env.LSS_LOCALSTACK_EDITION = edition;
   }
+  /* istanbul ignore else: getConfig() always defaults localstackVersion to 'latest', so the else is unreachable */
   if (cfg.localstackVersion) {
     env.LSS_LOCALSTACK_VERSION = cfg.localstackVersion;
   }
@@ -660,8 +666,6 @@ function showLogs() {
   console.log(lastLines);
 }
 
-const command = process.argv[2];
-
 // First positional arg after the command (e.g. table name for `seed`/`seed:clear`).
 // Skip anything that looks like a flag so `seed:clear --yes` doesn't pass
 // "--yes" as the table name.
@@ -673,32 +677,66 @@ function firstPositional() {
   return undefined;
 }
 
-switch (command) {
-  case 'start':
-    startOrchestrator();
-    break;
-  case 'stop':
-    stopOrchestrator();
-    break;
-  case 'status':
-    showStatus();
-    break;
-  case 'logs':
-    showLogs();
-    break;
-  case 'seed':
-    runSeed(firstPositional());
-    break;
-  case 'seed:clear':
-    clearSeed(firstPositional());
-    break;
-  case 'help':
-  case '--help':
-  case '-h':
-    showHelp();
-    break;
-  default:
-    console.log('❌ Unknown command:', command);
-    showHelp();
-    process.exit(1);
+// Exported so the pure/in-process helpers can be unit-tested by requiring this
+// module. The command dispatch below only runs when the file is executed
+// directly (the `lss` bin), never when required, so requiring it has no side
+// effects.
+module.exports = {
+  loadConfig,
+  getConfig,
+  getArgValue,
+  runtimePaths,
+  getOrchestratorPath,
+  formatError,
+  buildHttpError,
+  firstPositional,
+  getServerPort,
+  printSeedRunResults,
+  printSeedMismatchDiagnostic,
+  printSeedClearResults,
+  getJson,
+  postJson,
+  ensureRunningOrExit,
+  promptConfirmation,
+  startOrchestrator,
+  stopOrchestrator,
+  showStatus,
+  showLogs,
+  runSeed,
+  clearSeed,
+  showHelp,
+};
+
+/* istanbul ignore next: CLI dispatch runs only when executed directly, not when required in tests */
+if (require.main === module) {
+  const command = process.argv[2];
+  switch (command) {
+    case 'start':
+      startOrchestrator();
+      break;
+    case 'stop':
+      stopOrchestrator();
+      break;
+    case 'status':
+      showStatus();
+      break;
+    case 'logs':
+      showLogs();
+      break;
+    case 'seed':
+      runSeed(firstPositional());
+      break;
+    case 'seed:clear':
+      clearSeed(firstPositional());
+      break;
+    case 'help':
+    case '--help':
+    case '-h':
+      showHelp();
+      break;
+    default:
+      console.log('❌ Unknown command:', command);
+      showHelp();
+      process.exit(1);
+  }
 }
