@@ -16,10 +16,10 @@ import {
 } from '../../../src/server/services/cloudformation-parser';
 
 const FIXTURE = path.resolve(__dirname, '../../fixtures/sample-cloudformation.json');
-const SAMPLE = path.resolve(
-  __dirname,
-  '../../../examples/sample-microservice/.serverless/cloudformation-template-update-stack.json',
-);
+// A committed snapshot of the sample-microservice deploy template. We do NOT read
+// examples/sample-microservice/.serverless/ directly because that dir is gitignored
+// and absent on a fresh CI checkout.
+const SAMPLE = path.resolve(__dirname, '../../fixtures/sample-microservice-template.json');
 
 let parser: CloudFormationParser;
 
