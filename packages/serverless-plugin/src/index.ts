@@ -43,8 +43,14 @@ class ServerlessOrchestratorPlugin {
       ...options,
     } as PluginOptions;
 
+    // Env overrides win over file/options so the same serverless.yml can register
+    // against different LSS instances at runtime (e.g. an isolated e2e stack).
+    // ORCHESTRATOR_URL (a full URL) is the most explicit and wins over
+    // LSS_DASHBOARD_PORT (just the dashboard port of the target instance).
     if (process.env.ORCHESTRATOR_URL) {
       merged.orchestratorUrl = process.env.ORCHESTRATOR_URL;
+    } else if (process.env.LSS_DASHBOARD_PORT) {
+      merged.orchestratorUrl = `http://localhost:${process.env.LSS_DASHBOARD_PORT}`;
     }
     if (process.env.ORCHESTRATOR_ENABLED) {
       merged.enabled = process.env.ORCHESTRATOR_ENABLED !== 'false';
