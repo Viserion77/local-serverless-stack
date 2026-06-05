@@ -5,6 +5,23 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.0] - 2026-06-04
+
+Testability features for downstream e2e suites: an isolated test instance and a deterministic queue-drain wait. Plugin `serverless-lss` bumped to `0.1.0` (it gained `LSS_DASHBOARD_PORT` support — install both).
+
+### Added
+- **`--config <path>` flag for `start|stop|status|logs`**: loads config from the given file, taking precedence over the cwd/home search (`lss.config.json` / `.lssrc`). A missing or unparseable explicit file warns and falls back to the search rather than hard-exiting, so `stop`/`status`/`logs` never orphan a running instance. `bin/cli.js` resolves the path to absolute once per invocation (also accepted via the `LSS_CONFIG` env var) and hands it to the spawned server as `LSS_CONFIG_PATH`, so the orchestrator's `ConfigManager` reads the identical file — keeping the two config loaders in agreement on port/seedsDir/region/mode.
+- **`stateDir` config field**: directory where an instance keeps its PID/log (the PID file doubles as the lock). When set (e.g. `".lss-e2e"`), `runtimePaths()` places state there so an isolated instance — typically an e2e test stack started with `--config` — can be started and stopped without ever touching the dev instance. When omitted, behavior is unchanged: PID/log live in the OS temp dir scoped by `serverPort`. `ConfigManager` gained the field plus a `getStateDir()` getter (resolved relative to the working directory).
+- **`POST /api/queues/:name/await-idle`**: blocking endpoint that polls a queue's counters (forcing a fresh read every ~250 ms rather than waiting on the 5 s background poller) and resolves `200 { queue, available, inFlight, processed, drained: true }` once the queue is idle (`available === 0 && inFlight === 0`, and `processed >= sinceProcessed` when that body field is supplied), or `408 { …, drained: false }` on timeout. Body: `{ timeoutMs?: number = 15000 (clamped 100–120000), sinceProcessed?: number }`. Lets a test deterministically wait for an SQS consumer to drain before asserting persistence. Accepts the logical queue name (e.g. `activity-save.fifo`).
+- **Queue hold/intercept primitives** (`POST /api/queues/:name/hold`, `GET /api/queues/:name/captured`, `POST /api/queues/:name/release`): `hold` disables the queue's consumer event source mapping(s) (`UpdateEventSourceMapping Enabled: false`) and starts capturing; `captured` drains the queue into an in-memory buffer and returns `[{ messageId, body, attributes, messageAttributes, receivedAt }]`; `release` re-enables the mapping(s) and re-dispatches the captured messages. Lets a test assert a producer's enqueued payload without running the consumer. Best-effort: hold state is in-memory (lost on restart), messages already consumed before hold can't be recalled, and LocalStack applies the `Enabled` toggle asynchronously.
+
+### Changed
+- **`serverless-lss` plugin honors `LSS_DASHBOARD_PORT`**: when set (and `ORCHESTRATOR_URL` is not), the plugin registers the service at `http://localhost:${LSS_DASHBOARD_PORT}`. Precedence is `ORCHESTRATOR_URL` (full URL) > `LSS_DASHBOARD_PORT` (port) > `custom.orchestrator.orchestratorUrl` > default `http://localhost:3100`. This lets the same `serverless.yml` register against an isolated test orchestrator at runtime without editing the file.
+
+### Tests
+- **Two separated test types**: `npm run test:unit` (default `npm test`) is hermetic, runs in CI, and enforces a **100% coverage gate** (statements/branches/functions/lines) over the unit-testable server code — `src/server/services/**` (except the Docker-driven `localstack-manager.ts`), `src/server/routes/**`, `src/server/dev/**`, `packages/serverless-plugin/src/**` and `bin/cli.js` (`index.ts` is excluded as it bootstraps the server at import). `npm run test:integration` boots a real isolated LSS + LocalStack and validates the promised features end-to-end. Added `aws-sdk-client-mock` + `supertest` as dev deps; split `tests/setup.ts` into shared matchers + per-type setup; `bin/cli.js` now guards its dispatch behind `require.main === module` and exports its helpers for in-process testing. ~750 unit tests.
+- **`docs/FEATURES.md`**: a single inventory of the project's promised features (CLI, HTTP API, resource provisioning, plugin, seeds, queue primitives, config/isolation), doubling as the integration suite's checklist. The integration suite provisions `examples/sample-microservice` and asserts each capability; it runs locally and in a CI job gated on a `LOCALSTACK_AUTH_TOKEN` secret.
+
 ## [0.1.2] - 2026-05-26
 
 ### Added

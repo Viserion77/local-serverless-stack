@@ -50,6 +50,11 @@ export interface LSSConfig {
   // Seeds are auto-applied when a table is created; can also be run on demand.
   seedsDir?: string;
 
+  // Directory where this instance keeps its state (PID/lock/log). When set, the
+  // CLI isolates an instance there so `lss stop --config <path>` targets it and
+  // not the dev instance. Resolved relative to the working directory.
+  stateDir?: string;
+
   // When the CloudFormation template is missing during /register, run a packaging
   // command (default: `npx serverless package`) and retry the read.
   autoPackage?: boolean;
@@ -85,7 +90,10 @@ export class ConfigManager {
     // 3. lss.config.json in home directory
     // 4. .lssrc in home directory
 
+    // LSS_CONFIG_PATH (set by the CLI from `--config <path>`) takes precedence
+    // over the cwd/home search so the server reads the same file the CLI used.
     const candidates = [
+      ...(process.env.LSS_CONFIG_PATH ? [process.env.LSS_CONFIG_PATH] : []),
       path.join(process.cwd(), 'lss.config.json'),
       path.join(process.cwd(), '.lssrc'),
       path.join(process.env.HOME || '~', 'lss.config.json'),
@@ -114,6 +122,7 @@ export class ConfigManager {
   private loadFromEnv(): void {
     // Load configuration from environment variables
     if (process.env.LSS_DASHBOARD_PORT || process.env.PORT) {
+      /* istanbul ignore next: the enclosing if guarantees one of these is truthy, so the `|| ''` fallback is unreachable */
       this.config.serverPort = parseInt(process.env.LSS_DASHBOARD_PORT || process.env.PORT || '', 10);
     }
     if (process.env.LSS_LOCALSTACK_PORT) {
@@ -267,6 +276,12 @@ export class ConfigManager {
 
   getSeedsDir(): string {
     const raw = this.config.seedsDir ?? './seeds';
+    return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
+  }
+
+  getStateDir(): string | undefined {
+    const raw = this.config.stateDir;
+    if (!raw) return undefined;
     return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
   }
 

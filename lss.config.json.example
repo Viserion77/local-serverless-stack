@@ -9,6 +9,7 @@
   "persistence": true,
   "debug": false,
   "seedsDir": "./seeds",
+  "stateDir": ".lss",
   "autoPackage": false,
   "packageCommand": "npx serverless package",
   "packageTimeoutMs": 300000

@@ -1,18 +1,29 @@
+// Unit test config (the default `jest` run): fast, hermetic, no Docker.
+// Enforces a 100% coverage gate on the unit-testable server code. The
+// integration suite has its own config (jest.integration.config.js).
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
-  roots: ['<rootDir>/tests'],
+  roots: ['<rootDir>/tests/unit'],
   testMatch: ['**/*.test.ts', '**/*.test.js'],
   collectCoverageFrom: [
-    'packages/*/src/**/*.{ts,js}',
-    'packages/*/server/**/*.{ts,js}',
-    'bin/**/*.js',
+    'src/server/services/**/*.ts',
+    'src/server/routes/**/*.ts',
+    'src/server/dev/**/*.ts',
+    'packages/serverless-plugin/src/**/*.ts',
+    'bin/cli.js',
+    // Integration-only by nature — excluded from the coverage denominator:
+    '!src/server/index.ts', // calls start()/listens at import
+    '!src/server/services/localstack-manager.ts', // drives Docker
     '!**/*.d.ts',
     '!**/node_modules/**',
     '!**/dist/**',
   ],
   coverageDirectory: 'coverage',
   coverageReporters: ['text', 'lcov', 'html'],
+  coverageThreshold: {
+    global: { branches: 100, functions: 100, lines: 100, statements: 100 },
+  },
   moduleFileExtensions: ['ts', 'tsx', 'js', 'jsx', 'json', 'node'],
   // The server uses NodeNext-style ESM imports with `.js` extensions in TS
   // source files (e.g. `import { Foo } from './foo.js'`). ts-jest doesn't
@@ -20,9 +31,7 @@ module.exports = {
   moduleNameMapper: {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
-  testTimeout: 60000, // 60 seconds for integration tests
-  setupFilesAfterEnv: ['<rootDir>/tests/setup.ts'],
+  testTimeout: 10000,
+  setupFilesAfterEnv: ['<rootDir>/tests/setup.unit.ts'],
   verbose: true,
-  detectOpenHandles: true,
-  forceExit: true,
 };

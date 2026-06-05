@@ -1,0 +1,1536 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "The AWS CloudFormation template for this Serverless application",
+  "Resources": {
+    "ServerlessDeploymentBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketEncryption": {
+          "ServerSideEncryptionConfiguration": [
+            {
+              "ServerSideEncryptionByDefault": {
+                "SSEAlgorithm": "AES256"
+              }
+            }
+          ]
+        }
+      }
+    },
+    "ServerlessDeploymentBucketPolicy": {
+      "Type": "AWS::S3::BucketPolicy",
+      "Properties": {
+        "Bucket": {
+          "Ref": "ServerlessDeploymentBucket"
+        },
+        "PolicyDocument": {
+          "Statement": [
+            {
+              "Action": "s3:*",
+              "Effect": "Deny",
+              "Principal": "*",
+              "Resource": [
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition"
+                      },
+                      ":s3:::",
+                      {
+                        "Ref": "ServerlessDeploymentBucket"
+                      },
+                      "/*"
+                    ]
+                  ]
+                },
+                {
+                  "Fn::Join": [
+                    "",
+                    [
+                      "arn:",
+                      {
+                        "Ref": "AWS::Partition"
+                      },
+                      ":s3:::",
+                      {
+                        "Ref": "ServerlessDeploymentBucket"
+                      }
+                    ]
+                  ]
+                }
+              ],
+              "Condition": {
+                "Bool": {
+                  "aws:SecureTransport": false
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "HealthLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/sample-microservice-dev-health"
+      }
+    },
+    "CreateUserLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/sample-microservice-dev-createUser"
+      }
+    },
+    "ListUsersLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/sample-microservice-dev-listUsers"
+      }
+    },
+    "EnqueueOrderLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/sample-microservice-dev-enqueueOrder"
+      }
+    },
+    "ProcessOrderQueueLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/sample-microservice-dev-processOrderQueue"
+      }
+    },
+    "OnOrderStreamLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/sample-microservice-dev-onOrderStream"
+      }
+    },
+    "UploadFileLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/sample-microservice-dev-uploadFile"
+      }
+    },
+    "ListUploadsLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/sample-microservice-dev-listUploads"
+      }
+    },
+    "OnUploadLogGroup": {
+      "Type": "AWS::Logs::LogGroup",
+      "Properties": {
+        "LogGroupName": "/aws/lambda/sample-microservice-dev-onUpload"
+      }
+    },
+    "IamRoleLambdaExecution": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": [
+                  "lambda.amazonaws.com"
+                ]
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Policies": [
+          {
+            "PolicyName": {
+              "Fn::Join": [
+                "-",
+                [
+                  "sample-microservice",
+                  "dev",
+                  "lambda"
+                ]
+              ]
+            },
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:CreateLogStream",
+                    "logs:CreateLogGroup",
+                    "logs:TagResource"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/sample-microservice-dev*:*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "logs:PutLogEvents"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::Sub": "arn:${AWS::Partition}:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/sample-microservice-dev*:*:*"
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "dynamodb:GetRecords",
+                    "dynamodb:GetShardIterator",
+                    "dynamodb:DescribeStream",
+                    "dynamodb:ListStreams"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "OrdersTable",
+                        "StreamArn"
+                      ]
+                    }
+                  ]
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sqs:ReceiveMessage",
+                    "sqs:DeleteMessage",
+                    "sqs:GetQueueAttributes"
+                  ],
+                  "Resource": [
+                    {
+                      "Fn::GetAtt": [
+                        "OrderProcessingQueue",
+                        "Arn"
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ],
+        "Path": "/",
+        "RoleName": {
+          "Fn::Join": [
+            "-",
+            [
+              "sample-microservice",
+              "dev",
+              {
+                "Ref": "AWS::Region"
+              },
+              "lambdaRole"
+            ]
+          ]
+        }
+      }
+    },
+    "HealthLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ServerlessDeploymentBucket"
+          },
+          "S3Key": "serverless/sample-microservice/dev/1779328133500-2026-05-21T01:48:53.500Z/sample-microservice.zip"
+        },
+        "Handler": "src/handlers/health.handler",
+        "Runtime": "nodejs20.x",
+        "FunctionName": "sample-microservice-dev-health",
+        "MemorySize": 1024,
+        "Timeout": 6,
+        "Environment": {
+          "Variables": {
+            "USERS_TABLE": "sample-microservice-Users",
+            "SESSIONS_TABLE": "sample-microservice-Sessions",
+            "ORDERS_TABLE": "sample-microservice-Orders",
+            "ORDER_QUEUE_URL": "http://localhost:4566/000000000000/sample-microservice-OrderProcessing",
+            "ORDER_EVENTS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:sample-microservice-OrderEvents",
+            "UPLOADS_BUCKET": "sample-microservice-uploads",
+            "AWS_ENDPOINT": "http://localhost:4566"
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "IamRoleLambdaExecution",
+            "Arn"
+          ]
+        }
+      },
+      "DependsOn": [
+        "HealthLogGroup"
+      ]
+    },
+    "CreateUserLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ServerlessDeploymentBucket"
+          },
+          "S3Key": "serverless/sample-microservice/dev/1779328133500-2026-05-21T01:48:53.500Z/sample-microservice.zip"
+        },
+        "Handler": "src/handlers/createUser.handler",
+        "Runtime": "nodejs20.x",
+        "FunctionName": "sample-microservice-dev-createUser",
+        "MemorySize": 1024,
+        "Timeout": 6,
+        "Environment": {
+          "Variables": {
+            "USERS_TABLE": "sample-microservice-Users",
+            "SESSIONS_TABLE": "sample-microservice-Sessions",
+            "ORDERS_TABLE": "sample-microservice-Orders",
+            "ORDER_QUEUE_URL": "http://localhost:4566/000000000000/sample-microservice-OrderProcessing",
+            "ORDER_EVENTS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:sample-microservice-OrderEvents",
+            "UPLOADS_BUCKET": "sample-microservice-uploads",
+            "AWS_ENDPOINT": "http://localhost:4566"
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "IamRoleLambdaExecution",
+            "Arn"
+          ]
+        }
+      },
+      "DependsOn": [
+        "CreateUserLogGroup"
+      ]
+    },
+    "ListUsersLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ServerlessDeploymentBucket"
+          },
+          "S3Key": "serverless/sample-microservice/dev/1779328133500-2026-05-21T01:48:53.500Z/sample-microservice.zip"
+        },
+        "Handler": "src/handlers/listUsers.handler",
+        "Runtime": "nodejs20.x",
+        "FunctionName": "sample-microservice-dev-listUsers",
+        "MemorySize": 1024,
+        "Timeout": 6,
+        "Environment": {
+          "Variables": {
+            "USERS_TABLE": "sample-microservice-Users",
+            "SESSIONS_TABLE": "sample-microservice-Sessions",
+            "ORDERS_TABLE": "sample-microservice-Orders",
+            "ORDER_QUEUE_URL": "http://localhost:4566/000000000000/sample-microservice-OrderProcessing",
+            "ORDER_EVENTS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:sample-microservice-OrderEvents",
+            "UPLOADS_BUCKET": "sample-microservice-uploads",
+            "AWS_ENDPOINT": "http://localhost:4566"
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "IamRoleLambdaExecution",
+            "Arn"
+          ]
+        }
+      },
+      "DependsOn": [
+        "ListUsersLogGroup"
+      ]
+    },
+    "EnqueueOrderLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ServerlessDeploymentBucket"
+          },
+          "S3Key": "serverless/sample-microservice/dev/1779328133500-2026-05-21T01:48:53.500Z/sample-microservice.zip"
+        },
+        "Handler": "src/handlers/enqueueOrder.handler",
+        "Runtime": "nodejs20.x",
+        "FunctionName": "sample-microservice-dev-enqueueOrder",
+        "MemorySize": 1024,
+        "Timeout": 6,
+        "Environment": {
+          "Variables": {
+            "USERS_TABLE": "sample-microservice-Users",
+            "SESSIONS_TABLE": "sample-microservice-Sessions",
+            "ORDERS_TABLE": "sample-microservice-Orders",
+            "ORDER_QUEUE_URL": "http://localhost:4566/000000000000/sample-microservice-OrderProcessing",
+            "ORDER_EVENTS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:sample-microservice-OrderEvents",
+            "UPLOADS_BUCKET": "sample-microservice-uploads",
+            "AWS_ENDPOINT": "http://localhost:4566"
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "IamRoleLambdaExecution",
+            "Arn"
+          ]
+        }
+      },
+      "DependsOn": [
+        "EnqueueOrderLogGroup"
+      ]
+    },
+    "ProcessOrderQueueLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ServerlessDeploymentBucket"
+          },
+          "S3Key": "serverless/sample-microservice/dev/1779328133500-2026-05-21T01:48:53.500Z/sample-microservice.zip"
+        },
+        "Handler": "src/handlers/processOrderQueue.handler",
+        "Runtime": "nodejs20.x",
+        "FunctionName": "sample-microservice-dev-processOrderQueue",
+        "MemorySize": 1024,
+        "Timeout": 6,
+        "Environment": {
+          "Variables": {
+            "USERS_TABLE": "sample-microservice-Users",
+            "SESSIONS_TABLE": "sample-microservice-Sessions",
+            "ORDERS_TABLE": "sample-microservice-Orders",
+            "ORDER_QUEUE_URL": "http://localhost:4566/000000000000/sample-microservice-OrderProcessing",
+            "ORDER_EVENTS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:sample-microservice-OrderEvents",
+            "UPLOADS_BUCKET": "sample-microservice-uploads",
+            "AWS_ENDPOINT": "http://localhost:4566"
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "IamRoleLambdaExecution",
+            "Arn"
+          ]
+        }
+      },
+      "DependsOn": [
+        "ProcessOrderQueueLogGroup"
+      ]
+    },
+    "OnOrderStreamLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ServerlessDeploymentBucket"
+          },
+          "S3Key": "serverless/sample-microservice/dev/1779328133500-2026-05-21T01:48:53.500Z/sample-microservice.zip"
+        },
+        "Handler": "src/handlers/onOrderStream.handler",
+        "Runtime": "nodejs20.x",
+        "FunctionName": "sample-microservice-dev-onOrderStream",
+        "MemorySize": 1024,
+        "Timeout": 6,
+        "Environment": {
+          "Variables": {
+            "USERS_TABLE": "sample-microservice-Users",
+            "SESSIONS_TABLE": "sample-microservice-Sessions",
+            "ORDERS_TABLE": "sample-microservice-Orders",
+            "ORDER_QUEUE_URL": "http://localhost:4566/000000000000/sample-microservice-OrderProcessing",
+            "ORDER_EVENTS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:sample-microservice-OrderEvents",
+            "UPLOADS_BUCKET": "sample-microservice-uploads",
+            "AWS_ENDPOINT": "http://localhost:4566"
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "IamRoleLambdaExecution",
+            "Arn"
+          ]
+        }
+      },
+      "DependsOn": [
+        "OnOrderStreamLogGroup"
+      ]
+    },
+    "UploadFileLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ServerlessDeploymentBucket"
+          },
+          "S3Key": "serverless/sample-microservice/dev/1779328133500-2026-05-21T01:48:53.500Z/sample-microservice.zip"
+        },
+        "Handler": "src/handlers/uploadFile.handler",
+        "Runtime": "nodejs20.x",
+        "FunctionName": "sample-microservice-dev-uploadFile",
+        "MemorySize": 1024,
+        "Timeout": 6,
+        "Environment": {
+          "Variables": {
+            "USERS_TABLE": "sample-microservice-Users",
+            "SESSIONS_TABLE": "sample-microservice-Sessions",
+            "ORDERS_TABLE": "sample-microservice-Orders",
+            "ORDER_QUEUE_URL": "http://localhost:4566/000000000000/sample-microservice-OrderProcessing",
+            "ORDER_EVENTS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:sample-microservice-OrderEvents",
+            "UPLOADS_BUCKET": "sample-microservice-uploads",
+            "AWS_ENDPOINT": "http://localhost:4566"
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "IamRoleLambdaExecution",
+            "Arn"
+          ]
+        }
+      },
+      "DependsOn": [
+        "UploadFileLogGroup"
+      ]
+    },
+    "ListUploadsLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ServerlessDeploymentBucket"
+          },
+          "S3Key": "serverless/sample-microservice/dev/1779328133500-2026-05-21T01:48:53.500Z/sample-microservice.zip"
+        },
+        "Handler": "src/handlers/listUploads.handler",
+        "Runtime": "nodejs20.x",
+        "FunctionName": "sample-microservice-dev-listUploads",
+        "MemorySize": 1024,
+        "Timeout": 6,
+        "Environment": {
+          "Variables": {
+            "USERS_TABLE": "sample-microservice-Users",
+            "SESSIONS_TABLE": "sample-microservice-Sessions",
+            "ORDERS_TABLE": "sample-microservice-Orders",
+            "ORDER_QUEUE_URL": "http://localhost:4566/000000000000/sample-microservice-OrderProcessing",
+            "ORDER_EVENTS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:sample-microservice-OrderEvents",
+            "UPLOADS_BUCKET": "sample-microservice-uploads",
+            "AWS_ENDPOINT": "http://localhost:4566"
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "IamRoleLambdaExecution",
+            "Arn"
+          ]
+        }
+      },
+      "DependsOn": [
+        "ListUploadsLogGroup"
+      ]
+    },
+    "OnUploadLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "Code": {
+          "S3Bucket": {
+            "Ref": "ServerlessDeploymentBucket"
+          },
+          "S3Key": "serverless/sample-microservice/dev/1779328133500-2026-05-21T01:48:53.500Z/sample-microservice.zip"
+        },
+        "Handler": "src/handlers/onUpload.handler",
+        "Runtime": "nodejs20.x",
+        "FunctionName": "sample-microservice-dev-onUpload",
+        "MemorySize": 1024,
+        "Timeout": 6,
+        "Environment": {
+          "Variables": {
+            "USERS_TABLE": "sample-microservice-Users",
+            "SESSIONS_TABLE": "sample-microservice-Sessions",
+            "ORDERS_TABLE": "sample-microservice-Orders",
+            "ORDER_QUEUE_URL": "http://localhost:4566/000000000000/sample-microservice-OrderProcessing",
+            "ORDER_EVENTS_TOPIC_ARN": "arn:aws:sns:us-east-1:000000000000:sample-microservice-OrderEvents",
+            "UPLOADS_BUCKET": "sample-microservice-uploads",
+            "AWS_ENDPOINT": "http://localhost:4566"
+          }
+        },
+        "Role": {
+          "Fn::GetAtt": [
+            "IamRoleLambdaExecution",
+            "Arn"
+          ]
+        }
+      },
+      "DependsOn": [
+        "OnUploadLogGroup"
+      ]
+    },
+    "HealthLambdaVersiondYovxU1DWi2LQDqKH9BnfccShz4u6vRHj6LQqeuaWE": {
+      "Type": "AWS::Lambda::Version",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "HealthLambdaFunction"
+        },
+        "CodeSha256": "tNq9VpQm+AoDyN33KceVK0SujKQoENqVf2jKY+L2kWM="
+      }
+    },
+    "CreateUserLambdaVersionGunjAAu4Cw6NioFA63dhZYG2Aztc3zd5xrPLIDEsiM": {
+      "Type": "AWS::Lambda::Version",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "CreateUserLambdaFunction"
+        },
+        "CodeSha256": "tNq9VpQm+AoDyN33KceVK0SujKQoENqVf2jKY+L2kWM="
+      }
+    },
+    "ListUsersLambdaVersionQfFmmTAw1OWBhxVwu6CK5qy49U1XiteZp0jdrE00CY": {
+      "Type": "AWS::Lambda::Version",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "ListUsersLambdaFunction"
+        },
+        "CodeSha256": "tNq9VpQm+AoDyN33KceVK0SujKQoENqVf2jKY+L2kWM="
+      }
+    },
+    "EnqueueOrderLambdaVersion2BeDbBvcM3WgSxCc6CZyP8mhIo7UJUSw1whREk1gg": {
+      "Type": "AWS::Lambda::Version",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "EnqueueOrderLambdaFunction"
+        },
+        "CodeSha256": "tNq9VpQm+AoDyN33KceVK0SujKQoENqVf2jKY+L2kWM="
+      }
+    },
+    "ProcessOrderQueueLambdaVersionQmujbti3Ultsp9xNbfhV0xTkIRuGArjX4e99tmp4": {
+      "Type": "AWS::Lambda::Version",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "ProcessOrderQueueLambdaFunction"
+        },
+        "CodeSha256": "tNq9VpQm+AoDyN33KceVK0SujKQoENqVf2jKY+L2kWM="
+      }
+    },
+    "OnOrderStreamLambdaVersionPFXTgk3UMMespWvAnoVqzea1vPVREwjASGN0Ziu4": {
+      "Type": "AWS::Lambda::Version",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "OnOrderStreamLambdaFunction"
+        },
+        "CodeSha256": "tNq9VpQm+AoDyN33KceVK0SujKQoENqVf2jKY+L2kWM="
+      }
+    },
+    "UploadFileLambdaVersionxFFGQnChTeoZiQZ1bTVYemMpbmdvViVmw0bY53cYA": {
+      "Type": "AWS::Lambda::Version",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "UploadFileLambdaFunction"
+        },
+        "CodeSha256": "tNq9VpQm+AoDyN33KceVK0SujKQoENqVf2jKY+L2kWM="
+      }
+    },
+    "ListUploadsLambdaVersionTbBkryFUz8e5QMeLbqCSOQEADqGVFhKchNFOeizbE": {
+      "Type": "AWS::Lambda::Version",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "ListUploadsLambdaFunction"
+        },
+        "CodeSha256": "tNq9VpQm+AoDyN33KceVK0SujKQoENqVf2jKY+L2kWM="
+      }
+    },
+    "OnUploadLambdaVersionQh8eg1nm8tGC5ZlRDxAD0yCHCjHH4w1NaUBApqXreg": {
+      "Type": "AWS::Lambda::Version",
+      "DeletionPolicy": "Retain",
+      "Properties": {
+        "FunctionName": {
+          "Ref": "OnUploadLambdaFunction"
+        },
+        "CodeSha256": "tNq9VpQm+AoDyN33KceVK0SujKQoENqVf2jKY+L2kWM="
+      }
+    },
+    "ApiGatewayRestApi": {
+      "Type": "AWS::ApiGateway::RestApi",
+      "Properties": {
+        "Name": "dev-sample-microservice",
+        "EndpointConfiguration": {
+          "Types": [
+            "EDGE"
+          ]
+        },
+        "Policy": ""
+      }
+    },
+    "ApiGatewayResourceHealth": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "ApiGatewayRestApi",
+            "RootResourceId"
+          ]
+        },
+        "PathPart": "health",
+        "RestApiId": {
+          "Ref": "ApiGatewayRestApi"
+        }
+      }
+    },
+    "ApiGatewayResourceUsers": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "ApiGatewayRestApi",
+            "RootResourceId"
+          ]
+        },
+        "PathPart": "users",
+        "RestApiId": {
+          "Ref": "ApiGatewayRestApi"
+        }
+      }
+    },
+    "ApiGatewayResourceOrders": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "ApiGatewayRestApi",
+            "RootResourceId"
+          ]
+        },
+        "PathPart": "orders",
+        "RestApiId": {
+          "Ref": "ApiGatewayRestApi"
+        }
+      }
+    },
+    "ApiGatewayResourceUploads": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "ParentId": {
+          "Fn::GetAtt": [
+            "ApiGatewayRestApi",
+            "RootResourceId"
+          ]
+        },
+        "PathPart": "uploads",
+        "RestApiId": {
+          "Ref": "ApiGatewayRestApi"
+        }
+      }
+    },
+    "ApiGatewayMethodHealthGet": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "HttpMethod": "GET",
+        "RequestParameters": {},
+        "ResourceId": {
+          "Ref": "ApiGatewayResourceHealth"
+        },
+        "RestApiId": {
+          "Ref": "ApiGatewayRestApi"
+        },
+        "ApiKeyRequired": false,
+        "AuthorizationType": "NONE",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":apigateway:",
+                {
+                  "Ref": "AWS::Region"
+                },
+                ":lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "HealthLambdaFunction",
+                    "Arn"
+                  ]
+                },
+                "/invocations"
+              ]
+            ]
+          }
+        },
+        "MethodResponses": []
+      },
+      "DependsOn": [
+        "HealthLambdaPermissionApiGateway"
+      ]
+    },
+    "ApiGatewayMethodUsersPost": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "HttpMethod": "POST",
+        "RequestParameters": {},
+        "ResourceId": {
+          "Ref": "ApiGatewayResourceUsers"
+        },
+        "RestApiId": {
+          "Ref": "ApiGatewayRestApi"
+        },
+        "ApiKeyRequired": false,
+        "AuthorizationType": "NONE",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":apigateway:",
+                {
+                  "Ref": "AWS::Region"
+                },
+                ":lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "CreateUserLambdaFunction",
+                    "Arn"
+                  ]
+                },
+                "/invocations"
+              ]
+            ]
+          }
+        },
+        "MethodResponses": []
+      },
+      "DependsOn": [
+        "CreateUserLambdaPermissionApiGateway"
+      ]
+    },
+    "ApiGatewayMethodUsersGet": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "HttpMethod": "GET",
+        "RequestParameters": {},
+        "ResourceId": {
+          "Ref": "ApiGatewayResourceUsers"
+        },
+        "RestApiId": {
+          "Ref": "ApiGatewayRestApi"
+        },
+        "ApiKeyRequired": false,
+        "AuthorizationType": "NONE",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":apigateway:",
+                {
+                  "Ref": "AWS::Region"
+                },
+                ":lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "ListUsersLambdaFunction",
+                    "Arn"
+                  ]
+                },
+                "/invocations"
+              ]
+            ]
+          }
+        },
+        "MethodResponses": []
+      },
+      "DependsOn": [
+        "ListUsersLambdaPermissionApiGateway"
+      ]
+    },
+    "ApiGatewayMethodOrdersPost": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "HttpMethod": "POST",
+        "RequestParameters": {},
+        "ResourceId": {
+          "Ref": "ApiGatewayResourceOrders"
+        },
+        "RestApiId": {
+          "Ref": "ApiGatewayRestApi"
+        },
+        "ApiKeyRequired": false,
+        "AuthorizationType": "NONE",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":apigateway:",
+                {
+                  "Ref": "AWS::Region"
+                },
+                ":lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "EnqueueOrderLambdaFunction",
+                    "Arn"
+                  ]
+                },
+                "/invocations"
+              ]
+            ]
+          }
+        },
+        "MethodResponses": []
+      },
+      "DependsOn": [
+        "EnqueueOrderLambdaPermissionApiGateway"
+      ]
+    },
+    "ApiGatewayMethodUploadsPost": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "HttpMethod": "POST",
+        "RequestParameters": {},
+        "ResourceId": {
+          "Ref": "ApiGatewayResourceUploads"
+        },
+        "RestApiId": {
+          "Ref": "ApiGatewayRestApi"
+        },
+        "ApiKeyRequired": false,
+        "AuthorizationType": "NONE",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":apigateway:",
+                {
+                  "Ref": "AWS::Region"
+                },
+                ":lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "UploadFileLambdaFunction",
+                    "Arn"
+                  ]
+                },
+                "/invocations"
+              ]
+            ]
+          }
+        },
+        "MethodResponses": []
+      },
+      "DependsOn": [
+        "UploadFileLambdaPermissionApiGateway"
+      ]
+    },
+    "ApiGatewayMethodUploadsGet": {
+      "Type": "AWS::ApiGateway::Method",
+      "Properties": {
+        "HttpMethod": "GET",
+        "RequestParameters": {},
+        "ResourceId": {
+          "Ref": "ApiGatewayResourceUploads"
+        },
+        "RestApiId": {
+          "Ref": "ApiGatewayRestApi"
+        },
+        "ApiKeyRequired": false,
+        "AuthorizationType": "NONE",
+        "Integration": {
+          "IntegrationHttpMethod": "POST",
+          "Type": "AWS_PROXY",
+          "Uri": {
+            "Fn::Join": [
+              "",
+              [
+                "arn:",
+                {
+                  "Ref": "AWS::Partition"
+                },
+                ":apigateway:",
+                {
+                  "Ref": "AWS::Region"
+                },
+                ":lambda:path/2015-03-31/functions/",
+                {
+                  "Fn::GetAtt": [
+                    "ListUploadsLambdaFunction",
+                    "Arn"
+                  ]
+                },
+                "/invocations"
+              ]
+            ]
+          }
+        },
+        "MethodResponses": []
+      },
+      "DependsOn": [
+        "ListUploadsLambdaPermissionApiGateway"
+      ]
+    },
+    "ApiGatewayDeployment1779328129045": {
+      "Type": "AWS::ApiGateway::Deployment",
+      "Properties": {
+        "RestApiId": {
+          "Ref": "ApiGatewayRestApi"
+        },
+        "StageName": "dev"
+      },
+      "DependsOn": [
+        "ApiGatewayMethodHealthGet",
+        "ApiGatewayMethodUsersPost",
+        "ApiGatewayMethodUsersGet",
+        "ApiGatewayMethodOrdersPost",
+        "ApiGatewayMethodUploadsPost",
+        "ApiGatewayMethodUploadsGet"
+      ]
+    },
+    "HealthLambdaPermissionApiGateway": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "HealthLambdaFunction",
+            "Arn"
+          ]
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:",
+              {
+                "Ref": "AWS::Region"
+              },
+              ":",
+              {
+                "Ref": "AWS::AccountId"
+              },
+              ":",
+              {
+                "Ref": "ApiGatewayRestApi"
+              },
+              "/*/*"
+            ]
+          ]
+        }
+      }
+    },
+    "CreateUserLambdaPermissionApiGateway": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "CreateUserLambdaFunction",
+            "Arn"
+          ]
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:",
+              {
+                "Ref": "AWS::Region"
+              },
+              ":",
+              {
+                "Ref": "AWS::AccountId"
+              },
+              ":",
+              {
+                "Ref": "ApiGatewayRestApi"
+              },
+              "/*/*"
+            ]
+          ]
+        }
+      }
+    },
+    "ListUsersLambdaPermissionApiGateway": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "ListUsersLambdaFunction",
+            "Arn"
+          ]
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:",
+              {
+                "Ref": "AWS::Region"
+              },
+              ":",
+              {
+                "Ref": "AWS::AccountId"
+              },
+              ":",
+              {
+                "Ref": "ApiGatewayRestApi"
+              },
+              "/*/*"
+            ]
+          ]
+        }
+      }
+    },
+    "EnqueueOrderLambdaPermissionApiGateway": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "EnqueueOrderLambdaFunction",
+            "Arn"
+          ]
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:",
+              {
+                "Ref": "AWS::Region"
+              },
+              ":",
+              {
+                "Ref": "AWS::AccountId"
+              },
+              ":",
+              {
+                "Ref": "ApiGatewayRestApi"
+              },
+              "/*/*"
+            ]
+          ]
+        }
+      }
+    },
+    "UploadFileLambdaPermissionApiGateway": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "UploadFileLambdaFunction",
+            "Arn"
+          ]
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:",
+              {
+                "Ref": "AWS::Region"
+              },
+              ":",
+              {
+                "Ref": "AWS::AccountId"
+              },
+              ":",
+              {
+                "Ref": "ApiGatewayRestApi"
+              },
+              "/*/*"
+            ]
+          ]
+        }
+      }
+    },
+    "ListUploadsLambdaPermissionApiGateway": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "ListUploadsLambdaFunction",
+            "Arn"
+          ]
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": {
+          "Fn::Join": [
+            "",
+            [
+              "arn:",
+              {
+                "Ref": "AWS::Partition"
+              },
+              ":execute-api:",
+              {
+                "Ref": "AWS::Region"
+              },
+              ":",
+              {
+                "Ref": "AWS::AccountId"
+              },
+              ":",
+              {
+                "Ref": "ApiGatewayRestApi"
+              },
+              "/*/*"
+            ]
+          ]
+        }
+      }
+    },
+    "OnOrderStreamEventSourceMappingDynamodbOrdersTable": {
+      "Type": "AWS::Lambda::EventSourceMapping",
+      "DependsOn": [
+        "IamRoleLambdaExecution"
+      ],
+      "Properties": {
+        "BatchSize": 10,
+        "Enabled": true,
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "OrdersTable",
+            "StreamArn"
+          ]
+        },
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "OnOrderStreamLambdaFunction",
+            "Arn"
+          ]
+        },
+        "StartingPosition": "TRIM_HORIZON"
+      }
+    },
+    "ProcessOrderQueueEventSourceMappingSQSOrderProcessingQueue": {
+      "Type": "AWS::Lambda::EventSourceMapping",
+      "DependsOn": [
+        "IamRoleLambdaExecution"
+      ],
+      "Properties": {
+        "BatchSize": 5,
+        "EventSourceArn": {
+          "Fn::GetAtt": [
+            "OrderProcessingQueue",
+            "Arn"
+          ]
+        },
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "ProcessOrderQueueLambdaFunction",
+            "Arn"
+          ]
+        },
+        "Enabled": true
+      }
+    },
+    "UsersTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": "sample-microservice-Users",
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "userId",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "userId",
+            "KeyType": "HASH"
+          }
+        ]
+      }
+    },
+    "SessionsTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": "sample-microservice-Sessions",
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "sessionId",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "sessionId",
+            "KeyType": "HASH"
+          }
+        ]
+      }
+    },
+    "OrdersTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": "sample-microservice-Orders",
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "userId",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "orderId",
+            "AttributeType": "S"
+          },
+          {
+            "AttributeName": "status",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "userId",
+            "KeyType": "HASH"
+          },
+          {
+            "AttributeName": "orderId",
+            "KeyType": "RANGE"
+          }
+        ],
+        "GlobalSecondaryIndexes": [
+          {
+            "IndexName": "ByStatus",
+            "KeySchema": [
+              {
+                "AttributeName": "status",
+                "KeyType": "HASH"
+              },
+              {
+                "AttributeName": "orderId",
+                "KeyType": "RANGE"
+              }
+            ],
+            "Projection": {
+              "ProjectionType": "ALL"
+            }
+          }
+        ],
+        "StreamSpecification": {
+          "StreamViewType": "NEW_AND_OLD_IMAGES"
+        }
+      }
+    },
+    "OrderProcessingQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "QueueName": "sample-microservice-OrderProcessing",
+        "VisibilityTimeout": 60,
+        "MessageRetentionPeriod": 345600
+      }
+    },
+    "OrderEventsTopic": {
+      "Type": "AWS::SNS::Topic",
+      "Properties": {
+        "TopicName": "sample-microservice-OrderEvents"
+      }
+    },
+    "UploadsBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": "sample-microservice-uploads",
+        "NotificationConfiguration": {
+          "LambdaConfigurations": [
+            {
+              "Event": "s3:ObjectCreated:*",
+              "Function": {
+                "Fn::GetAtt": [
+                  "OnUploadLambdaFunction",
+                  "Arn"
+                ]
+              },
+              "Filter": {
+                "S3Key": {
+                  "Rules": [
+                    {
+                      "Name": "prefix",
+                      "Value": "incoming/"
+                    }
+                  ]
+                }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "Outputs": {
+    "ServerlessDeploymentBucketName": {
+      "Value": {
+        "Ref": "ServerlessDeploymentBucket"
+      },
+      "Export": {
+        "Name": "sls-sample-microservice-dev-ServerlessDeploymentBucketName"
+      }
+    },
+    "HealthLambdaFunctionQualifiedArn": {
+      "Description": "Current Lambda function version",
+      "Value": {
+        "Ref": "HealthLambdaVersiondYovxU1DWi2LQDqKH9BnfccShz4u6vRHj6LQqeuaWE"
+      },
+      "Export": {
+        "Name": "sls-sample-microservice-dev-HealthLambdaFunctionQualifiedArn"
+      }
+    },
+    "CreateUserLambdaFunctionQualifiedArn": {
+      "Description": "Current Lambda function version",
+      "Value": {
+        "Ref": "CreateUserLambdaVersionGunjAAu4Cw6NioFA63dhZYG2Aztc3zd5xrPLIDEsiM"
+      },
+      "Export": {
+        "Name": "sls-sample-microservice-dev-CreateUserLambdaFunctionQualifiedArn"
+      }
+    },
+    "ListUsersLambdaFunctionQualifiedArn": {
+      "Description": "Current Lambda function version",
+      "Value": {
+        "Ref": "ListUsersLambdaVersionQfFmmTAw1OWBhxVwu6CK5qy49U1XiteZp0jdrE00CY"
+      },
+      "Export": {
+        "Name": "sls-sample-microservice-dev-ListUsersLambdaFunctionQualifiedArn"
+      }
+    },
+    "EnqueueOrderLambdaFunctionQualifiedArn": {
+      "Description": "Current Lambda function version",
+      "Value": {
+        "Ref": "EnqueueOrderLambdaVersion2BeDbBvcM3WgSxCc6CZyP8mhIo7UJUSw1whREk1gg"
+      },
+      "Export": {
+        "Name": "sls-sample-microservice-dev-EnqueueOrderLambdaFunctionQualifiedArn"
+      }
+    },
+    "ProcessOrderQueueLambdaFunctionQualifiedArn": {
+      "Description": "Current Lambda function version",
+      "Value": {
+        "Ref": "ProcessOrderQueueLambdaVersionQmujbti3Ultsp9xNbfhV0xTkIRuGArjX4e99tmp4"
+      },
+      "Export": {
+        "Name": "sls-sample-microservice-dev-ProcessOrderQueueLambdaFunctionQualifiedArn"
+      }
+    },
+    "OnOrderStreamLambdaFunctionQualifiedArn": {
+      "Description": "Current Lambda function version",
+      "Value": {
+        "Ref": "OnOrderStreamLambdaVersionPFXTgk3UMMespWvAnoVqzea1vPVREwjASGN0Ziu4"
+      },
+      "Export": {
+        "Name": "sls-sample-microservice-dev-OnOrderStreamLambdaFunctionQualifiedArn"
+      }
+    },
+    "UploadFileLambdaFunctionQualifiedArn": {
+      "Description": "Current Lambda function version",
+      "Value": {
+        "Ref": "UploadFileLambdaVersionxFFGQnChTeoZiQZ1bTVYemMpbmdvViVmw0bY53cYA"
+      },
+      "Export": {
+        "Name": "sls-sample-microservice-dev-UploadFileLambdaFunctionQualifiedArn"
+      }
+    },
+    "ListUploadsLambdaFunctionQualifiedArn": {
+      "Description": "Current Lambda function version",
+      "Value": {
+        "Ref": "ListUploadsLambdaVersionTbBkryFUz8e5QMeLbqCSOQEADqGVFhKchNFOeizbE"
+      },
+      "Export": {
+        "Name": "sls-sample-microservice-dev-ListUploadsLambdaFunctionQualifiedArn"
+      }
+    },
+    "OnUploadLambdaFunctionQualifiedArn": {
+      "Description": "Current Lambda function version",
+      "Value": {
+        "Ref": "OnUploadLambdaVersionQh8eg1nm8tGC5ZlRDxAD0yCHCjHH4w1NaUBApqXreg"
+      },
+      "Export": {
+        "Name": "sls-sample-microservice-dev-OnUploadLambdaFunctionQualifiedArn"
+      }
+    },
+    "ServiceEndpoint": {
+      "Description": "URL of the service endpoint",
+      "Value": {
+        "Fn::Join": [
+          "",
+          [
+            "https://",
+            {
+              "Ref": "ApiGatewayRestApi"
+            },
+            ".execute-api.",
+            {
+              "Ref": "AWS::Region"
+            },
+            ".",
+            {
+              "Ref": "AWS::URLSuffix"
+            },
+            "/dev"
+          ]
+        ]
+      },
+      "Export": {
+        "Name": "sls-sample-microservice-dev-ServiceEndpoint"
+      }
+    }
+  }
+}

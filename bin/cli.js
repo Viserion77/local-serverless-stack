@@ -11,10 +11,24 @@ const os = require('os');
 const DEFAULT_PID_FILE = path.join(os.tmpdir(), 'lss-orchestrator.pid');
 const DEFAULT_LOG_FILE = path.join(os.tmpdir(), 'lss-orchestrator.log');
 
-// PID/log file paths scoped to the cwd's serverPort. Multiple examples sitting
-// in different folders no longer trample each other.
+// PID/log file paths for the instance addressed by this invocation.
+//   - When the config provides a `stateDir`, PID/log live inside it. This gives
+//     an explicitly isolated instance (e.g. an e2e test stack) its own state so
+//     `lss stop --config <path>` targets it and never the dev instance.
+//   - Otherwise the paths are scoped to the cwd's serverPort, so multiple
+//     examples sitting in different folders don't trample each other.
 function runtimePaths() {
   const cfg = getConfig(loadConfig());
+
+  if (cfg.stateDir) {
+    const dir = path.resolve(process.cwd(), cfg.stateDir);
+    fs.mkdirSync(dir, { recursive: true });
+    return {
+      pidFile: path.join(dir, 'orchestrator.pid'),
+      logFile: path.join(dir, 'orchestrator.log'),
+    };
+  }
+
   const port = cfg.serverPort;
   // Keep the legacy global path when the default port is in use so existing
   // installations don't lose their running process across an upgrade.
@@ -28,9 +42,24 @@ function runtimePaths() {
 }
 
 /**
- * Load configuration from lss.config.json or .lssrc
+ * Load configuration. An explicit `--config <path>` (or LSS_CONFIG env) wins over
+ * the cwd/home search so an isolated instance can point at its own config file.
+ * A missing or unparseable explicit file warns and falls back to the search,
+ * rather than hard-exiting, so stop/status/logs never orphan a running instance.
  */
 function loadConfig() {
+  if (EXPLICIT_CONFIG) {
+    if (fs.existsSync(EXPLICIT_CONFIG)) {
+      try {
+        return JSON.parse(fs.readFileSync(EXPLICIT_CONFIG, 'utf-8'));
+      } catch (error) {
+        console.warn(`⚠️  Failed to parse config file ${EXPLICIT_CONFIG}`);
+      }
+    } else {
+      console.warn(`⚠️  Config file not found: ${EXPLICIT_CONFIG}`);
+    }
+  }
+
   const candidates = [
     path.join(process.cwd(), 'lss.config.json'),
     path.join(process.cwd(), '.lssrc'),
@@ -66,6 +95,7 @@ function getConfig(config) {
     localstackVersion: config.localstackVersion || 'latest',
     localstackImage: config.localstackImage,
     localstackAuthToken: config.localstackAuthToken,
+    stateDir: config.stateDir,
   };
 }
 
@@ -78,6 +108,15 @@ function getArgValue(name) {
   const inline = process.argv.find(a => a.startsWith(prefix));
   return inline ? inline.slice(prefix.length) : undefined;
 }
+
+// Resolved once per invocation: an explicit config file from `--config <path>`
+// (or the LSS_CONFIG env var), resolved to an absolute path so it's found
+// regardless of cwd. Every argument-less loadConfig() call honors it because
+// process.argv is fixed for the lifetime of the invocation.
+const EXPLICIT_CONFIG = (() => {
+  const v = getArgValue('--config') || process.env.LSS_CONFIG;
+  return v ? path.resolve(v) : undefined;
+})();
 
 // Resolve orchestrator path - works both in development and when installed via npm
 function getOrchestratorPath() {
@@ -151,24 +190,30 @@ function startOrchestrator() {
 
   // Build environment variables from config
   const env = { ...process.env };
+  /* istanbul ignore else: getConfig() always defaults serverPort to 3100, so the else is unreachable */
   if (cfg.serverPort) {
     env.PORT = cfg.serverPort;
   }
+  /* istanbul ignore else: getConfig() always defaults localstackPort to 4566, so the else is unreachable */
   if (cfg.localstackPort) {
     env.LSS_LOCALSTACK_PORT = cfg.localstackPort;
   }
   if (enableDynamoProxy) {
     env.LSS_ENABLE_DYNAMO_PROXY = 'true';
   }
+  /* istanbul ignore else: getConfig() always defaults dynamoProxyPort to 8000, so the else is unreachable */
   if (cfg.dynamoProxyPort) {
     env.LSS_DYNAMO_PROXY_PORT = cfg.dynamoProxyPort;
   }
+  /* istanbul ignore else: mode resolves to cfg.mode which getConfig() defaults to 'managed', so the else is unreachable */
   if (mode) {
     env.LSS_LOCALSTACK_MODE = mode;
   }
+  /* istanbul ignore else: edition resolves to localstackEdition which getConfig() defaults to 'community', so the else is unreachable */
   if (edition) {
     env.LSS_LOCALSTACK_EDITION = edition;
   }
+  /* istanbul ignore else: getConfig() always defaults localstackVersion to 'latest', so the else is unreachable */
   if (cfg.localstackVersion) {
     env.LSS_LOCALSTACK_VERSION = cfg.localstackVersion;
   }
@@ -178,7 +223,13 @@ function startOrchestrator() {
   if (authToken) {
     env.LOCALSTACK_AUTH_TOKEN = authToken;
   }
-  
+  // Hand the same config file to the server so its ConfigManager reads the
+  // identical serverPort/localstackPort/seedsDir/region/mode (not just the
+  // hand-translated subset above). Keeps the two config loaders in agreement.
+  if (EXPLICIT_CONFIG) {
+    env.LSS_CONFIG_PATH = EXPLICIT_CONFIG;
+  }
+
   const child = spawn('node', [orchestratorPath], {
     detached: true,
     stdio: ['ignore', logFd, logFd],
@@ -543,6 +594,9 @@ Commands:
   help               Show this help message
 
 Options:
+  --config <path>              Load config from this file (precedes the cwd/home search).
+                               Applies to start/stop/status/logs so an isolated instance
+                               can be addressed without cd-ing into its folder.
   --enable-dynamo-proxy        Enable DynamoDB proxy on port 8000 (for start command)
   --external                   Connect to a LocalStack already running, do not spawn a container
   --pro                        Use the LocalStack Pro image (requires LOCALSTACK_AUTH_TOKEN)
@@ -567,8 +621,13 @@ Configuration:
     "region": "us-east-1",
     "services": ["dynamodb", "sqs", "sns", "lambda"],
     "persistence": true,
-    "debug": false
+    "debug": false,
+    "stateDir": ".lss"
   }
+
+  stateDir (optional): directory for this instance's PID/log files. Set it (e.g.
+  ".lss-e2e") together with --config to run a fully isolated instance alongside
+  the dev one. When omitted, PID/log live in the OS temp dir scoped by serverPort.
 
   For the Serverless Plugin, add to serverless.yml:
   custom:
@@ -607,8 +666,6 @@ function showLogs() {
   console.log(lastLines);
 }
 
-const command = process.argv[2];
-
 // First positional arg after the command (e.g. table name for `seed`/`seed:clear`).
 // Skip anything that looks like a flag so `seed:clear --yes` doesn't pass
 // "--yes" as the table name.
@@ -620,32 +677,66 @@ function firstPositional() {
   return undefined;
 }
 
-switch (command) {
-  case 'start':
-    startOrchestrator();
-    break;
-  case 'stop':
-    stopOrchestrator();
-    break;
-  case 'status':
-    showStatus();
-    break;
-  case 'logs':
-    showLogs();
-    break;
-  case 'seed':
-    runSeed(firstPositional());
-    break;
-  case 'seed:clear':
-    clearSeed(firstPositional());
-    break;
-  case 'help':
-  case '--help':
-  case '-h':
-    showHelp();
-    break;
-  default:
-    console.log('❌ Unknown command:', command);
-    showHelp();
-    process.exit(1);
+// Exported so the pure/in-process helpers can be unit-tested by requiring this
+// module. The command dispatch below only runs when the file is executed
+// directly (the `lss` bin), never when required, so requiring it has no side
+// effects.
+module.exports = {
+  loadConfig,
+  getConfig,
+  getArgValue,
+  runtimePaths,
+  getOrchestratorPath,
+  formatError,
+  buildHttpError,
+  firstPositional,
+  getServerPort,
+  printSeedRunResults,
+  printSeedMismatchDiagnostic,
+  printSeedClearResults,
+  getJson,
+  postJson,
+  ensureRunningOrExit,
+  promptConfirmation,
+  startOrchestrator,
+  stopOrchestrator,
+  showStatus,
+  showLogs,
+  runSeed,
+  clearSeed,
+  showHelp,
+};
+
+/* istanbul ignore next: CLI dispatch runs only when executed directly, not when required in tests */
+if (require.main === module) {
+  const command = process.argv[2];
+  switch (command) {
+    case 'start':
+      startOrchestrator();
+      break;
+    case 'stop':
+      stopOrchestrator();
+      break;
+    case 'status':
+      showStatus();
+      break;
+    case 'logs':
+      showLogs();
+      break;
+    case 'seed':
+      runSeed(firstPositional());
+      break;
+    case 'seed:clear':
+      clearSeed(firstPositional());
+      break;
+    case 'help':
+    case '--help':
+    case '-h':
+      showHelp();
+      break;
+    default:
+      console.log('❌ Unknown command:', command);
+      showHelp();
+      process.exit(1);
+  }
 }

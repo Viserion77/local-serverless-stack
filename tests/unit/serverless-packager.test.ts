@@ -65,4 +65,44 @@ describe('runServerlessPackage', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('foo|bar baz|qux');
   });
+
+  it('rejects when the command is empty (regex match returns null)', async () => {
+    await expect(
+      runServerlessPackage({ command: '', cwd }),
+    ).rejects.toThrow('Empty package command');
+  });
+
+  it('rejects when the command is whitespace only', async () => {
+    await expect(
+      runServerlessPackage({ command: '   ', cwd }),
+    ).rejects.toThrow('Empty package command');
+  });
+
+  it('passes env vars through to the spawned process', async () => {
+    const result = await runServerlessPackage({
+      command: 'node -e "process.stdout.write(process.env.LSS_TEST_VAR || \'missing\')"',
+      cwd,
+      env: { LSS_TEST_VAR: 'passed-through' },
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('passed-through');
+  });
+
+  it('escalates to SIGKILL when the process ignores SIGTERM on timeout', async () => {
+    expect.assertions(2);
+    try {
+      await runServerlessPackage({
+        // Trap SIGTERM so the initial kill is ignored, forcing the
+        // 2s SIGKILL fallback timer to fire.
+        command:
+          'node -e "process.on(\'SIGTERM\', () => {}); setInterval(() => {}, 1000)"',
+        cwd,
+        timeoutMs: 200,
+      });
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServerlessPackageError);
+      expect((err as ServerlessPackageError).message).toMatch(/timed out/);
+    }
+  }, 15000);
 });
