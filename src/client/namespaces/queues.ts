@@ -37,7 +37,7 @@ export function createQueuesApi(http: Http, defaultRegion?: string): QueuesApi {
       http.json('POST', `${base(name)}/await-idle`, {
         body: input ?? {},
         query: { region: reg(r) },
-        okStatuses: [200, 408],
+        okStatuses: [408], // additive to 2xx: 200 = drained, 408 = timed out (inspect `drained`)
       }),
     hold: (name, r) => http.json('POST', `${base(name)}/hold`, { query: { region: reg(r) } }),
     captured: (name, r) => http.json('GET', `${base(name)}/captured`, { query: { region: reg(r) } }),

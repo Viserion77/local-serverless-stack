@@ -259,6 +259,13 @@ describe('client data-plane — error mapping', () => {
     await expect(c().queues.awaitIdle('q')).rejects.toThrow('queue blew up');
   });
 
+  it('treats a 2xx as success even when okStatuses is set (additive, not replacing)', async () => {
+    // awaitIdle passes okStatuses:[408]; a normal 200 must still succeed.
+    responder = () => ({ status: 200, body: JSON.stringify({ queue: 'q', available: 0, inFlight: 0, processed: 1, drained: true }) });
+    const res = await c().queues.awaitIdle('q');
+    expect(res.drained).toBe(true);
+  });
+
   it('maps a timeout to a clear error', async () => {
     responder = () => ({ status: 200, hang: true });
     const client = new LssClient({ baseUrl, timeoutMs: 40 });

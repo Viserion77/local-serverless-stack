@@ -49,8 +49,10 @@ function buildQuery(query?: Record<string, QueryValue>): string {
 }
 
 function isOk(status: number, okStatuses?: number[]): boolean {
-  if (okStatuses) return okStatuses.includes(status);
-  return status >= 200 && status < 300;
+  // okStatuses is ADDITIVE to the 2xx range, not a replacement — so passing
+  // e.g. [408] still treats a normal 200 as success.
+  if (status >= 200 && status < 300) return true;
+  return okStatuses ? okStatuses.includes(status) : false;
 }
 
 function httpError(status: number, statusText: string, data: string, path: string): LssHttpError {

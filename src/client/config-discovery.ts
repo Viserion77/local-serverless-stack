@@ -47,7 +47,10 @@ function resolveBaseUrl(options: LssClientOptions, configPath: string | undefine
   const host = options.host ?? 'localhost';
   let port = options.port;
   if (port === undefined && process.env.LSS_SERVER_PORT) {
-    port = parseInt(process.env.LSS_SERVER_PORT, 10);
+    // Strict parse + validation: a non-numeric/zero/negative env value falls
+    // through to the config file / default rather than yielding "http://host:NaN".
+    const parsed = Number(process.env.LSS_SERVER_PORT);
+    if (Number.isInteger(parsed) && parsed > 0) port = parsed;
   }
   if (port === undefined) {
     port = readServerPortFromConfig(configPath, cwd);

@@ -50,6 +50,16 @@ describe('client config-discovery — resolveConfig', () => {
       expect(resolveConfig().baseUrl).toBe('http://localhost:7777');
     });
 
+    it('ignores a non-numeric LSS_SERVER_PORT and falls back to the default', () => {
+      process.env.LSS_SERVER_PORT = 'not-a-port';
+      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:3100');
+    });
+
+    it('ignores a non-positive LSS_SERVER_PORT and falls back to the default', () => {
+      process.env.LSS_SERVER_PORT = '0';
+      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:3100');
+    });
+
     it('reads serverPort from an explicit configPath', () => {
       const cfg = path.join(tmp, 'my.config.json');
       fs.writeFileSync(cfg, JSON.stringify({ serverPort: 8888 }));
