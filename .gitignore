@@ -26,6 +26,7 @@ Thumbs.db
 coverage/
 .nyc_output/
 tests/.lss-integration/
+tests/.lss-client-integration/
 
 # Cache
 .cache/
