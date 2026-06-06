@@ -1,11 +1,27 @@
 {
   "name": "local-serverless-stack",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Local control plane for serverless development with LocalStack orchestration",
   "author": "LSS Contributors",
   "license": "MIT",
   "bin": {
     "lss": "./bin/cli.js"
+  },
+  "main": "dist/client/index.js",
+  "types": "dist/client/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/client/index.d.ts",
+      "require": "./dist/client/index.js",
+      "import": "./dist/client/index.js",
+      "default": "./dist/client/index.js"
+    },
+    "./client": {
+      "types": "./dist/client/index.d.ts",
+      "default": "./dist/client/index.js"
+    },
+    "./bin/cli.js": "./bin/cli.js",
+    "./package.json": "./package.json"
   },
   "keywords": [
     "serverless",
@@ -29,9 +45,10 @@
     "src/ui"
   ],
   "scripts": {
-    "build": "npm run ui:build && npm run server:build && npm run plugin:build",
+    "build": "npm run ui:build && npm run server:build && npm run client:build && npm run plugin:build",
     "server:dev": "tsx watch src/server/index.ts",
     "server:build": "tsc --project src/server/tsconfig.json",
+    "client:build": "tsc --project src/client/tsconfig.json",
     "ui:dev": "cd src/ui && npm run dev",
     "ui:build": "cd src/ui && npm run build",
     "plugin:build": "npm run build -w packages/serverless-plugin",

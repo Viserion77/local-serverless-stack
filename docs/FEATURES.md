@@ -95,6 +95,24 @@ tools that expect DynamoDB on the standard port. Asserted by: unit (`dev/dynamo-
 surfaces Overview / Services / Queues / DynamoDB / S3 with a region selector and theme toggle (UI is exercised
 manually, not in the automated suites).
 
+## 11. Programmatic client (`LssClient`)
+
+Everything the CLI/orchestrator exposes, importable for Jest e2e at runtime instead of shelling out to `npx lss`:
+`import { LssClient } from 'local-serverless-stack'`. The data-plane (`seeds`, `queues`, `dynamo`, `buckets`,
+`resources`, `services`, `config`, `health`) is HTTP against the running orchestrator; `lifecycle`
+(`start`/`stop`/`status`/`logs`) shells out to `bin/cli.js`, and `lifecycle.waitUntilReady()` polls `/api/health`
+until LocalStack is up. The constructor resolves the target from options → env (`LSS_CONFIG`, `LSS_BASE_URL`,
+`LSS_SERVER_PORT`, `AWS_REGION`) → config file, so `new LssClient()` works purely from the environment. Shipped as
+a self-contained CommonJS build (`dist/client`, package `main`/`exports`). Asserted by: unit (`client/*`) +
+integration (`features.test.ts` "programmatic client" block).
+
+| Endpoint | Promise | Asserted by |
+|---|---|---|
+| `seeds.run` / `seeds.clear` / `seeds.list` | Same as `lss seed` / `lss seed:clear`, returning the raw `results`. | unit + integration |
+| `queues.awaitIdle` | Resolves on both 200 (drained) and 408 (timeout) — inspect `drained`. | unit + integration |
+| `buckets.getObject` | Returns the raw object body as a `Buffer` (not JSON). | unit + integration |
+| `lifecycle.*` | Programmatic `start`/`stop`/`status`/`logs` + `waitUntilReady` health gate. | unit + integration |
+
 ---
 
 ### How the integration suite boots

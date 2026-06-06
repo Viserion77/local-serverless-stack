@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.0] - 2026-06-06
+
+Programmatic client (`LssClient`) so downstream Jest e2e suites can drive everything the `lss` CLI does at runtime via `import`, instead of shelling out to `npx lss` per step.
+
+### Added
+- **Programmatic client `LssClient`** (`import { LssClient } from 'local-serverless-stack'`): everything the `lss` CLI/orchestrator exposes, callable from Jest at runtime instead of spawning `npx lss` per step. The data-plane is a thin typed HTTP wrapper over the orchestrator's `/api/*` endpoints, grouped into namespaces — `seeds` (`run`/`clear`/`list`), `queues` (incl. `awaitIdle`, `hold`/`captured`/`release`, `send`/`receive`/`purge`), `dynamo` (tables/scan/query/item CRUD/TTL), `buckets` (S3 list/objects/`getObject` as a `Buffer`/put/delete), `resources`, `services`, `config`, `health` — plus a `request()` escape hatch. `lifecycle` (`start`/`stop`/`status`/`logs`) shells out to the battle-tested `bin/cli.js` (so PID/`stateDir` logic is reused, not duplicated), and `lifecycle.waitUntilReady()` polls `GET /api/health` until LocalStack is actually up (the CLI returns before that). The constructor resolves its target from options → env (`LSS_CONFIG`, `LSS_BASE_URL`, `LSS_SERVER_PORT`, `AWS_REGION`) → `lss.config.json`/`.lssrc`, so `new LssClient()` works purely from the environment or `new LssClient({ configPath })` from an explicit file. Quirks handled for callers: `queues.awaitIdle` resolves on both `200` (drained) and `408` (timeout) rather than throwing, and `buckets.getObject` returns the raw binary body. Errors throw an `LssHttpError` carrying `{ status, statusText, body, path }` and the orchestrator's own `{error|message}`.
+- **Package now ships a library entry point**: added `main`/`types`/`exports` to `package.json` pointing at a self-contained CommonJS build at `dist/client` (mirrors the `serverless-lss` plugin's CJS build so consumers on CJS or ESM can `import`/`require` it). New `client:build` (`tsc --project src/client/tsconfig.json`) wired into `npm run build`. Importable as `local-serverless-stack` or `local-serverless-stack/client`.
+
+### Tests
+- **100% coverage extended to `src/client/**`**: stub-HTTP-server unit tests assert every namespace method maps to the right route/query/body and cover the full error-mapping matrix (`{error}`/`{message}`/snippet/empty/over-long/non-JSON, timeout, connection refused); lifecycle is driven against a fake CLI fixture (`tests/fixtures/fake-cli.js`) via the `LSS_CLI_PATH` seam plus `waitUntilReady` polling. The integration suite (`features.test.ts`) gained a "programmatic client" block that drives the same isolated instance through `LssClient` end-to-end.
+
 ## [0.2.0] - 2026-06-04
 
 Testability features for downstream e2e suites: an isolated test instance and a deterministic queue-drain wait. Plugin `serverless-lss` bumped to `0.1.0` (it gained `LSS_DASHBOARD_PORT` support — install both).

@@ -10,6 +10,7 @@ module.exports = {
     'src/server/services/**/*.ts',
     'src/server/routes/**/*.ts',
     'src/server/dev/**/*.ts',
+    'src/client/**/*.ts',
     'packages/serverless-plugin/src/**/*.ts',
     'bin/cli.js',
     // Integration-only by nature — excluded from the coverage denominator:
