@@ -26,6 +26,10 @@ describe('Quick Smoke Tests', () => {
       expect(fs.existsSync(path.join(ROOT, 'packages/serverless-plugin/dist'))).toBe(true);
     });
 
+    it('should have built programmatic client', () => {
+      expect(fs.existsSync(path.join(ROOT, 'dist/client/index.js'))).toBe(true);
+    });
+
     it('should have CLI script', () => {
       expect(fs.existsSync(path.join(ROOT, 'bin/cli.js'))).toBe(true);
     });

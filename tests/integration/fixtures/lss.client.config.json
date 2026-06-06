@@ -1,0 +1,14 @@
+{
+  "serverPort": 3398,
+  "localstackPort": 4598,
+  "stateDir": "tests/.lss-client-integration",
+  "mode": "managed",
+  "localstackEdition": "community",
+  "services": ["dynamodb", "sqs", "sns", "s3", "lambda"],
+  "persistence": false,
+  "region": "us-east-1",
+  "seedsDir": "examples/sample-microservice/seeds",
+  "autoPackage": true,
+  "packageCommand": "npx serverless package",
+  "packageTimeoutMs": 300000
+}
