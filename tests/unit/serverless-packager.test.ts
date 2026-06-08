@@ -66,6 +66,77 @@ describe('runServerlessPackage', () => {
     expect(result.stdout).toBe('foo|bar baz|qux');
   });
 
+  it('strips inner double quotes in --flag="value" tokens (regression)', async () => {
+    // `--` ends node's own option parsing so the flag reaches the script as argv.
+    const result = await runServerlessPackage({
+      command:
+        'node -e "process.stdout.write(process.argv.slice(1).join(\'|\'))" -- --param="custom-stage=offline"',
+      cwd,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('--param=custom-stage=offline');
+  });
+
+  it('strips inner single quotes in --flag=\'value\' tokens', async () => {
+    const result = await runServerlessPackage({
+      command:
+        "node -e \"process.stdout.write(process.argv.slice(1).join('|'))\" -- --param='custom-stage=offline'",
+      cwd,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('--param=custom-stage=offline');
+  });
+
+  it('preserves spaces inside a quoted segment of a --flag="a b c" token', async () => {
+    const result = await runServerlessPackage({
+      command:
+        'node -e "process.stdout.write(process.argv.slice(1).join(\'|\'))" -- --foo="a b c"',
+      cwd,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('--foo=a b c');
+  });
+
+  it('appends extra args after the parsed command args', async () => {
+    const result = await runServerlessPackage({
+      command: 'node -e "process.stdout.write(process.argv.slice(1).join(\'|\'))" first',
+      args: ['--param=custom-stage=offline', 'second'],
+      cwd,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('first|--param=custom-stage=offline|second');
+  });
+
+  it('treats an empty extra-args array as a no-op', async () => {
+    const result = await runServerlessPackage({
+      command: 'node -e "process.stdout.write(process.argv.slice(1).join(\'|\'))" only',
+      args: [],
+      cwd,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('only');
+  });
+
+  it('includes appended args in the error message on non-zero exit', async () => {
+    expect.assertions(2);
+    try {
+      await runServerlessPackage({
+        command: 'node -e "process.exit(3)"',
+        args: ['--param=custom-stage=offline'],
+        cwd,
+      });
+    } catch (err) {
+      expect(err).toBeInstanceOf(ServerlessPackageError);
+      // The message reflects the actual argv, not just the raw command string.
+      expect((err as ServerlessPackageError).message).toContain('--param=custom-stage=offline');
+    }
+  });
+
   it('rejects when the command is empty (regex match returns null)', async () => {
     await expect(
       runServerlessPackage({ command: '', cwd }),

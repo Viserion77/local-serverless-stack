@@ -91,6 +91,12 @@ beforeEach(() => {
   jest.spyOn(cm, 'isAutoPackage').mockReturnValue(false);
   jest.spyOn(cm, 'getPackageCommand').mockReturnValue('npx serverless package');
   jest.spyOn(cm, 'getPackageTimeoutMs').mockReturnValue(300000);
+  jest.spyOn(cm, 'getPackageConfigForService').mockReturnValue({
+    command: 'npx serverless package',
+    args: [],
+    env: {},
+    timeoutMs: 300000,
+  });
 });
 
 describe('POST /api/services/register', () => {
@@ -195,6 +201,35 @@ describe('POST /api/services/register', () => {
       .send({ servicePath: '/abs/my-service' });
     expect(res.status).toBe(200);
     expect(mockedRunPackage).toHaveBeenCalled();
+  });
+
+  it('threads resolved per-service command/args/env/timeout to runServerlessPackage', async () => {
+    const enoent: NodeJS.ErrnoException = new Error('nope');
+    enoent.code = 'ENOENT';
+    (ConfigManager.getInstance().isAutoPackage as jest.Mock).mockReturnValue(true);
+    (ConfigManager.getInstance().getPackageConfigForService as jest.Mock).mockReturnValue({
+      command: 'npx sls package',
+      args: ['--param=custom-stage=offline'],
+      env: { AWS_ACCESS_KEY_ID: 'test' },
+      timeoutMs: 60000,
+    });
+    mockedFs.readFile
+      .mockRejectedValueOnce(enoent)
+      .mockResolvedValueOnce(JSON.stringify(TEMPLATE));
+    mockedRunPackage.mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
+    const res = await request(appWith())
+      .post('/api/services/register')
+      .send({ servicePath: '/abs/access' });
+    expect(res.status).toBe(200);
+    expect(mockedRunPackage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: 'npx sls package',
+        args: ['--param=custom-stage=offline'],
+        env: { AWS_ACCESS_KEY_ID: 'test' },
+        timeoutMs: 60000,
+        cwd: '/abs/access',
+      }),
+    );
   });
 
   it('auto-packages with empty stdout (skips stdout log branch)', async () => {

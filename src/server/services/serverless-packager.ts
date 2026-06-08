@@ -3,6 +3,10 @@ import { spawn } from 'child_process';
 export interface PackageOptions {
   command: string;
   cwd: string;
+  // Extra args appended AFTER the args parsed from `command`. Passed straight to
+  // spawn(), so they bypass the string parser entirely — values with spaces or
+  // `=` (e.g. `--param=custom-stage=offline`) are delivered intact, no quoting.
+  args?: string[];
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }
@@ -25,7 +29,10 @@ export class ServerlessPackageError extends Error {
 
 function parseCommand(raw: string): { cmd: string; args: string[] } {
   const tokens = raw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
-  const unquoted = tokens.map(t => t.replace(/^['"]|['"]$/g, ''));
+  // Strip quotes per quoted segment within each token, not just one leading +
+  // one trailing quote off the whole token. This keeps `--param="x=y"` intact as
+  // `--param=x=y` (the old logic produced the malformed `--param=x=y"`).
+  const unquoted = tokens.map(t => t.replace(/"([^"]*)"|'([^']*)'/g, '$1$2'));
   if (unquoted.length === 0) {
     throw new Error('Empty package command');
   }
@@ -34,10 +41,14 @@ function parseCommand(raw: string): { cmd: string; args: string[] } {
 
 export async function runServerlessPackage(options: PackageOptions): Promise<PackageResult> {
   const { cmd, args } = parseCommand(options.command);
+  const allArgs = [...args, ...(options.args ?? [])];
+  // Used in error messages so they reflect the actual argv spawned (including any
+  // appended `options.args`), not just the raw command string.
+  const displayCommand = [options.command, ...(options.args ?? [])].join(' ');
   const timeoutMs = options.timeoutMs ?? 300000;
 
   return new Promise<PackageResult>((resolve, reject) => {
-    const proc = spawn(cmd, args, {
+    const proc = spawn(cmd, allArgs, {
       cwd: options.cwd,
       env: { ...process.env, ...options.env },
       stdio: ['ignore', 'pipe', 'pipe'],
@@ -60,7 +71,7 @@ export async function runServerlessPackage(options: PackageOptions): Promise<Pac
     proc.on('error', err => {
       clearTimeout(timer);
       reject(new ServerlessPackageError(
-        `Failed to start package command "${options.command}": ${err.message}`,
+        `Failed to start package command "${displayCommand}": ${err.message}`,
         { exitCode: -1, stdout, stderr },
       ));
     });
@@ -70,7 +81,7 @@ export async function runServerlessPackage(options: PackageOptions): Promise<Pac
       const result: PackageResult = { exitCode: code ?? -1, stdout, stderr };
       if (timedOut) {
         reject(new ServerlessPackageError(
-          `Package command "${options.command}" timed out after ${timeoutMs}ms`,
+          `Package command "${displayCommand}" timed out after ${timeoutMs}ms`,
           result,
         ));
         return;
@@ -80,7 +91,7 @@ export async function runServerlessPackage(options: PackageOptions): Promise<Pac
         return;
       }
       reject(new ServerlessPackageError(
-        `Package command "${options.command}" exited with code ${code}`,
+        `Package command "${displayCommand}" exited with code ${code}`,
         result,
       ));
     });

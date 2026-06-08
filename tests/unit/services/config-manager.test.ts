@@ -501,6 +501,105 @@ describe('getters: branch coverage on config-provided values', () => {
   });
 });
 
+describe('getPackageConfigForService', () => {
+  function cmWith(config: Record<string, unknown>): CM {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify(config));
+    return freshConfigManager();
+  }
+
+  it('returns global defaults when nothing is configured (no config file)', () => {
+    // No config file → configPath is '' → resolver falls back to process.cwd().
+    const cm = freshConfigManager();
+    expect(cm.getPackageConfigForService('/abs/some/access')).toEqual({
+      command: 'npx serverless package',
+      args: [],
+      env: {},
+      timeoutMs: 300000,
+    });
+  });
+
+  it('applies global packageArgs/packageEnv to any service', () => {
+    const cm = cmWith({ packageArgs: ['--g'], packageEnv: { A: '1' } });
+    expect(cm.getPackageConfigForService('/abs/whatever')).toEqual({
+      command: 'npx serverless package',
+      args: ['--g'],
+      env: { A: '1' },
+      timeoutMs: 300000,
+    });
+  });
+
+  it('matches a per-service override by directory basename', () => {
+    const cm = cmWith({
+      servicePackaging: {
+        access: { packageArgs: ['--param=custom-stage=offline'], packageTimeoutMs: 60000 },
+      },
+    });
+    expect(cm.getPackageConfigForService('/abs/microservices/access')).toEqual({
+      command: 'npx serverless package',
+      args: ['--param=custom-stage=offline'],
+      env: {},
+      timeoutMs: 60000,
+    });
+  });
+
+  it('matches a per-service override by relative path and it wins over basename', () => {
+    const cm = cmWith({
+      servicePackaging: {
+        access: { packageArgs: ['--by-basename'] },
+        'microservices/access': { packageArgs: ['--by-relpath'], packageCommand: 'npx sls package' },
+      },
+    });
+    const svc = path.join(process.cwd(), 'microservices/access');
+    expect(cm.getPackageConfigForService(svc)).toEqual({
+      command: 'npx sls package',
+      args: ['--by-relpath'],
+      env: {},
+      timeoutMs: 300000,
+    });
+  });
+
+  it('concatenates global then per-service args and merges env (service wins)', () => {
+    const cm = cmWith({
+      packageArgs: ['--g'],
+      packageEnv: { A: '1', B: '2' },
+      servicePackaging: { access: { packageArgs: ['--s'], packageEnv: { B: '9', C: '3' } } },
+    });
+    expect(cm.getPackageConfigForService('/abs/access')).toEqual({
+      command: 'npx serverless package',
+      args: ['--g', '--s'],
+      env: { A: '1', B: '9', C: '3' },
+      timeoutMs: 300000,
+    });
+  });
+
+  it('returns only globals for a service with no matching override', () => {
+    const cm = cmWith({
+      packageArgs: ['--g'],
+      servicePackaging: { access: { packageArgs: ['--s'] } },
+    });
+    expect(cm.getPackageConfigForService('/abs/other')).toEqual({
+      command: 'npx serverless package',
+      args: ['--g'],
+      env: {},
+      timeoutMs: 300000,
+    });
+  });
+
+  it('uses env-var packageCommand/timeout as the global baseline', () => {
+    process.env.LSS_PACKAGE_COMMAND = 'yarn package';
+    process.env.LSS_PACKAGE_TIMEOUT_MS = '120000';
+    const cm = freshConfigManager();
+    expect(cm.getPackageConfigForService('/abs/access')).toEqual({
+      command: 'yarn package',
+      args: [],
+      env: {},
+      timeoutMs: 120000,
+    });
+  });
+});
+
 describe('printSummary', () => {
   it('prints a full summary in managed mode with dynamo proxy + auto package + config file', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
@@ -535,6 +634,27 @@ describe('printSummary', () => {
     expect(out).not.toContain('Package Command');
     // No config file loaded (env-only) → no config file line.
     expect(out).not.toContain('Config File');
+  });
+
+  it('prints global package args/env (keys only) and per-service packaging when set', () => {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(
+      JSON.stringify({
+        autoPackage: true,
+        packageArgs: ['--param=custom-stage=offline'],
+        packageEnv: { AWS_ACCESS_KEY_ID: 'super-secret' },
+        servicePackaging: { access: { packageArgs: ['--param=custom-stage=offline'] } },
+      }),
+    );
+    const cm = freshConfigManager();
+    cm.printSummary();
+    const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(out).toContain('Package Args (global): --param=custom-stage=offline');
+    expect(out).toContain('Package Env (global): AWS_ACCESS_KEY_ID');
+    expect(out).toContain('Per-service Packaging: access');
+    // Secret env VALUES must never be printed.
+    expect(out).not.toContain('super-secret');
   });
 
   it('prints "not set" for the auth token when it is absent (managed mode)', () => {
