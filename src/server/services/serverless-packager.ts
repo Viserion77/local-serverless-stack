@@ -42,6 +42,9 @@ function parseCommand(raw: string): { cmd: string; args: string[] } {
 export async function runServerlessPackage(options: PackageOptions): Promise<PackageResult> {
   const { cmd, args } = parseCommand(options.command);
   const allArgs = [...args, ...(options.args ?? [])];
+  // Used in error messages so they reflect the actual argv spawned (including any
+  // appended `options.args`), not just the raw command string.
+  const displayCommand = [options.command, ...(options.args ?? [])].join(' ');
   const timeoutMs = options.timeoutMs ?? 300000;
 
   return new Promise<PackageResult>((resolve, reject) => {
@@ -68,7 +71,7 @@ export async function runServerlessPackage(options: PackageOptions): Promise<Pac
     proc.on('error', err => {
       clearTimeout(timer);
       reject(new ServerlessPackageError(
-        `Failed to start package command "${options.command}": ${err.message}`,
+        `Failed to start package command "${displayCommand}": ${err.message}`,
         { exitCode: -1, stdout, stderr },
       ));
     });
@@ -78,7 +81,7 @@ export async function runServerlessPackage(options: PackageOptions): Promise<Pac
       const result: PackageResult = { exitCode: code ?? -1, stdout, stderr };
       if (timedOut) {
         reject(new ServerlessPackageError(
-          `Package command "${options.command}" timed out after ${timeoutMs}ms`,
+          `Package command "${displayCommand}" timed out after ${timeoutMs}ms`,
           result,
         ));
         return;
@@ -88,7 +91,7 @@ export async function runServerlessPackage(options: PackageOptions): Promise<Pac
         return;
       }
       reject(new ServerlessPackageError(
-        `Package command "${options.command}" exited with code ${code}`,
+        `Package command "${displayCommand}" exited with code ${code}`,
         result,
       ));
     });

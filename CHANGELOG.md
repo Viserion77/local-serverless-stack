@@ -15,6 +15,11 @@ Per-service and global package parameters for `autoPackage`, so different micros
 ### Fixed
 - **`packageCommand` quote parsing**: the tokenizer in `serverless-packager.ts` stripped only a single leading + trailing quote from each token, mangling `--param="custom-stage=offline"` into a malformed arg. It now strips quotes per quoted segment, so `--flag="a=b"` / `--flag='a b c'` tokenize correctly. New `packageArgs` are passed as discrete argv elements (no parsing at all), so values with `=`/spaces are always delivered intact.
 
+### Changed
+- **Minimum supported Node.js version is now `>=20`** (`engines.node` on both the root package and the `serverless-lss` plugin; the publish workflow uses Node 20).
+
+## [0.3.0] - 2026-06-06
+
 Programmatic client (`LssClient`) so downstream Jest e2e suites can drive everything the `lss` CLI does at runtime via `import`, instead of shelling out to `npx lss` per step.
 
 ### Added
