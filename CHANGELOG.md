@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.4.0] - 2026-06-08
+
+Per-service and global package parameters for `autoPackage`, so different microservices can package with different `serverless` params/env (e.g. one service needs `--param=custom-stage=offline` while others use the plain command).
 
 ### Added
 - **Per-service & global package parameters for `autoPackage`**: the auto-package step (run when a service's CloudFormation template is missing on `/register`) is no longer locked to a single global `packageCommand` for every service. Three new `lss.config.json` fields let you configure what the package command receives, and the orchestrator consults them before spawning: `packageArgs` (string[], extra args appended to every package command), `packageEnv` (object, extra env vars merged over the child's env), and `servicePackaging` (object — per-service overrides of `packageCommand`/`packageArgs`/`packageEnv`/`packageTimeoutMs`). Per-service entries are keyed by the service **directory name** (e.g. `"access"`) or its **path relative to the config file** (e.g. `"microservices/access"`); the relative-path key wins. Resolution: per-service `packageCommand`/`packageTimeoutMs` replace the global, `packageArgs` are appended after global args, `packageEnv` is merged over global env (per-service wins). `LSS_PACKAGE_COMMAND`/`LSS_PACKAGE_TIMEOUT_MS` still apply as the global baseline. This solves the case where one service (e.g. `access`) needs `--param=custom-stage=offline` to package offline while the others use the plain command. Centralized in `ConfigManager.getPackageConfigForService()`.
