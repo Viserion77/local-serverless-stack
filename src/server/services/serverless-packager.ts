@@ -3,6 +3,10 @@ import { spawn } from 'child_process';
 export interface PackageOptions {
   command: string;
   cwd: string;
+  // Extra args appended AFTER the args parsed from `command`. Passed straight to
+  // spawn(), so they bypass the string parser entirely — values with spaces or
+  // `=` (e.g. `--param=custom-stage=offline`) are delivered intact, no quoting.
+  args?: string[];
   timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
 }
@@ -25,7 +29,10 @@ export class ServerlessPackageError extends Error {
 
 function parseCommand(raw: string): { cmd: string; args: string[] } {
   const tokens = raw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) || [];
-  const unquoted = tokens.map(t => t.replace(/^['"]|['"]$/g, ''));
+  // Strip quotes per quoted segment within each token, not just one leading +
+  // one trailing quote off the whole token. This keeps `--param="x=y"` intact as
+  // `--param=x=y` (the old logic produced the malformed `--param=x=y"`).
+  const unquoted = tokens.map(t => t.replace(/"([^"]*)"|'([^']*)'/g, '$1$2'));
   if (unquoted.length === 0) {
     throw new Error('Empty package command');
   }
@@ -34,10 +41,11 @@ function parseCommand(raw: string): { cmd: string; args: string[] } {
 
 export async function runServerlessPackage(options: PackageOptions): Promise<PackageResult> {
   const { cmd, args } = parseCommand(options.command);
+  const allArgs = [...args, ...(options.args ?? [])];
   const timeoutMs = options.timeoutMs ?? 300000;
 
   return new Promise<PackageResult>((resolve, reject) => {
-    const proc = spawn(cmd, args, {
+    const proc = spawn(cmd, allArgs, {
       cwd: options.cwd,
       env: { ...process.env, ...options.env },
       stdio: ['ignore', 'pipe', 'pipe'],

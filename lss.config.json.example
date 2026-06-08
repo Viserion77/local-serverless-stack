@@ -12,5 +12,10 @@
   "stateDir": ".lss",
   "autoPackage": false,
   "packageCommand": "npx serverless package",
-  "packageTimeoutMs": 300000
+  "packageTimeoutMs": 300000,
+  "packageArgs": [],
+  "packageEnv": {},
+  "servicePackaging": {
+    "access": { "packageArgs": ["--param=custom-stage=offline"] }
+  }
 }

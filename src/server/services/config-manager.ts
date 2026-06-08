@@ -4,6 +4,24 @@ import path from 'path';
 export type LocalStackMode = 'managed' | 'external';
 export type LocalStackEdition = 'community' | 'pro';
 
+// Per-service packaging overrides. Keyed in `servicePackaging` by the service
+// directory name (basename) OR its path relative to the config file's directory.
+export interface ServicePackageConfig {
+  packageCommand?: string;
+  packageArgs?: string[];
+  packageEnv?: Record<string, string>;
+  packageTimeoutMs?: number;
+}
+
+// The effective packaging settings resolved for a single service: global config
+// merged with any matching per-service override.
+export interface ResolvedPackageConfig {
+  command: string;
+  args: string[];
+  env: Record<string, string>;
+  timeoutMs: number;
+}
+
 export interface LSSConfig {
   // Server port (dashboard + API)
   serverPort?: number;
@@ -62,6 +80,20 @@ export interface LSSConfig {
   // Command to run when autoPackage is enabled and the template is missing.
   // Parsed as shell-style args; runs in the servicePath as CWD.
   packageCommand?: string;
+
+  // Extra args appended to every auto-package command (passed as discrete argv
+  // elements, so no shell parsing). E.g. ["--param=custom-stage=offline"].
+  packageArgs?: string[];
+
+  // Extra env vars merged over the orchestrator's env for every package child.
+  packageEnv?: Record<string, string>;
+
+  // Per-service packaging overrides, keyed by the service directory name
+  // (basename) OR its path relative to this config file's directory (use `/`).
+  // A relative-path key wins over a basename key. Per-service `packageCommand`/
+  // `packageTimeoutMs` replace the global value; `packageArgs` are appended
+  // after the global args; `packageEnv` is merged over the global (service wins).
+  servicePackaging?: Record<string, ServicePackageConfig>;
 
   // Maximum time (ms) to wait for the package command to complete. Defaults to 300000 (5min).
   packageTimeoutMs?: number;
@@ -297,6 +329,27 @@ export class ConfigManager {
     return this.config.packageTimeoutMs ?? 300000;
   }
 
+  /**
+   * Resolve the effective packaging settings for one service. Merges the global
+   * package config with any per-service override matched by relative path (from
+   * the config file's dir) or by directory basename. Delegates to
+   * getPackageCommand()/getPackageTimeoutMs() so env-var overrides still apply
+   * as the global baseline.
+   */
+  getPackageConfigForService(servicePath: string): ResolvedPackageConfig {
+    const map = this.config.servicePackaging ?? {};
+    const baseName = path.basename(servicePath);
+    const configDir = path.resolve(this.configPath ? path.dirname(this.configPath) : process.cwd());
+    const relPath = path.relative(configDir, servicePath).split(path.sep).join('/');
+    const perService = map[relPath] ?? map[baseName] ?? {};
+    return {
+      command: perService.packageCommand ?? this.getPackageCommand(),
+      args: [...(this.config.packageArgs ?? []), ...(perService.packageArgs ?? [])],
+      env: { ...(this.config.packageEnv ?? {}), ...(perService.packageEnv ?? {}) },
+      timeoutMs: perService.packageTimeoutMs ?? this.getPackageTimeoutMs(),
+    };
+  }
+
   getConfigPath(): string {
     return this.configPath;
   }
@@ -324,6 +377,16 @@ export class ConfigManager {
     console.log(`  Auto Package: ${this.isAutoPackage()}`);
     if (this.isAutoPackage()) {
       console.log(`  Package Command: ${this.getPackageCommand()}`);
+      if (this.config.packageArgs?.length) {
+        console.log(`  Package Args (global): ${this.config.packageArgs.join(' ')}`);
+      }
+      if (this.config.packageEnv && Object.keys(this.config.packageEnv).length) {
+        // Keys only — values may be secrets.
+        console.log(`  Package Env (global): ${Object.keys(this.config.packageEnv).join(', ')}`);
+      }
+      if (this.config.servicePackaging && Object.keys(this.config.servicePackaging).length) {
+        console.log(`  Per-service Packaging: ${Object.keys(this.config.servicePackaging).join(', ')}`);
+      }
     }
     if (this.getConfigPath()) {
       console.log(`  Config File: ${this.getConfigPath()}`);

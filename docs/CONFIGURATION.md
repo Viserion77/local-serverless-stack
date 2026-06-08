@@ -114,6 +114,42 @@ Both files should contain valid JSON with the following optional properties:
   - Maximum time in milliseconds to wait for `packageCommand` before killing it.
   - Example: `600000` (10 minutes)
 
+- **packageArgs** (string[], default: `[]`)
+  - Extra arguments appended to **every** auto-package command. Passed as discrete
+    argv elements straight to the process (no shell, no re-parsing), so values that
+    contain `=` or spaces — e.g. `--param=custom-stage=offline` — are delivered intact.
+  - Prefer this over embedding flags in `packageCommand`, which goes through a
+    simple tokenizer.
+  - Example: `["--param=custom-stage=offline"]`
+
+- **packageEnv** (object, default: `{}`)
+  - Extra environment variables merged over the orchestrator's env for every package
+    child process (per-service `packageEnv` wins on key collisions). Useful to inject
+    dummy credentials for offline packaging, e.g. `{ "AWS_ACCESS_KEY_ID": "test" }`.
+
+- **servicePackaging** (object, default: `{}`)
+  - Per-service packaging overrides. Each key identifies a service by its **directory
+    name** (e.g. `"access"`) **or** by its path **relative to this config file's
+    directory** using `/` (e.g. `"microservices/access"`). A relative-path key wins
+    over a basename key.
+  - Each value may set `packageCommand`, `packageArgs`, `packageEnv`, `packageTimeoutMs`.
+    Resolution against the globals: per-service `packageCommand`/`packageTimeoutMs`
+    **replace** the global value; `packageArgs` are **appended after** the global args;
+    `packageEnv` is **merged over** the global env (per-service wins).
+  - `packageArgs`/`packageEnv`/`servicePackaging` are file-only (no environment-variable
+    equivalents). `LSS_PACKAGE_COMMAND`/`LSS_PACKAGE_TIMEOUT_MS` still apply as the global
+    baseline that a per-service `packageCommand`/`packageTimeoutMs` can override.
+  - Example — only the `access` service needs an offline param:
+    ```jsonc
+    "autoPackage": true,
+    "servicePackaging": {
+      "access": { "packageArgs": ["--param=custom-stage=offline"] }
+    }
+    ```
+
+> Note: configuration is read once when the orchestrator starts. After editing
+> `lss.config.json`, restart the orchestrator for changes to take effect.
+
 ## Configuring the Serverless Plugin
 
 The Serverless Plugin needs to know where to find the LSS server. Configure it in `serverless.yml`:

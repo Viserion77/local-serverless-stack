@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.3.0] - 2026-06-06
+## [Unreleased]
+
+### Added
+- **Per-service & global package parameters for `autoPackage`**: the auto-package step (run when a service's CloudFormation template is missing on `/register`) is no longer locked to a single global `packageCommand` for every service. Three new `lss.config.json` fields let you configure what the package command receives, and the orchestrator consults them before spawning: `packageArgs` (string[], extra args appended to every package command), `packageEnv` (object, extra env vars merged over the child's env), and `servicePackaging` (object — per-service overrides of `packageCommand`/`packageArgs`/`packageEnv`/`packageTimeoutMs`). Per-service entries are keyed by the service **directory name** (e.g. `"access"`) or its **path relative to the config file** (e.g. `"microservices/access"`); the relative-path key wins. Resolution: per-service `packageCommand`/`packageTimeoutMs` replace the global, `packageArgs` are appended after global args, `packageEnv` is merged over global env (per-service wins). `LSS_PACKAGE_COMMAND`/`LSS_PACKAGE_TIMEOUT_MS` still apply as the global baseline. This solves the case where one service (e.g. `access`) needs `--param=custom-stage=offline` to package offline while the others use the plain command. Centralized in `ConfigManager.getPackageConfigForService()`.
+
+### Fixed
+- **`packageCommand` quote parsing**: the tokenizer in `serverless-packager.ts` stripped only a single leading + trailing quote from each token, mangling `--param="custom-stage=offline"` into a malformed arg. It now strips quotes per quoted segment, so `--flag="a=b"` / `--flag='a b c'` tokenize correctly. New `packageArgs` are passed as discrete argv elements (no parsing at all), so values with `=`/spaces are always delivered intact.
 
 Programmatic client (`LssClient`) so downstream Jest e2e suites can drive everything the `lss` CLI does at runtime via `import`, instead of shelling out to `npx lss` per step.
 

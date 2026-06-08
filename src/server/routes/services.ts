@@ -55,6 +55,9 @@ router.post('/register', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid service path' });
     }
 
+    // Service name (basename) — also the key used to match per-service packaging config.
+    const serviceName = path.basename(resolvedPath);
+
     // Validate invokePort
     if (invokePort && (typeof invokePort !== 'number' || invokePort < 1024 || invokePort > 65535)) {
       return res.status(400).json({ error: 'Invalid invokePort, must be between 1024-65535' });
@@ -76,26 +79,29 @@ router.post('/register', async (req: Request, res: Response) => {
         });
       }
 
-      const packageCommand = configManager.getPackageCommand();
-      console.log(`📦 Template missing — running '${packageCommand}' in ${resolvedPath}`);
+      const pkgConfig = configManager.getPackageConfigForService(resolvedPath);
+      const displayCmd = [pkgConfig.command, ...pkgConfig.args].join(' ');
+      console.log(`📦 Template missing — running '${displayCmd}' in ${resolvedPath} (service: ${serviceName})`);
       try {
         const result = await runServerlessPackage({
-          command: packageCommand,
+          command: pkgConfig.command,
+          args: pkgConfig.args,
           cwd: resolvedPath,
-          timeoutMs: configManager.getPackageTimeoutMs(),
+          timeoutMs: pkgConfig.timeoutMs,
+          env: pkgConfig.env,
         });
         console.log(`✅ Auto-package finished for ${resolvedPath} (exit 0)`);
         if (result.stdout.trim()) {
-          console.log(`--- ${packageCommand} stdout ---\n${result.stdout.trimEnd()}\n--- end ---`);
+          console.log(`--- ${displayCmd} stdout ---\n${result.stdout.trimEnd()}\n--- end ---`);
         }
       } catch (packageErr) {
         if (packageErr instanceof ServerlessPackageError) {
           console.error(`❌ Auto-package failed for ${resolvedPath}: ${packageErr.message}`);
           if (packageErr.result.stdout.trim()) {
-            console.error(`--- ${packageCommand} stdout ---\n${packageErr.result.stdout.trimEnd()}\n--- end ---`);
+            console.error(`--- ${displayCmd} stdout ---\n${packageErr.result.stdout.trimEnd()}\n--- end ---`);
           }
           if (packageErr.result.stderr.trim()) {
-            console.error(`--- ${packageCommand} stderr ---\n${packageErr.result.stderr.trimEnd()}\n--- end ---`);
+            console.error(`--- ${displayCmd} stderr ---\n${packageErr.result.stderr.trimEnd()}\n--- end ---`);
           }
         } else {
           console.error(`❌ Auto-package failed for ${resolvedPath}:`, packageErr);
@@ -114,9 +120,6 @@ router.post('/register', async (req: Request, res: Response) => {
     // Parse resources
     const resources = parser.parse(template);
     const templateHash = parser.calculateHash(template);
-
-    // Extract service name
-    const serviceName = path.basename(servicePath);
 
     // Save to cache
     await cache.saveTemplate(serviceName, template, {
