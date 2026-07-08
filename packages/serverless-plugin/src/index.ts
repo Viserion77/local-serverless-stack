@@ -94,9 +94,13 @@ class ServerlessOrchestratorPlugin {
     const serviceName = this.serverless.service?.service || this.serverless.config.service || 'unknown';
     const region = this.serverless.service?.provider?.region; // Don't use fallback, let orchestrator handle it
 
-    // Extract invoke port from serverless-offline configuration
-    const serverlessOfflineConfig = this.serverless.service?.custom?.['serverless-offline'];
-    const invokePort = serverlessOfflineConfig?.lambdaPort;
+    // Port discovery: custom.lss wins; custom.serverless-offline keeps drop-in
+    // compatibility for services already configured for offline (httpPort →
+    // apiPort, lambdaPort → invokePort).
+    const lssConfig = this.serverless.service?.custom?.lss || {};
+    const serverlessOfflineConfig = this.serverless.service?.custom?.['serverless-offline'] || {};
+    const invokePort = lssConfig.invokePort ?? serverlessOfflineConfig.lambdaPort;
+    const apiPort = lssConfig.apiPort ?? serverlessOfflineConfig.httpPort;
 
     if (region) {
       this.log(`Registering service "${serviceName}" (region: ${region} from Serverless Framework) with orchestrator at ${this.orchestratorUrl}...`, 'info');
@@ -113,6 +117,7 @@ class ServerlessOrchestratorPlugin {
         body: JSON.stringify({
           servicePath,
           invokePort,
+          ...(apiPort !== undefined && { apiPort }),
           ...(region && { region }), // Only include region if defined in Serverless Framework
         }),
       });

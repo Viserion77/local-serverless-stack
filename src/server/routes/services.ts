@@ -1,12 +1,14 @@
 import { Router, Request, Response } from 'express';
-import fs from 'fs/promises';
 import path from 'path';
 import { CloudFormationParser } from '../services/cloudformation-parser.js';
 import { CacheManager } from '../services/cache-manager.js';
 import { ResourceProvisioner } from '../services/resource-provisioner.js';
 import { ProcessManager } from '../services/process-manager.js';
 import { ConfigManager } from '../services/config-manager.js';
-import { runServerlessPackage, ServerlessPackageError } from '../services/serverless-packager.js';
+import { ServiceRegistrar, RegistrationError } from '../services/service-registrar.js';
+import { LambdaRuntimeManager } from '../services/lambda-runtime-manager.js';
+import { GatewayManager } from '../services/gateway-manager.js';
+import { SourceWatcher } from '../services/source-watcher.js';
 
 const router = Router();
 const parser = new CloudFormationParser();
@@ -28,8 +30,8 @@ async function ensureCacheInit() {
 router.post('/register', async (req: Request, res: Response) => {
   try {
     await ensureCacheInit();
-    
-    const { servicePath, invokePort, region } = req.body;
+
+    const { servicePath, invokePort, apiPort, region } = req.body;
 
     if (!servicePath) {
       return res.status(400).json({ error: 'servicePath is required' });
@@ -37,9 +39,10 @@ router.post('/register', async (req: Request, res: Response) => {
 
     // Region priority: Serverless Framework > lss.config.json > default
     const effectiveRegion = region || configManager.getConfig().region || 'us-east-1';
-    
+
     console.log(`📝 Registering service from ${servicePath}`);
     console.log(`   Invoke port: ${invokePort || 'not specified'}`);
+    console.log(`   API port: ${apiPort || 'not specified'}`);
     console.log(`   Region: ${effectiveRegion}`);
     if (region) {
       console.log(`   Region source: Serverless Framework configuration`);
@@ -55,98 +58,35 @@ router.post('/register', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid service path' });
     }
 
-    // Service name (basename) — also the key used to match per-service packaging config.
-    const serviceName = path.basename(resolvedPath);
-
-    // Validate invokePort
-    if (invokePort && (typeof invokePort !== 'number' || invokePort < 1024 || invokePort > 65535)) {
-      return res.status(400).json({ error: 'Invalid invokePort, must be between 1024-65535' });
+    for (const [label, value] of [['invokePort', invokePort], ['apiPort', apiPort]] as const) {
+      if (value && (typeof value !== 'number' || value < 1024 || value > 65535)) {
+        return res.status(400).json({ error: `Invalid ${label}, must be between 1024-65535` });
+      }
     }
 
-    // Read CloudFormation template. If missing and autoPackage is enabled, run
-    // the configured package command and retry once.
-    const templatePath = path.join(resolvedPath, '.serverless', 'cloudformation-template-update-stack.json');
-    let templateContent: string;
-    try {
-      templateContent = await fs.readFile(templatePath, 'utf-8');
-    } catch (err) {
-      const isENOENT = (err as NodeJS.ErrnoException)?.code === 'ENOENT';
-      if (!isENOENT) throw err;
-
-      if (!configManager.isAutoPackage()) {
-        return res.status(400).json({
-          error: `CloudFormation template not found at ${templatePath}. Run 'serverless package' in the service directory, or enable autoPackage in lss.config.json.`,
-        });
-      }
-
-      const pkgConfig = configManager.getPackageConfigForService(resolvedPath);
-      const displayCmd = [pkgConfig.command, ...pkgConfig.args].join(' ');
-      console.log(`📦 Template missing — running '${displayCmd}' in ${resolvedPath} (service: ${serviceName})`);
-      try {
-        const result = await runServerlessPackage({
-          command: pkgConfig.command,
-          args: pkgConfig.args,
-          cwd: resolvedPath,
-          timeoutMs: pkgConfig.timeoutMs,
-          env: pkgConfig.env,
-        });
-        console.log(`✅ Auto-package finished for ${resolvedPath} (exit 0)`);
-        if (result.stdout.trim()) {
-          console.log(`--- ${displayCmd} stdout ---\n${result.stdout.trimEnd()}\n--- end ---`);
-        }
-      } catch (packageErr) {
-        if (packageErr instanceof ServerlessPackageError) {
-          console.error(`❌ Auto-package failed for ${resolvedPath}: ${packageErr.message}`);
-          if (packageErr.result.stdout.trim()) {
-            console.error(`--- ${displayCmd} stdout ---\n${packageErr.result.stdout.trimEnd()}\n--- end ---`);
-          }
-          if (packageErr.result.stderr.trim()) {
-            console.error(`--- ${displayCmd} stderr ---\n${packageErr.result.stderr.trimEnd()}\n--- end ---`);
-          }
-        } else {
-          console.error(`❌ Auto-package failed for ${resolvedPath}:`, packageErr);
-        }
-        const detail = packageErr instanceof ServerlessPackageError
-          ? `${packageErr.message}\n${packageErr.result.stderr || packageErr.result.stdout}`.trim()
-          : packageErr instanceof Error ? packageErr.message : 'Unknown error';
-        return res.status(500).json({
-          error: `Auto-package failed for ${resolvedPath}: ${detail}. Full stderr/stdout is in the orchestrator log (/tmp/lss-orchestrator.log).`,
-        });
-      }
-      templateContent = await fs.readFile(templatePath, 'utf-8');
-    }
-    const template = JSON.parse(templateContent);
-
-    // Parse resources
-    const resources = parser.parse(template);
-    const templateHash = parser.calculateHash(template);
-
-    // Save to cache
-    await cache.saveTemplate(serviceName, template, {
-      root: servicePath,
-      templateHash,
-      lastUpdated: Date.now(),
-      status: 'registered',
+    const result = await ServiceRegistrar.getInstance().register({
+      servicePath: resolvedPath,
       invokePort,
-      region: effectiveRegion,
-    });
-
-    // Provision resources to LocalStack
-    await provisioner.provisionResources(serviceName, resources, {
-      invokePort,
-      region: effectiveRegion,
+      apiPort,
+      region,
     });
 
     return res.json({
       success: true,
-      serviceName,
-      resourcesCount: resources.length,
-      resources: resources.map(r => ({
+      serviceName: result.serviceName,
+      resourcesCount: result.resources.length,
+      functionsCount: result.functionsCount,
+      routesCount: result.routesCount,
+      warnings: result.warnings,
+      resources: result.resources.map(r => ({
         type: r.type,
         name: 'name' in r ? r.name : r.functionName,
       })),
     });
   } catch (error) {
+    if (error instanceof RegistrationError) {
+      return res.status(error.statusCode).json({ error: error.message });
+    }
     console.error('Registration error:', error);
     const message = error instanceof Error ? error.message : 'Unknown error';
     return res.status(500).json({ error: message });
@@ -169,7 +109,17 @@ router.get('/', async (_req: Request, res: Response) => {
           topics: resources.filter(r => r.type === 'sns').length,
           buckets: resources.filter(r => r.type === 's3').length,
         };
-        return { ...s, resourcesCount: resources.length, resourceBreakdown };
+        const runtime = LambdaRuntimeManager.getInstance().getRuntimeInfo(s.name);
+        const gateway = GatewayManager.getInstance().getInfo(s.name);
+        return {
+          ...s,
+          resourcesCount: resources.length,
+          resourceBreakdown,
+          functionsCount: s.functions?.length ?? 0,
+          routesCount: s.routes?.length ?? 0,
+          runtimeStatus: runtime.status,
+          gateway,
+        };
       }),
     );
     return res.json(withCount);
@@ -218,6 +168,9 @@ router.delete('/:name', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Invalid service name' });
     }
     
+    // Tear down the data plane first (worker, listeners, watcher, registry).
+    await ServiceRegistrar.getInstance().deactivate(serviceName);
+
     // Clean up resources from LocalStack — re-parse the cached template so the cleanup
     // works even after an orchestrator restart (no in-memory state).
     const template = await cache.getTemplate(serviceName);
@@ -226,7 +179,7 @@ router.delete('/:name', async (req: Request, res: Response) => {
 
     // Delete from cache
     await cache.deleteService(serviceName);
-    
+
     return res.json({ success: true });
   } catch (error) {
     console.error('Error deleting service:', error);
@@ -323,6 +276,62 @@ router.post('/:name/stop', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error stopping service:', error);
     return res.status(500).json({ error: 'Failed to stop service' });
+  }
+});
+
+// Lambda runtime status for a service (worker + gateway/invoke listeners).
+router.get('/:name/runtime', async (req: Request, res: Response) => {
+  try {
+    const serviceName = req.params.name;
+    if (!serviceName || typeof serviceName !== 'string' || serviceName.includes('/') || serviceName.includes('..')) {
+      return res.status(400).json({ error: 'Invalid service name' });
+    }
+    const runtime = LambdaRuntimeManager.getInstance().getRuntimeInfo(serviceName);
+    const gateway = GatewayManager.getInstance().getInfo(serviceName);
+    const watch = SourceWatcher.getInstance().getStatus(serviceName);
+    return res.json({ runtime, gateway, watch });
+  } catch (error) {
+    console.error('Error fetching runtime status:', error);
+    return res.status(500).json({ error: 'Failed to fetch runtime status' });
+  }
+});
+
+// Start (or restart) the Lambda runtime for a service.
+router.post('/:name/runtime/start', async (req: Request, res: Response) => {
+  try {
+    await ensureCacheInit();
+    const serviceName = req.params.name;
+    if (!serviceName || typeof serviceName !== 'string' || serviceName.includes('/') || serviceName.includes('..')) {
+      return res.status(400).json({ error: 'Invalid service name' });
+    }
+    const metadata = await cache.getMetadata(serviceName);
+    if (!metadata) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+    await ServiceRegistrar.getInstance().activate(metadata);
+    const runtime = LambdaRuntimeManager.getInstance().getRuntimeInfo(serviceName);
+    const gateway = GatewayManager.getInstance().getInfo(serviceName);
+    return res.json({ success: true, runtime, gateway });
+  } catch (error) {
+    console.error('Error starting runtime:', error);
+    return res.status(500).json({ error: 'Failed to start runtime' });
+  }
+});
+
+// Stop the Lambda runtime (worker + listeners) for a service.
+router.post('/:name/runtime/stop', async (req: Request, res: Response) => {
+  try {
+    const serviceName = req.params.name;
+    if (!serviceName || typeof serviceName !== 'string' || serviceName.includes('/') || serviceName.includes('..')) {
+      return res.status(400).json({ error: 'Invalid service name' });
+    }
+    SourceWatcher.getInstance().unwatch(serviceName);
+    await LambdaRuntimeManager.getInstance().stopRuntime(serviceName);
+    await GatewayManager.getInstance().stopService(serviceName);
+    return res.json({ success: true });
+  } catch (error) {
+    console.error('Error stopping runtime:', error);
+    return res.status(500).json({ error: 'Failed to stop runtime' });
   }
 });
 

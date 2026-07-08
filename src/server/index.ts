@@ -10,9 +10,15 @@ import { bucketsRouter } from './routes/buckets.js';
 import { seedsRouter } from './routes/seeds.js';
 import { dynamoRouter } from './routes/dynamo.js';
 import { configRouter } from './routes/config.js';
+import { lambdasRouter } from './routes/lambdas.js';
+import { apisRouter } from './routes/apis.js';
 import { LocalStackManager } from './services/localstack-manager.js';
 import { ConfigManager } from './services/config-manager.js';
 import { QueueInspector } from './services/queue-inspector.js';
+import { ServiceRegistrar } from './services/service-registrar.js';
+import { LambdaRuntimeManager } from './services/lambda-runtime-manager.js';
+import { GatewayManager } from './services/gateway-manager.js';
+import { SourceWatcher } from './services/source-watcher.js';
 import { startDynamoProxy } from './dev/dynamo-proxy.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -35,6 +41,8 @@ app.use('/api/buckets', bucketsRouter);
 app.use('/api/seeds', seedsRouter);
 app.use('/api/dynamo', dynamoRouter);
 app.use('/api/config', configRouter);
+app.use('/api/lambdas', lambdasRouter);
+app.use('/api/apis', apisRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {
@@ -73,6 +81,17 @@ async function start() {
 
     QueueInspector.getInstance().startPolling();
 
+    // Hot reload: source changes restart the service worker; serverless.yml
+    // changes re-package + re-register.
+    SourceWatcher.getInstance().setHandlers({
+      onRuntimeReload: name => LambdaRuntimeManager.getInstance().restartRuntime(name),
+      onFullReload: name => ServiceRegistrar.getInstance().reregister(name),
+    });
+
+    // Reactivate cached services (runtime workers + gateway/invoke listeners)
+    // so registrations survive orchestrator restarts.
+    await ServiceRegistrar.getInstance().rehydrateAll();
+
     // Optional DynamoDB proxy
     if (configManager.isEnableDynamoProxy()) {
       const proxyPort = configManager.getDynamoProxyPort();
@@ -88,14 +107,21 @@ async function start() {
 }
 
 // Graceful shutdown
-process.on('SIGINT', async () => {
+async function shutdown() {
   console.log('\n🛑 Shutting down gracefully...');
   QueueInspector.getInstance().stopPolling();
+  SourceWatcher.getInstance().unwatchAll();
+  await GatewayManager.getInstance().stopAll();
+  await LambdaRuntimeManager.getInstance().stopAll();
   processManager.stopAll();
   await processManager.cleanup();
   const localstack = LocalStackManager.getInstance();
   await localstack.stop();
   process.exit(0);
-});
+}
+
+process.on('SIGINT', shutdown);
+// The CLI stops the daemonized server with SIGTERM — same cleanup path.
+process.on('SIGTERM', shutdown);
 
 start();

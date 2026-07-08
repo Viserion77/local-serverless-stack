@@ -291,6 +291,93 @@ export interface ServiceDetail extends ServiceSummary {
   resources: ServiceResource[];
 }
 
+export interface LambdaSummary {
+  name: string;
+  fullName: string;
+  service: string;
+  handler: string;
+  runtime: string;
+  memorySize: number;
+  timeout: number;
+  triggers: string[];
+  invokePort?: number;
+  status: 'stopped' | 'starting' | 'online' | 'error';
+  executionMode?: 'artifact' | 'source';
+  invocations: number;
+  errors: number;
+  lastInvokedAt?: number;
+  lastDurationMs?: number;
+  lastOk?: boolean;
+}
+
+export interface LambdaRouteInfo {
+  method: string;
+  path: string;
+  eventType: 'http' | 'httpApi';
+  authorizerName?: string;
+}
+
+export interface LambdaDetailInfo extends LambdaSummary {
+  environment: Record<string, string>;
+  routes: LambdaRouteInfo[];
+}
+
+export interface InvokeLambdaInput {
+  payload?: unknown;
+  invocationType?: 'RequestResponse' | 'Event';
+}
+
+export interface InvokeResult {
+  ok: boolean;
+  payload?: unknown;
+  functionError?: { errorType?: string; errorMessage?: string; trace?: string[] };
+  logs: string[];
+  durationMs: number;
+}
+
+export interface LambdaInvocationRecord {
+  at: number;
+  functionName: string;
+  ok: boolean;
+  durationMs: number;
+  logs: string[];
+}
+
+export type GatewayListenerStatus = 'online' | 'port-conflict' | 'stopped' | 'disabled';
+
+export interface ApiRouteInfo {
+  method: string;
+  path: string;
+  functionName: string;
+  eventType: 'http' | 'httpApi';
+  payloadVersion: '1.0' | '2.0';
+  cors: boolean;
+  authorizerName?: string;
+}
+
+export interface ApiAuthorizerInfo {
+  name: string;
+  type: 'request' | 'token';
+  eventType: 'http' | 'httpApi';
+  payloadVersion: '1.0' | '2.0';
+  enableSimpleResponses: boolean;
+  identitySource: string[];
+  resultTtlInSeconds: number;
+  functionName?: string;
+  arn?: string;
+}
+
+export interface ServiceApiInfo {
+  service: string;
+  apiPort?: number;
+  invokePort?: number;
+  stage?: string;
+  status: GatewayListenerStatus;
+  invokeStatus: GatewayListenerStatus;
+  routes: ApiRouteInfo[];
+  authorizers: ApiAuthorizerInfo[];
+}
+
 export const api = {
   // Health & config
   checkHealth: () => request<HealthInfo>('/api/health'),
@@ -325,6 +412,33 @@ export const api = {
       method: 'POST',
     }),
   getServiceLogs: (name: string) => request<any>(`/api/services/${name}/logs`),
+
+  // Lambdas
+  listLambdas: () => request<LambdaSummary[]>('/api/lambdas'),
+  getLambda: (name: string) =>
+    request<LambdaDetailInfo>(`/api/lambdas/${encodeURIComponent(name)}`),
+  invokeLambda: (name: string, input: InvokeLambdaInput) =>
+    request<InvokeResult | { accepted: true }>(
+      `/api/lambdas/${encodeURIComponent(name)}/invoke`,
+      { method: 'POST', body: JSON.stringify(input) },
+    ),
+  getLambdaLogs: (name: string) =>
+    request<{ invocations: LambdaInvocationRecord[] }>(
+      `/api/lambdas/${encodeURIComponent(name)}/logs`,
+    ),
+
+  // HTTP APIs
+  listApis: () => request<ServiceApiInfo[]>('/api/apis'),
+  clearAuthorizerCache: (filter?: { service?: string; authorizer?: string }) => {
+    const params = new URLSearchParams();
+    if (filter?.service) params.set('service', filter.service);
+    if (filter?.authorizer) params.set('authorizer', filter.authorizer);
+    const qs = params.toString();
+    return request<{ success: true; removed: number }>(
+      `/api/apis/authorizer-cache/clear${qs ? `?${qs}` : ''}`,
+      { method: 'POST' },
+    );
+  },
 
   // Resources
   listResources: () =>

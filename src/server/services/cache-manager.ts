@@ -1,6 +1,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import type { RegisteredFunction, HttpRoute, AuthorizerConfig } from './serverless-state-parser.js';
 
 export interface ServiceMetadata {
   name: string;
@@ -10,7 +11,13 @@ export interface ServiceMetadata {
   pid?: number;
   status: 'registered' | 'running' | 'stopped';
   invokePort?: number;
+  // Port the gateway proxy binds for this service's HTTP routes (30xx convention).
+  apiPort?: number;
   region?: string;
+  stage?: string;
+  functions?: RegisteredFunction[];
+  routes?: HttpRoute[];
+  authorizers?: AuthorizerConfig[];
 }
 
 export class CacheManager {

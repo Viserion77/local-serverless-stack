@@ -28,14 +28,32 @@ custom:
 
 After running `sls package` or `sls deploy`:
 
-1. The plugin reads your CloudFormation template from `.serverless/`
-2. Sends a registration request to the Orchestrator
-3. The Orchestrator provisions resources (DynamoDB, SQS, SNS) to LocalStack
+1. The plugin sends a registration request to the Orchestrator (service path, ports, region)
+2. The Orchestrator reads the `sls package` artifacts from `.serverless/` (CloudFormation template + `serverless-state.json`)
+3. It provisions resources (DynamoDB, SQS, SNS, S3) to LocalStack
+4. It registers the service's Lambda functions, HTTP routes and authorizers, starts a runtime worker, and binds the service's API port (30xx) and Lambda-invoke port (130xx) — replacing `serverless-offline`
 
 ## Configuration Options
 
 - `enabled` (boolean, default: `true`): Enable/disable the plugin
 - `orchestratorUrl` (string, default: `http://localhost:3100`): Orchestrator API endpoint
+
+### Service ports
+
+The plugin reports which ports LSS should serve the service on:
+
+```yaml
+custom:
+  lss:                    # preferred — explicit LSS ports
+    apiPort: 3010         # API Gateway emulator (HTTP routes)
+    invokePort: 13010     # AWS Lambda Invoke API
+  serverless-offline:     # fallback — drop-in for services already using offline
+    httpPort: 3010
+    lambdaPort: 13010
+```
+
+If only `apiPort` is known, the orchestrator derives `invokePort = apiPort + 10000`
+(configurable via `lambdaRuntime.invokePortOffset`).
 
 ### Example with custom config:
 

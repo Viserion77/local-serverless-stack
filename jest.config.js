@@ -16,6 +16,10 @@ module.exports = {
     // Integration-only by nature — excluded from the coverage denominator:
     '!src/server/index.ts', // calls start()/listens at import
     '!src/server/services/localstack-manager.ts', // drives Docker
+    '!src/server/services/lambda-runtime-manager.ts', // forks runtime workers
+    '!src/server/services/gateway-manager.ts', // binds real HTTP listeners
+    '!src/server/services/source-watcher.ts', // drives fs.watch
+    '!src/server/services/service-registrar.ts', // end-to-end registration flow: packaging + provisioning + data plane
     '!**/*.d.ts',
     '!**/node_modules/**',
     '!**/dist/**',

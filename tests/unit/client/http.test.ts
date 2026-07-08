@@ -112,6 +112,16 @@ describe('client data-plane — every namespace method maps to the right route',
     { name: 'services.start (input)', run: (c) => c.services.start('s', { command: 'npm' }), method: 'POST', path: '/api/services/s/start' },
     { name: 'services.stop', run: (c) => c.services.stop('s'), method: 'POST', path: '/api/services/s/stop' },
     { name: 'services.logs', run: (c) => c.services.logs('s'), method: 'GET', path: '/api/services/s/logs' },
+    { name: 'services.runtime', run: (c) => c.services.runtime('s'), method: 'GET', path: '/api/services/s/runtime' },
+    { name: 'services.startRuntime', run: (c) => c.services.startRuntime('s'), method: 'POST', path: '/api/services/s/runtime/start' },
+    { name: 'services.stopRuntime', run: (c) => c.services.stopRuntime('s'), method: 'POST', path: '/api/services/s/runtime/stop' },
+    { name: 'lambdas.list', run: (c) => c.lambdas.list(), method: 'GET', path: '/api/lambdas' },
+    { name: 'lambdas.get', run: (c) => c.lambdas.get('fn'), method: 'GET', path: '/api/lambdas/fn' },
+    { name: 'lambdas.invoke', run: (c) => c.lambdas.invoke('fn'), method: 'POST', path: '/api/lambdas/fn/invoke' },
+    { name: 'lambdas.invoke (input)', run: (c) => c.lambdas.invoke('fn', { payload: { a: 1 } }), method: 'POST', path: '/api/lambdas/fn/invoke' },
+    { name: 'lambdas.logs', run: (c) => c.lambdas.logs('fn'), method: 'GET', path: '/api/lambdas/fn/logs' },
+    { name: 'apis.list', run: (c) => c.apis.list(), method: 'GET', path: '/api/apis' },
+    { name: 'apis.clearAuthorizerCache', run: (c) => c.apis.clearAuthorizerCache(), method: 'POST', path: '/api/apis/authorizer-cache/clear' },
     { name: 'config.get', run: (c) => c.config.get(), method: 'GET', path: '/api/config' },
     { name: 'health.get', run: (c) => c.health.get(), method: 'GET', path: '/api/health' },
   ];
@@ -178,6 +188,23 @@ describe('client data-plane — request shaping', () => {
     expect(Buffer.isBuffer(buf)).toBe(true);
     expect(buf.toString()).toBe('binary-bytes');
     expect(queryOf(lastReq().url).get('download')).toBe('1');
+  });
+
+  it('lambdas.invoke defaults the body to {} and forwards the input otherwise', async () => {
+    const c = new LssClient({ baseUrl });
+    await c.lambdas.invoke('fn');
+    expect(JSON.parse(lastReq().body)).toEqual({});
+    await c.lambdas.invoke('fn', { payload: { a: 1 }, invocationType: 'Event' });
+    expect(JSON.parse(lastReq().body)).toEqual({ payload: { a: 1 }, invocationType: 'Event' });
+  });
+
+  it('apis.clearAuthorizerCache forwards service/authorizer filters and omits them when absent', async () => {
+    const c = new LssClient({ baseUrl });
+    await c.apis.clearAuthorizerCache({ service: 'svc', authorizer: 'auth' });
+    expect(queryOf(lastReq().url).get('service')).toBe('svc');
+    expect(queryOf(lastReq().url).get('authorizer')).toBe('auth');
+    await c.apis.clearAuthorizerCache();
+    expect(lastReq().url).toBe('/api/apis/authorizer-cache/clear');
   });
 
   it('constructs with no options at all (pure defaults)', () => {

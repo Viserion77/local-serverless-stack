@@ -148,6 +148,56 @@ describe('serverless-lss plugin', () => {
       expect(body.region).toBeUndefined();
     });
 
+    it('prefers custom.lss ports over serverless-offline ports', async () => {
+      const sls = makeServerless({
+        service: {
+          provider: {},
+          custom: {
+            lss: { apiPort: 3001, invokePort: 13001 },
+            'serverless-offline': { httpPort: 9999, lambdaPort: 8888 },
+          },
+        },
+      });
+      const p = new Plugin(sls, {});
+      await p.hooks['after:package:finalize']();
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.apiPort).toBe(3001);
+      expect(body.invokePort).toBe(13001);
+    });
+
+    it('falls back to serverless-offline httpPort/lambdaPort when custom.lss is absent', async () => {
+      const sls = makeServerless({
+        service: {
+          provider: {},
+          custom: { 'serverless-offline': { httpPort: 3002, lambdaPort: 3012 } },
+        },
+      });
+      const p = new Plugin(sls, {});
+      await p.hooks['after:package:finalize']();
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body.apiPort).toBe(3002);
+      expect(body.invokePort).toBe(3012);
+    });
+
+    it('includes apiPort in the register payload when configured', async () => {
+      const sls = makeServerless({
+        service: { provider: { region: 'sa-east-1' }, custom: { lss: { apiPort: 3050 } } },
+      });
+      const p = new Plugin(sls, {});
+      await p.hooks['before:offline:start']();
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(body).toEqual({ servicePath: '/svc/path', apiPort: 3050, region: 'sa-east-1' });
+    });
+
+    it('omits apiPort entirely when neither custom.lss nor serverless-offline define one', async () => {
+      const sls = makeServerless({ service: { provider: {}, custom: {} } });
+      const p = new Plugin(sls, {});
+      await p.hooks['after:package:finalize']();
+      const body = JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect('apiPort' in body).toBe(false);
+      expect(body.invokePort).toBeUndefined();
+    });
+
     it('logs an error (non-blocking) on a non-ok response', async () => {
       fetchMock.mockResolvedValue({
         ok: false,

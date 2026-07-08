@@ -89,12 +89,21 @@ export class LocalStackManager {
         `${volumeName}:/var/lib/localstack`,
         '-v',
         '/var/run/docker.sock:/var/run/docker.sock',
+        // host.docker.internal resolves natively on Docker Desktop but not on
+        // Linux; the generated Lambda proxies target it to reach the invoke
+        // listeners on the host, so map it explicitly (no-op elsewhere).
+        '--add-host',
+        'host.docker.internal:host-gateway',
         '--name',
         this.containerName,
         '-e',
         `SERVICES=${services}`,
         '-e',
         'LAMBDA_EXECUTOR=local',
+        // Lambda containers spawned BY LocalStack (which run the proxies) need
+        // the same host mapping.
+        '-e',
+        'LAMBDA_DOCKER_FLAGS=--add-host host.docker.internal:host-gateway',
         '-e',
         `PERSISTENCE=${persistence}`,
         '-e',

@@ -113,6 +113,28 @@ integration (`features.test.ts` "programmatic client" block).
 | `buckets.getObject` | Returns the raw object body as a `Buffer` (not JSON). | unit + integration |
 | `lifecycle.*` | Programmatic `start`/`stop`/`status`/`logs` + `waitUntilReady` health gate. | unit + integration |
 
+## 12. API Gateway & Lambda runtime emulation (serverless-offline replacement)
+
+LSS registers every function and HTTP route from the `sls package` artifacts
+(`cloudformation-template-update-stack.json` + `serverless-state.json`), runs handlers in
+per-service worker processes, and binds two listeners per service: an API Gateway emulator on
+the service's `apiPort` (30xx) and an AWS Lambda Invoke API on its `invokePort` (130xx) —
+so monorepo callers and the LocalStack event proxies keep their ports and contracts with no
+serverless-offline process running. See `docs/PRD_API_LAMBDA_EMULATION.md` for the full design.
+
+| Feature | Promise | Asserted by |
+|---|---|---|
+| Function & route registry | `sls package` registers functions, REST (`http`, payload v1) and HTTP API (`httpApi`, payload v2) routes and authorizers; persisted in the service cache and rehydrated on restart. | unit (`serverless-state-parser`, `function-registry`, `cache-manager`) |
+| Lambda runtime workers | One worker per service loads handlers lazily (warm starts), applies function env/timeout/context, captures per-invocation logs, restarts on crash. | unit (`api-gateway-events` helpers) + integration |
+| Execution modes | `artifact` (extracted `sls package` zip — TS/JS uniform), `source` (direct require; TS via `esbuild-register`/`tsx`/`ts-node`), `auto` picks artifact when present. | unit (`config-manager`) + integration |
+| Invoke API (130xx) | `POST /2015-03-31/functions/{name}/invocations` with `X-Amz-Invocation-Type` (RequestResponse 200 / Event 202 / DryRun 204) and `X-Amz-Function-Error` — same contract the LocalStack event proxies already call. | integration |
+| Gateway proxy (30xx) | Multi-port routing (literal > `{param}` > `{proxy+}` > `$default`; exact method > ANY), API Gateway payload v1/v2 events, v1 malformed → 502, v2 inferred responses, CORS preflight, `port-conflict` status instead of failing registration. | unit (`api-gateway-events`) + integration |
+| Lambda authorizers | REST `token`/`request` (payload 1.0) and HTTP API `request` (payload 1.0/2.0, `enableSimpleResponses`), identity-source extraction (missing → 401), TTL cache + `POST /api/apis/authorizer-cache/clear`, cross-service resolution by ARN through the global registry. | unit (`authorizer-service`) + integration |
+| Hot reload | Watched services restart their worker on source changes; `serverless.yml` changes re-package + re-register (with `autoPackage`). | integration |
+| Lambdas/APIs HTTP API | `GET /api/lambdas`, `GET /api/lambdas/:name`, `POST /api/lambdas/:name/invoke`, `GET /api/lambdas/:name/logs`, `GET /api/apis`, `GET/POST /api/services/:name/runtime{,/start,/stop}`. | unit (`routes/lambdas`, `routes/apis`) + integration |
+| `LssClient` namespaces | `lambdas.list/get/invoke/logs`, `apis.list/clearAuthorizerCache`, `services.runtime/startRuntime/stopRuntime`. | unit (`client/*`) |
+| Dashboard menus | Lambdas (list/detail with invoke + logs) and APIs (routes per service with listener status) sections in the Vue UI. | manual (like the rest of the UI) |
+
 ---
 
 ### How the integration suite boots

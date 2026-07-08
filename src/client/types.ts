@@ -219,6 +219,8 @@ export interface ResourceOwners {
 export interface RegisterServiceInput {
   servicePath: string;
   invokePort?: number;
+  /** Gateway proxy port for the service's HTTP routes (30xx convention). */
+  apiPort?: number;
   region?: string;
 }
 export interface StartServiceInput {

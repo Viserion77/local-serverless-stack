@@ -147,6 +147,38 @@ Both files should contain valid JSON with the following optional properties:
     }
     ```
 
+- **lambdaRuntime** (object, default: `{ "enabled": true, "execution": "auto", "invokePortOffset": 10000 }`)
+  - Controls the Lambda runtime + API emulation (the serverless-offline replacement).
+    When a service registers, LSS starts a runtime worker for its functions, binds an
+    API Gateway emulator on the service's `apiPort` (30xx) and an AWS Lambda Invoke API
+    on its `invokePort` (130xx).
+  - `enabled` (boolean, default `true`): master switch for the runtime and listeners.
+  - `execution` (`"auto"` | `"artifact"` | `"source"`, default `"auto"`): how handler code
+    is loaded. `artifact` extracts the `sls package` zip and loads the compiled bundle
+    (works uniformly for TS and JS); `source` requires handlers straight from the service
+    source tree (TS via `esbuild-register`/`tsx`/`ts-node` resolved from the service's or
+    LSS's node_modules); `auto` picks `artifact` when a zip exists, else `source`.
+  - `watch` (boolean, default: `true` in source mode, `false` in artifact mode): hot
+    reload — source changes restart the service worker; `serverless.yml`/`package.json`
+    changes trigger a re-package (when `autoPackage` is on) and full re-registration.
+  - `invokePortOffset` (number, default `10000`): when a service declares only an
+    `apiPort`, its invoke port is derived as `apiPort + invokePortOffset`
+    (e.g. 3010 → 13010).
+  - Env overrides: `LSS_LAMBDA_RUNTIME`, `LSS_LAMBDA_EXECUTION`, `LSS_LAMBDA_WATCH`.
+
+- **serviceRuntime** (object, default: `{}`)
+  - Per-service runtime overrides, keyed like `servicePackaging` (directory basename or
+    config-relative path; the relative-path key wins).
+  - Each value may set `enabled`, `apiPort`, `invokePort`, `execution`, `watch`.
+    Ports set here win over what the plugin sends in the register payload.
+  - Example:
+    ```jsonc
+    "serviceRuntime": {
+      "auth": { "apiPort": 3011, "invokePort": 13011 },
+      "app":  { "apiPort": 3010, "execution": "source", "watch": true }
+    }
+    ```
+
 > Note: configuration is read once when the orchestrator starts. After editing
 > `lss.config.json`, restart the orchestrator for changes to take effect.
 
@@ -177,6 +209,25 @@ The plugin will automatically use the `serverPort` from the LSS configuration if
   - Should match the serverPort from lss.config.json
   - Can be overridden via `ORCHESTRATOR_URL` environment variable
   - Example: `"http://localhost:3100"`
+
+### Service Ports (API emulation)
+
+The plugin also reports the service's HTTP and invoke ports so LSS can bind its
+gateway (30xx) and Lambda invoke (130xx) listeners. Discovery order:
+
+```yaml
+custom:
+  lss:                    # preferred — explicit LSS ports
+    apiPort: 3010
+    invokePort: 13010
+  serverless-offline:     # fallback — drop-in for services already using offline
+    httpPort: 3010
+    lambdaPort: 13010
+```
+
+When only `apiPort` is known, the orchestrator derives the invoke port via
+`lambdaRuntime.invokePortOffset` (default: `apiPort + 10000`). Ports set in
+`serviceRuntime` (lss.config.json) win over both.
 
 ### Environment Variables for Plugin
 

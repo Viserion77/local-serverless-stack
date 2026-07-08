@@ -6,12 +6,14 @@ import {
 import { RouterLink } from 'vue-router';
 import { api } from '../services/api';
 import type {
-  HealthInfo, LssConfigSnapshot, ServiceSummary,
+  HealthInfo, LambdaSummary, LssConfigSnapshot, ServiceApiInfo, ServiceSummary,
 } from '../services/api';
 
 const health = ref<HealthInfo | null>(null);
 const config = ref<LssConfigSnapshot | null>(null);
 const services = ref<ServiceSummary[]>([]);
+const lambdas = ref<LambdaSummary[]>([]);
+const apis = ref<ServiceApiInfo[]>([]);
 const resources = ref<{ tables: string[]; queues: string[]; topics: string[]; buckets: string[] }>({
   tables: [],
   queues: [],
@@ -23,16 +25,20 @@ let timer: number | null = null;
 
 async function loadAll() {
   try {
-    const [h, c, s, r] = await Promise.all([
+    const [h, c, s, r, l, a] = await Promise.all([
       api.checkHealth(),
       api.getConfig(),
       api.listServices(),
       api.listResources(),
+      api.listLambdas().catch(() => [] as LambdaSummary[]),
+      api.listApis().catch(() => [] as ServiceApiInfo[]),
     ]);
     health.value = h;
     config.value = c;
     services.value = s;
     resources.value = r;
+    lambdas.value = l;
+    apis.value = a;
   } catch (error) {
     console.error('Overview load failed:', error);
   } finally {
@@ -42,6 +48,9 @@ async function loadAll() {
 
 const runningServices = computed(() => services.value.filter(s => s.status === 'running').length);
 const totalServices = computed(() => services.value.length);
+const lambdasOnline = computed(() => lambdas.value.filter(l => l.status === 'online').length);
+const totalLambdas = computed(() => lambdas.value.length);
+const apiRoutesTotal = computed(() => apis.value.reduce((s, a) => s + a.routes.length, 0));
 const localstackTone = computed(() => health.value?.localstack ? 'success' : 'danger');
 const proxyEnabled = computed(() => Boolean(health.value?.dynamoProxy?.enabled));
 const proxyRunning = computed(() => Boolean(health.value?.dynamoProxy?.running));
@@ -234,6 +243,16 @@ onBeforeUnmount(() => {
           label="Services running"
           :value="`${runningServices} / ${totalServices}`"
           tone="success"
+        />
+        <TStat
+          label="Lambdas online"
+          :value="`${lambdasOnline} / ${totalLambdas}`"
+          tone="success"
+        />
+        <TStat
+          label="API routes"
+          :value="apiRoutesTotal"
+          tone="info"
         />
         <TStat
           label="DynamoDB tables"

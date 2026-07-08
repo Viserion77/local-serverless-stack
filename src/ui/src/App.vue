@@ -83,6 +83,8 @@ onBeforeUnmount(() => {
             <TTabList>
               <TTab value="/">Overview</TTab>
               <TTab value="/services">Services</TTab>
+              <TTab value="/lambdas">Lambdas</TTab>
+              <TTab value="/apis">APIs</TTab>
               <TTab value="/queues">Queues</TTab>
               <TTab value="/buckets">S3</TTab>
               <TTab value="/dynamo">DynamoDB</TTab>

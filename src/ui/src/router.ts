@@ -21,6 +21,25 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Service' },
   },
   {
+    path: '/lambdas',
+    name: 'lambdas',
+    component: () => import('./pages/LambdasPage.vue'),
+    meta: { title: 'Lambdas' },
+  },
+  {
+    path: '/lambdas/:name',
+    name: 'lambda-detail',
+    component: () => import('./pages/LambdaDetailPage.vue'),
+    props: route => ({ functionName: String(route.params.name) }),
+    meta: { title: 'Lambda' },
+  },
+  {
+    path: '/apis',
+    name: 'apis',
+    component: () => import('./pages/ApisPage.vue'),
+    meta: { title: 'APIs' },
+  },
+  {
     path: '/queues',
     name: 'queues',
     component: () => import('./pages/QueuesPage.vue'),

@@ -19,6 +19,8 @@ import { createResourcesApi, type ResourcesApi } from './namespaces/resources';
 import { createServicesApi, type ServicesApi } from './namespaces/services';
 import { createConfigApi, type ConfigApi } from './namespaces/config';
 import { createHealthApi, type HealthApi } from './namespaces/health';
+import { createLambdasApi, type LambdasApi } from './namespaces/lambdas';
+import { createApisApi, type ApisApi } from './namespaces/apis';
 import type { LssClientOptions } from './types';
 
 export class LssClient {
@@ -32,6 +34,8 @@ export class LssClient {
   readonly services: ServicesApi;
   readonly config: ConfigApi;
   readonly health: HealthApi;
+  readonly lambdas: LambdasApi;
+  readonly apis: ApisApi;
   readonly lifecycle: LifecycleApi;
 
   private readonly http: Http;
@@ -49,6 +53,8 @@ export class LssClient {
     this.services = createServicesApi(this.http);
     this.config = createConfigApi(this.http);
     this.health = createHealthApi(this.http);
+    this.lambdas = createLambdasApi(this.http);
+    this.apis = createApisApi(this.http);
     this.lifecycle = new Lifecycle({ health: this.health, cwd: cfg.cwd, configPath: cfg.configPath });
   }
 
@@ -72,6 +78,22 @@ export type { ResourcesApi } from './namespaces/resources';
 export type { ServicesApi } from './namespaces/services';
 export type { ConfigApi } from './namespaces/config';
 export type { HealthApi } from './namespaces/health';
+export type {
+  LambdasApi,
+  LambdaSummary,
+  LambdaDetail,
+  InvokeLambdaInput,
+  InvokeLambdaResult,
+  LambdaInvocationRecord,
+} from './namespaces/lambdas';
+export type {
+  ApisApi,
+  ServiceApiInfo,
+  ApiRouteInfo,
+  ApiAuthorizerInfo,
+  GatewayListenerStatus,
+} from './namespaces/apis';
+export type { ServiceRuntimeStatus } from './namespaces/services';
 export type {
   LifecycleApi,
   StartOptions,

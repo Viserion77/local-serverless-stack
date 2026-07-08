@@ -700,6 +700,7 @@ describe('bin/cli.js helpers', () => {
     });
 
     it('removes a stale pid file then spawns the orchestrator', () => {
+      jest.useFakeTimers();
       // pid file exists but the process is dead; orchestrator path exists.
       mockFs.existsSync.mockImplementation((p: any) => {
         const s = String(p);
@@ -727,6 +728,7 @@ describe('bin/cli.js helpers', () => {
     });
 
     it('threads config + CLI flags into the spawned env and prints the proxy line', () => {
+      jest.useFakeTimers();
       mockFs.existsSync.mockImplementation((p: any) => {
         const s = String(p);
         // No pid file; config exists; orchestrator built.
@@ -775,6 +777,7 @@ describe('bin/cli.js helpers', () => {
     });
 
     it('uses LOCALSTACK_AUTH_TOKEN env when no CLI token or config token is set', () => {
+      jest.useFakeTimers();
       mockFs.existsSync.mockImplementation((p: any) => {
         const s = String(p);
         if (s.endsWith('.pid')) return false;

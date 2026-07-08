@@ -33,6 +33,9 @@ const LSS_ENV_VARS = [
   'LSS_AUTO_PACKAGE',
   'LSS_PACKAGE_COMMAND',
   'LSS_PACKAGE_TIMEOUT_MS',
+  'LSS_LAMBDA_RUNTIME',
+  'LSS_LAMBDA_EXECUTION',
+  'LSS_LAMBDA_WATCH',
   'HOME',
 ];
 
@@ -597,6 +600,153 @@ describe('getPackageConfigForService', () => {
       env: {},
       timeoutMs: 120000,
     });
+  });
+});
+
+describe('lambdaRuntime config', () => {
+  function cmWith(config: Record<string, unknown>): CM {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify(config));
+    return freshConfigManager();
+  }
+
+  it('defaults: enabled, auto execution, offset 10000', () => {
+    const cm = freshConfigManager();
+    expect(cm.isLambdaRuntimeEnabled()).toBe(true);
+    expect(cm.getLambdaExecutionMode()).toBe('auto');
+    expect(cm.getInvokePortOffset()).toBe(10000);
+  });
+
+  it('reads enabled/execution/invokePortOffset from the config file', () => {
+    const cm = cmWith({ lambdaRuntime: { enabled: false, execution: 'artifact', invokePortOffset: 20000 } });
+    expect(cm.isLambdaRuntimeEnabled()).toBe(false);
+    expect(cm.getLambdaExecutionMode()).toBe('artifact');
+    expect(cm.getInvokePortOffset()).toBe(20000);
+  });
+
+  it('falls back per-field when the lambdaRuntime block is partial', () => {
+    const cm = cmWith({ lambdaRuntime: { execution: 'source' } });
+    expect(cm.isLambdaRuntimeEnabled()).toBe(true);
+    expect(cm.getLambdaExecutionMode()).toBe('source');
+    expect(cm.getInvokePortOffset()).toBe(10000);
+  });
+
+  it('LSS_LAMBDA_RUNTIME=true / "1" enables, anything else disables', () => {
+    process.env.LSS_LAMBDA_RUNTIME = 'true';
+    expect(freshConfigManager().isLambdaRuntimeEnabled()).toBe(true);
+    process.env.LSS_LAMBDA_RUNTIME = '1';
+    expect(freshConfigManager().isLambdaRuntimeEnabled()).toBe(true);
+    process.env.LSS_LAMBDA_RUNTIME = 'off';
+    expect(freshConfigManager().isLambdaRuntimeEnabled()).toBe(false);
+  });
+
+  it('LSS_LAMBDA_RUNTIME merges over file config without clobbering execution', () => {
+    process.env.LSS_LAMBDA_RUNTIME = 'false';
+    const cm = cmWith({ lambdaRuntime: { enabled: true, execution: 'artifact' } });
+    expect(cm.isLambdaRuntimeEnabled()).toBe(false);
+    expect(cm.getLambdaExecutionMode()).toBe('artifact');
+  });
+
+  it('LSS_LAMBDA_EXECUTION accepts auto/artifact/source', () => {
+    process.env.LSS_LAMBDA_EXECUTION = 'auto';
+    expect(freshConfigManager().getLambdaExecutionMode()).toBe('auto');
+    process.env.LSS_LAMBDA_EXECUTION = 'ARTIFACT'; // lowercased
+    expect(freshConfigManager().getLambdaExecutionMode()).toBe('artifact');
+    process.env.LSS_LAMBDA_EXECUTION = 'source';
+    expect(freshConfigManager().getLambdaExecutionMode()).toBe('source');
+  });
+
+  it('LSS_LAMBDA_EXECUTION ignores invalid values (file value kept)', () => {
+    process.env.LSS_LAMBDA_EXECUTION = 'bogus';
+    const cm = cmWith({ lambdaRuntime: { execution: 'artifact' } });
+    expect(cm.getLambdaExecutionMode()).toBe('artifact');
+  });
+
+  it('LSS_LAMBDA_WATCH=true / "1" enables the watch flag, anything else disables', () => {
+    process.env.LSS_LAMBDA_WATCH = 'true';
+    expect(freshConfigManager().getRuntimeConfigForService('/abs/svc').watch).toBe(true);
+    process.env.LSS_LAMBDA_WATCH = '1';
+    expect(freshConfigManager().getRuntimeConfigForService('/abs/svc').watch).toBe(true);
+    process.env.LSS_LAMBDA_WATCH = 'no';
+    expect(freshConfigManager().getRuntimeConfigForService('/abs/svc').watch).toBe(false);
+  });
+});
+
+describe('getRuntimeConfigForService', () => {
+  function cmWith(config: Record<string, unknown>): CM {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify(config));
+    return freshConfigManager();
+  }
+
+  it('returns global defaults with watch left undefined when nothing is configured', () => {
+    // No config file → configPath is '' → resolver falls back to process.cwd().
+    const cm = freshConfigManager();
+    expect(cm.getRuntimeConfigForService('/abs/some/access')).toEqual({
+      enabled: true,
+      execution: 'auto',
+      watch: undefined,
+      apiPort: undefined,
+      invokePort: undefined,
+    });
+  });
+
+  it('matches a per-service override by directory basename', () => {
+    const cm = cmWith({
+      serviceRuntime: {
+        access: { enabled: false, apiPort: 3001, invokePort: 13001, execution: 'source', watch: true },
+      },
+    });
+    expect(cm.getRuntimeConfigForService('/abs/microservices/access')).toEqual({
+      enabled: false,
+      execution: 'source',
+      watch: true,
+      apiPort: 3001,
+      invokePort: 13001,
+    });
+  });
+
+  it('a relative-path key wins over a basename key', () => {
+    const cm = cmWith({
+      serviceRuntime: {
+        access: { apiPort: 1111 },
+        'microservices/access': { apiPort: 2222 },
+      },
+    });
+    const svc = path.join(process.cwd(), 'microservices/access');
+    expect(cm.getRuntimeConfigForService(svc).apiPort).toBe(2222);
+  });
+
+  it('falls back to the global lambdaRuntime block for unset per-service fields', () => {
+    const cm = cmWith({
+      lambdaRuntime: { enabled: false, execution: 'artifact', watch: true },
+      serviceRuntime: { access: { apiPort: 3001 } },
+    });
+    expect(cm.getRuntimeConfigForService('/abs/access')).toEqual({
+      enabled: false,
+      execution: 'artifact',
+      watch: true,
+      apiPort: 3001,
+      invokePort: undefined,
+    });
+  });
+
+  it('keeps watch undefined when neither the service nor the global block set it', () => {
+    const cm = cmWith({
+      lambdaRuntime: { execution: 'source' },
+      serviceRuntime: { access: { enabled: true } },
+    });
+    expect(cm.getRuntimeConfigForService('/abs/access').watch).toBeUndefined();
+  });
+
+  it('returns only globals for a service with no matching override', () => {
+    const cm = cmWith({
+      lambdaRuntime: { execution: 'source' },
+      serviceRuntime: { access: { execution: 'artifact' } },
+    });
+    expect(cm.getRuntimeConfigForService('/abs/other').execution).toBe('source');
   });
 });
 

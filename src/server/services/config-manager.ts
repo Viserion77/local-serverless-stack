@@ -22,6 +22,44 @@ export interface ResolvedPackageConfig {
   timeoutMs: number;
 }
 
+// How the Lambda runtime resolves handler code:
+//   "artifact": extract the `sls package` zip and load the compiled handler.
+//   "source":   require the handler straight from the service source tree
+//               (TS supported via an on-demand loader).
+//   "auto" (default): artifact when the zip exists, source otherwise.
+export type LambdaExecutionMode = 'auto' | 'artifact' | 'source';
+
+export interface LambdaRuntimeConfig {
+  // Master switch for the runtime + gateway/invoke listeners (default: true).
+  enabled?: boolean;
+  execution?: LambdaExecutionMode;
+  // Watch service sources and hot-reload workers (default: true in source mode,
+  // false in artifact mode — repackaging on every save is expensive).
+  watch?: boolean;
+  // apiPort (30xx) → invokePort (130xx) derivation when a service doesn't
+  // declare an explicit invoke port. Default: 10000.
+  invokePortOffset?: number;
+}
+
+// Per-service runtime overrides, keyed like `servicePackaging` (directory
+// basename or config-relative path).
+export interface ServiceRuntimeConfig {
+  enabled?: boolean;
+  apiPort?: number;
+  invokePort?: number;
+  execution?: LambdaExecutionMode;
+  watch?: boolean;
+}
+
+// The effective runtime settings resolved for a single service.
+export interface ResolvedRuntimeConfig {
+  enabled: boolean;
+  execution: LambdaExecutionMode;
+  watch?: boolean;
+  apiPort?: number;
+  invokePort?: number;
+}
+
 export interface LSSConfig {
   // Server port (dashboard + API)
   serverPort?: number;
@@ -97,6 +135,12 @@ export interface LSSConfig {
 
   // Maximum time (ms) to wait for the package command to complete. Defaults to 300000 (5min).
   packageTimeoutMs?: number;
+
+  // Lambda runtime + gateway proxy (API emulation) settings.
+  lambdaRuntime?: LambdaRuntimeConfig;
+
+  // Per-service runtime overrides (ports, execution mode, watch).
+  serviceRuntime?: Record<string, ServiceRuntimeConfig>;
 }
 
 export class ConfigManager {
@@ -216,6 +260,24 @@ export class ConfigManager {
       if (!isNaN(parsed) && parsed > 0) {
         this.config.packageTimeoutMs = parsed;
       }
+    }
+    if (process.env.LSS_LAMBDA_RUNTIME) {
+      this.config.lambdaRuntime = {
+        ...this.config.lambdaRuntime,
+        enabled: process.env.LSS_LAMBDA_RUNTIME === 'true' || process.env.LSS_LAMBDA_RUNTIME === '1',
+      };
+    }
+    if (process.env.LSS_LAMBDA_EXECUTION) {
+      const mode = process.env.LSS_LAMBDA_EXECUTION.toLowerCase();
+      if (mode === 'auto' || mode === 'artifact' || mode === 'source') {
+        this.config.lambdaRuntime = { ...this.config.lambdaRuntime, execution: mode };
+      }
+    }
+    if (process.env.LSS_LAMBDA_WATCH) {
+      this.config.lambdaRuntime = {
+        ...this.config.lambdaRuntime,
+        watch: process.env.LSS_LAMBDA_WATCH === 'true' || process.env.LSS_LAMBDA_WATCH === '1',
+      };
     }
   }
 
@@ -347,6 +409,40 @@ export class ConfigManager {
       args: [...(this.config.packageArgs ?? []), ...(perService.packageArgs ?? [])],
       env: { ...(this.config.packageEnv ?? {}), ...(perService.packageEnv ?? {}) },
       timeoutMs: perService.packageTimeoutMs ?? this.getPackageTimeoutMs(),
+    };
+  }
+
+  isLambdaRuntimeEnabled(): boolean {
+    return this.config.lambdaRuntime?.enabled ?? true;
+  }
+
+  getLambdaExecutionMode(): LambdaExecutionMode {
+    return this.config.lambdaRuntime?.execution ?? 'auto';
+  }
+
+  getInvokePortOffset(): number {
+    return this.config.lambdaRuntime?.invokePortOffset ?? 10000;
+  }
+
+  /**
+   * Resolve the effective runtime settings for one service, merging the global
+   * lambdaRuntime block with any serviceRuntime override matched by relative
+   * path (from the config file's dir) or by directory basename. `watch` stays
+   * undefined when unset so the runtime can pick its mode-dependent default
+   * (true for source, false for artifact).
+   */
+  getRuntimeConfigForService(servicePath: string): ResolvedRuntimeConfig {
+    const map = this.config.serviceRuntime ?? {};
+    const baseName = path.basename(servicePath);
+    const configDir = path.resolve(this.configPath ? path.dirname(this.configPath) : process.cwd());
+    const relPath = path.relative(configDir, servicePath).split(path.sep).join('/');
+    const perService = map[relPath] ?? map[baseName] ?? {};
+    return {
+      enabled: perService.enabled ?? this.isLambdaRuntimeEnabled(),
+      execution: perService.execution ?? this.getLambdaExecutionMode(),
+      watch: perService.watch ?? this.config.lambdaRuntime?.watch,
+      apiPort: perService.apiPort,
+      invokePort: perService.invokePort,
     };
   }
 

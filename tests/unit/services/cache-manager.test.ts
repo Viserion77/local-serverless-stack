@@ -49,6 +49,56 @@ describe('saveTemplate / getTemplate', () => {
     expect(meta).toEqual({ name: 'svc', ...baseMeta });
   });
 
+  it('round-trips the runtime metadata fields (apiPort/stage/functions/routes/authorizers)', async () => {
+    const runtimeMeta: Omit<ServiceMetadata, 'name'> = {
+      ...baseMeta,
+      invokePort: 13001,
+      apiPort: 3001,
+      region: 'us-east-1',
+      stage: 'offline',
+      functions: [
+        {
+          name: 'users',
+          fullName: 'svc-offline-users',
+          handler: 'src/users.handler',
+          runtime: 'nodejs20.x',
+          memorySize: 256,
+          timeout: 10,
+          environment: { TABLE: 'users' },
+          triggers: ['http'],
+          artifact: '.serverless/svc.zip',
+        },
+      ],
+      routes: [
+        { functionName: 'users', method: 'GET', path: '/users', eventType: 'http', cors: true, authorizerName: 'users:auth' },
+      ],
+      authorizers: [
+        {
+          name: 'users:auth',
+          type: 'token',
+          eventType: 'http',
+          payloadVersion: '1.0',
+          enableSimpleResponses: false,
+          identitySource: ['method.request.header.Authorization'],
+          resultTtlInSeconds: 300,
+          functionName: 'auth',
+        },
+      ],
+    };
+
+    await manager.saveTemplate('svc', {}, runtimeMeta);
+    expect(await manager.getMetadata('svc')).toEqual({ name: 'svc', ...runtimeMeta });
+
+    // updateMetadata preserves the runtime fields it does not touch.
+    await manager.updateMetadata('svc', { status: 'running' });
+    const updated = await manager.getMetadata('svc');
+    expect(updated!.apiPort).toBe(3001);
+    expect(updated!.stage).toBe('offline');
+    expect(updated!.functions).toHaveLength(1);
+    expect(updated!.routes![0].path).toBe('/users');
+    expect(updated!.authorizers![0].name).toBe('users:auth');
+  });
+
   it('getTemplate returns null when the template is missing (catch)', async () => {
     expect(await manager.getTemplate('does-not-exist')).toBeNull();
   });
