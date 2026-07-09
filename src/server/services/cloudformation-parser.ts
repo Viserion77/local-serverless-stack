@@ -30,6 +30,7 @@ export interface DynamoDBResource {
   attributeDefinitions: Array<{ AttributeName: string; AttributeType: string }>;
   billingMode?: string;
   streamEnabled?: boolean;
+  streamViewType?: 'KEYS_ONLY' | 'NEW_IMAGE' | 'OLD_IMAGE' | 'NEW_AND_OLD_IMAGES';
   // TimeToLiveSpecification — applied via UpdateTimeToLive after CreateTable.
   ttl?: { attributeName: string; enabled: boolean };
   globalSecondaryIndexes?: Array<{
@@ -163,13 +164,10 @@ export class CloudFormationParser {
     const streamEnabled = streamSpec ? Boolean(streamSpec.StreamViewType || streamSpec.StreamEnabled) : false;
     const ttlSpec = props.TimeToLiveSpecification as { AttributeName?: string; Enabled?: boolean } | undefined;
 
-    return {
+    const parsed: DynamoDBResource = {
       type: 'dynamodb',
       logicalId: key,
       name: (props.TableName as string) || key,
-      ttl: ttlSpec?.AttributeName
-        ? { attributeName: ttlSpec.AttributeName, enabled: ttlSpec.Enabled !== false }
-        : undefined,
       keySchema: (props.KeySchema as Array<{ AttributeName: string; KeyType: string }>) || [],
       attributeDefinitions: (props.AttributeDefinitions as Array<{ AttributeName: string; AttributeType: string }>) || [],
       billingMode: props.BillingMode as string | undefined,
@@ -177,6 +175,13 @@ export class CloudFormationParser {
       globalSecondaryIndexes: props.GlobalSecondaryIndexes as DynamoDBResource['globalSecondaryIndexes'] | undefined,
       localSecondaryIndexes: props.LocalSecondaryIndexes as DynamoDBResource['localSecondaryIndexes'] | undefined,
     };
+    if (streamSpec?.StreamViewType) {
+      parsed.streamViewType = streamSpec.StreamViewType as DynamoDBResource['streamViewType'];
+    }
+    if (ttlSpec?.AttributeName) {
+      parsed.ttl = { attributeName: ttlSpec.AttributeName, enabled: ttlSpec.Enabled !== false };
+    }
+    return parsed;
   }
 
   private parseSQS(key: string, resource: CloudFormationResource): SQSResource {
@@ -248,19 +253,35 @@ export class CloudFormationParser {
     const props = (resource.Properties || {}) as Record<string, unknown>;
     const destination = (props.DestinationConfig as { OnFailure?: { Destination?: unknown } } | undefined)
       ?.OnFailure?.Destination;
-    return {
+    const parsed: EventSourceMapping = {
       type: 'event-source',
       functionName: this.extractFunctionName(props.FunctionName),
       eventSourceArn: this.extractArn(props.EventSourceArn),
-      batchSize: props.BatchSize as number | undefined,
       enabled: props.Enabled !== false,
-      startingPosition: props.StartingPosition as string | undefined,
-      maximumRetryAttempts: props.MaximumRetryAttempts as number | undefined,
-      onFailureDestination: destination !== undefined ? this.extractArn(destination) || undefined : undefined,
-      maximumBatchingWindowInSeconds: props.MaximumBatchingWindowInSeconds as number | undefined,
-      functionResponseTypes: props.FunctionResponseTypes as string[] | undefined,
-      filterCriteria: props.FilterCriteria as EventSourceMapping['filterCriteria'],
     };
+    if (props.BatchSize !== undefined) {
+      parsed.batchSize = props.BatchSize as number;
+    }
+    if (props.StartingPosition !== undefined) {
+      parsed.startingPosition = props.StartingPosition as string;
+    }
+    if (props.MaximumRetryAttempts !== undefined) {
+      parsed.maximumRetryAttempts = props.MaximumRetryAttempts as number;
+    }
+    if (destination !== undefined) {
+      const resolvedDestination = this.extractArn(destination);
+      if (resolvedDestination) parsed.onFailureDestination = resolvedDestination;
+    }
+    if (props.MaximumBatchingWindowInSeconds !== undefined) {
+      parsed.maximumBatchingWindowInSeconds = props.MaximumBatchingWindowInSeconds as number;
+    }
+    if (Array.isArray(props.FunctionResponseTypes)) {
+      parsed.functionResponseTypes = props.FunctionResponseTypes as string[];
+    }
+    if (props.FilterCriteria !== undefined) {
+      parsed.filterCriteria = props.FilterCriteria as EventSourceMapping['filterCriteria'];
+    }
+    return parsed;
   }
 
   private extractFunctionName(ref: unknown): string {

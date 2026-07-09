@@ -17,5 +17,11 @@
   "packageEnv": {},
   "servicePackaging": {
     "access": { "packageArgs": ["--param=custom-stage=offline"] }
+  },
+  "lambdaRuntime": {
+    "enabled": true,
+    "execution": "auto",
+    "invokePortOffset": 10000,
+    "invokeHost": "host.docker.internal"
   }
 }

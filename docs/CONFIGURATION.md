@@ -35,7 +35,13 @@ Both files should contain valid JSON with the following optional properties:
   "debug": false,
   "autoPackage": false,
   "packageCommand": "npx serverless package",
-  "packageTimeoutMs": 300000
+  "packageTimeoutMs": 300000,
+  "lambdaRuntime": {
+    "enabled": true,
+    "execution": "auto",
+    "invokePortOffset": 10000,
+    "invokeHost": "host.docker.internal"
+  }
 }
 ```
 
@@ -147,7 +153,7 @@ Both files should contain valid JSON with the following optional properties:
     }
     ```
 
-- **lambdaRuntime** (object, default: `{ "enabled": true, "execution": "auto", "invokePortOffset": 10000 }`)
+- **lambdaRuntime** (object, default: `{ "enabled": true, "execution": "auto", "invokePortOffset": 10000, "invokeHost": "host.docker.internal" }`)
   - Controls the Lambda runtime + API emulation (the serverless-offline replacement).
     When a service registers, LSS starts a runtime worker for its functions, binds an
     API Gateway emulator on the service's `apiPort` (30xx) and an AWS Lambda Invoke API
@@ -164,7 +170,28 @@ Both files should contain valid JSON with the following optional properties:
   - `invokePortOffset` (number, default `10000`): when a service declares only an
     `apiPort`, its invoke port is derived as `apiPort + invokePortOffset`
     (e.g. 3010 → 13010).
-  - Env overrides: `LSS_LAMBDA_RUNTIME`, `LSS_LAMBDA_EXECUTION`, `LSS_LAMBDA_WATCH`.
+  - `invokeHost` (string, default `"host.docker.internal"`): hostname the LocalStack
+    Lambda proxy functions use when calling back into the service invoke listener
+    (`http://{invokeHost}:{invokePort}`). In Docker-in-Docker/devcontainer setups,
+    `host.docker.internal` may point at Docker Desktop instead of the devcontainer;
+    set this to the Docker network gateway reachable from the LocalStack container
+    (for example `"172.19.0.1"`).
+  - Env overrides: `LSS_LAMBDA_RUNTIME`, `LSS_LAMBDA_EXECUTION`, `LSS_LAMBDA_WATCH`,
+    `LSS_INVOKE_HOST`.
+
+  Docker-in-Docker/devcontainer example:
+  ```jsonc
+  {
+    "lambdaRuntime": {
+      "invokeHost": "172.19.0.1"
+    }
+  }
+  ```
+  Or for one shell session:
+  ```bash
+  export LSS_INVOKE_HOST=172.19.0.1
+  npx lss start
+  ```
 
 - **serviceRuntime** (object, default: `{}`)
   - Per-service runtime overrides, keyed like `servicePackaging` (directory basename or
@@ -312,6 +339,10 @@ If no configuration file is found, you can use environment variables:
 - `LSS_AUTO_PACKAGE` - Run package command when template is missing (true/false or 1/0)
 - `LSS_PACKAGE_COMMAND` - Override the package command
 - `LSS_PACKAGE_TIMEOUT_MS` - Override the package timeout in milliseconds
+- `LSS_LAMBDA_RUNTIME` - Enable/disable Lambda runtime + API emulation (true/false or 1/0)
+- `LSS_LAMBDA_EXECUTION` - `auto`, `artifact`, or `source`
+- `LSS_LAMBDA_WATCH` - Enable/disable runtime source watching (true/false or 1/0)
+- `LSS_INVOKE_HOST` - Override `lambdaRuntime.invokeHost` for LocalStack proxy callbacks
 
 ### Environment Variable Examples
 

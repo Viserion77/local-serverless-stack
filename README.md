@@ -10,8 +10,8 @@ LSS provides a unified local development environment for serverless microservice
 
 - **Centralized LocalStack**: Single LocalStack instance manages DynamoDB, SQS, SNS, S3, and Lambda
 - **Auto-provisioning**: Parses CloudFormation templates from `sls package` and provisions resources automatically
-- **Event source mappings**: Automatically connects SQS queues to Lambda handlers via LocalStack
-- **Lambda proxies**: Generated proxy functions forward events to serverless-offline invoke endpoints
+- **Event source mappings**: Automatically connects SQS queues, streams, and S3 notifications to Lambda handlers via LocalStack
+- **Lambda runtime & API emulation**: LSS can answer on the same API (30xx) and Lambda invoke (130xx) ports that serverless-offline used
 - **Web UI**: Vue 3 dashboard to monitor services, resources, and event mappings
 - **Hot reload**: Watch for code changes and auto-rebuild/reprovision
 - **Process management**: Start/stop microservices from the orchestrator
@@ -50,7 +50,7 @@ local-serverless-stack/
 
 ### Prerequisites
 
-- Node.js >= 18
+- Node.js >= 20
 - Docker (for LocalStack)
 - Serverless Framework 3.40.0
 
@@ -178,18 +178,18 @@ npx lss start
 cd your-microservice
 npx sls package
 
-# 3. Start serverless offline
-npx serverless offline start --host 0.0.0.0 --httpPort 3020 --lambdaPort 13020
-
-# 4. Monitor in the dashboard
+# 3. Monitor in the dashboard
 open http://localhost:3100
 ```
 
 Now when you send a message to an SQS queue in LocalStack, the orchestrator will:
 1. Detect the event via event source mapping
 2. Invoke the Lambda proxy in LocalStack
-3. Proxy forwards to serverless-offline on the invoke port
+3. Proxy calls LSS's Lambda invoke listener on the service invoke port
 4. Your handler executes
+
+If you still want serverless-offline to own the ports for a service, disable the
+LSS runtime globally or per service with `lambdaRuntime.enabled`/`serviceRuntime`.
 
 ## Project Structure
 

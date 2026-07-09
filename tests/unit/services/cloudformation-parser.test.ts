@@ -131,8 +131,38 @@ describe('parseDynamoDB', () => {
     expect(res.name).toBe('Orders');
     expect(res.billingMode).toBe('PAY_PER_REQUEST');
     expect(res.streamEnabled).toBe(true);
+    expect(res.streamViewType).toBe('NEW_AND_OLD_IMAGES');
     expect(res.globalSecondaryIndexes).toHaveLength(1);
     expect(res.localSecondaryIndexes).toHaveLength(1);
+  });
+
+  it('parses TimeToLiveSpecification enabled and disabled variants', () => {
+    const resources = parser.parse({
+      Resources: {
+        EnabledTtl: {
+          Type: 'AWS::DynamoDB::Table',
+          Properties: { TimeToLiveSpecification: { AttributeName: 'expiresAt', Enabled: true } },
+        },
+        DisabledTtl: {
+          Type: 'AWS::DynamoDB::Table',
+          Properties: { TimeToLiveSpecification: { AttributeName: 'ttl', Enabled: false } },
+        },
+      },
+    } as never) as DynamoDBResource[];
+    expect(resources[0].ttl).toEqual({ attributeName: 'expiresAt', enabled: true });
+    expect(resources[1].ttl).toEqual({ attributeName: 'ttl', enabled: false });
+  });
+
+  it('ignores TimeToLiveSpecification without an AttributeName', () => {
+    const [res] = parser.parse({
+      Resources: {
+        T: {
+          Type: 'AWS::DynamoDB::Table',
+          Properties: { TimeToLiveSpecification: { Enabled: true } },
+        },
+      },
+    } as never) as DynamoDBResource[];
+    expect(res.ttl).toBeUndefined();
   });
 
   it('treats StreamSpecification with only StreamEnabled as enabled', () => {
@@ -416,6 +446,58 @@ describe('parseEventSource', () => {
     });
   });
 
+  it('parses full EventSourceMapping fidelity fields', () => {
+    const [res] = parser.parse({
+      Resources: {
+        M: {
+          Type: 'AWS::Lambda::EventSourceMapping',
+          Properties: {
+            FunctionName: { Ref: 'StreamRelayLambdaFunction' },
+            EventSourceArn: { 'Fn::GetAtt': ['IdentityTable', 'StreamArn'] },
+            BatchSize: 1,
+            Enabled: true,
+            StartingPosition: 'LATEST',
+            MaximumRetryAttempts: 2,
+            DestinationConfig: { OnFailure: { Destination: { 'Fn::GetAtt': ['RelayDlq', 'Arn'] } } },
+            MaximumBatchingWindowInSeconds: 3,
+            FunctionResponseTypes: ['ReportBatchItemFailures'],
+            FilterCriteria: { Filters: [{ Pattern: '{"eventName":["INSERT"]}' }] },
+          },
+        },
+      },
+    } as never) as EventSourceMapping[];
+    expect(res).toEqual({
+      type: 'event-source',
+      functionName: 'StreamRelayLambdaFunction',
+      eventSourceArn: 'IdentityTable::StreamArn',
+      batchSize: 1,
+      enabled: true,
+      startingPosition: 'LATEST',
+      maximumRetryAttempts: 2,
+      onFailureDestination: 'RelayDlq::Arn',
+      maximumBatchingWindowInSeconds: 3,
+      functionResponseTypes: ['ReportBatchItemFailures'],
+      filterCriteria: { Filters: [{ Pattern: '{"eventName":["INSERT"]}' }] },
+    });
+  });
+
+  it('omits optional EventSourceMapping fields that do not resolve', () => {
+    const [res] = parser.parse({
+      Resources: {
+        M: {
+          Type: 'AWS::Lambda::EventSourceMapping',
+          Properties: {
+            FunctionName: { Ref: 'Fn' },
+            DestinationConfig: { OnFailure: { Destination: { Ref: 'UnsupportedRef' } } },
+            FunctionResponseTypes: 'ReportBatchItemFailures',
+          },
+        },
+      },
+    } as never) as EventSourceMapping[];
+    expect(res.onFailureDestination).toBeUndefined();
+    expect(res.functionResponseTypes).toBeUndefined();
+  });
+
   it('treats Enabled === false as disabled', () => {
     const [res] = parser.parse({
       Resources: {
@@ -438,7 +520,6 @@ describe('parseEventSource', () => {
       type: 'event-source',
       functionName: '',
       eventSourceArn: '',
-      batchSize: undefined,
       enabled: true,
     });
   });

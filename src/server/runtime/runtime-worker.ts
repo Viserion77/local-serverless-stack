@@ -71,6 +71,19 @@ function resolveHandlerFile(root: string, filePart: string): string | null {
   return null;
 }
 
+function hasNativeTypeScriptSupport(): boolean {
+  return Boolean((process.features as NodeJS.ProcessFeatures & { typescript?: boolean }).typescript);
+}
+
+async function tryNativeTypeScriptImport(file: string): Promise<Record<string, unknown> | null> {
+  if (!hasNativeTypeScriptSupport()) return null;
+  try {
+    return (await import(pathToFileURL(file).href)) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
 // Register a TypeScript require hook, resolving the loader from the service's
 // own node_modules first (its version wins), then from LSS's dependencies.
 function ensureTsLoader(serviceRoot: string): void {
@@ -121,23 +134,33 @@ async function loadHandler(msg: InvokeMessage): Promise<HandlerFn> {
     throw new Error(`Handler file not found for "${msg.handler}" under ${msg.handlerRoot}`);
   }
 
+  let mod: Record<string, unknown> | null = null;
   if (/\.(ts|cts|mts)$/.test(file)) {
-    ensureTsLoader(msg.serviceRoot);
+    // Node 22.6+/24 can strip TS types natively when process.features.typescript
+    // is enabled. Prefer that path before requiring service-side loader deps.
+    mod = await tryNativeTypeScriptImport(file);
+    if (!mod) {
+      ensureTsLoader(msg.serviceRoot);
+    }
   }
 
   // Resolve like a module sitting inside the service, so relative requires and
   // the service's node_modules work; fall back to dynamic import for ESM files.
   const serviceRequire = createRequire(path.join(msg.handlerRoot, 'noop.js'));
-  let mod: Record<string, unknown>;
-  try {
-    mod = serviceRequire(file);
-  } catch (err) {
-    const code = (err as NodeJS.ErrnoException)?.code;
-    if (code === 'ERR_REQUIRE_ESM' || /\.mjs$/.test(file)) {
-      mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
-    } else {
-      throw err;
+  if (!mod) {
+    try {
+      mod = serviceRequire(file);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === 'ERR_REQUIRE_ESM' || /\.mjs$/.test(file)) {
+        mod = (await import(pathToFileURL(file).href)) as Record<string, unknown>;
+      } else {
+        throw err;
+      }
     }
+  }
+  if (!mod) {
+    throw new Error(`Handler module failed to load from ${file}`);
   }
 
   const candidate = mod[exportName]

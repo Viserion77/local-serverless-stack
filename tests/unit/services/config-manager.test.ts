@@ -36,6 +36,7 @@ const LSS_ENV_VARS = [
   'LSS_LAMBDA_RUNTIME',
   'LSS_LAMBDA_EXECUTION',
   'LSS_LAMBDA_WATCH',
+  'LSS_INVOKE_HOST',
   'HOME',
 ];
 
@@ -611,18 +612,27 @@ describe('lambdaRuntime config', () => {
     return freshConfigManager();
   }
 
-  it('defaults: enabled, auto execution, offset 10000', () => {
+  it('defaults: enabled, auto execution, offset 10000 and host.docker.internal invoke host', () => {
     const cm = freshConfigManager();
     expect(cm.isLambdaRuntimeEnabled()).toBe(true);
     expect(cm.getLambdaExecutionMode()).toBe('auto');
     expect(cm.getInvokePortOffset()).toBe(10000);
+    expect(cm.getInvokeHost()).toBe('host.docker.internal');
   });
 
   it('reads enabled/execution/invokePortOffset from the config file', () => {
-    const cm = cmWith({ lambdaRuntime: { enabled: false, execution: 'artifact', invokePortOffset: 20000 } });
+    const cm = cmWith({
+      lambdaRuntime: {
+        enabled: false,
+        execution: 'artifact',
+        invokePortOffset: 20000,
+        invokeHost: '172.19.0.1',
+      },
+    });
     expect(cm.isLambdaRuntimeEnabled()).toBe(false);
     expect(cm.getLambdaExecutionMode()).toBe('artifact');
     expect(cm.getInvokePortOffset()).toBe(20000);
+    expect(cm.getInvokeHost()).toBe('172.19.0.1');
   });
 
   it('falls back per-field when the lambdaRuntime block is partial', () => {
@@ -670,6 +680,13 @@ describe('lambdaRuntime config', () => {
     expect(freshConfigManager().getRuntimeConfigForService('/abs/svc').watch).toBe(true);
     process.env.LSS_LAMBDA_WATCH = 'no';
     expect(freshConfigManager().getRuntimeConfigForService('/abs/svc').watch).toBe(false);
+  });
+
+  it('LSS_INVOKE_HOST overrides file config without clobbering other lambdaRuntime fields', () => {
+    process.env.LSS_INVOKE_HOST = '172.19.0.1';
+    const cm = cmWith({ lambdaRuntime: { execution: 'artifact', invokeHost: 'host.docker.internal' } });
+    expect(cm.getInvokeHost()).toBe('172.19.0.1');
+    expect(cm.getLambdaExecutionMode()).toBe('artifact');
   });
 });
 

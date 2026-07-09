@@ -9,6 +9,7 @@ import {
   ListTablesCommand,
   DeleteTableCommand,
   DescribeTableCommand,
+  UpdateTimeToLiveCommand,
 } from '@aws-sdk/client-dynamodb';
 import {
   SQSClient,
@@ -43,8 +44,10 @@ import {
   CreateEventSourceMappingCommand,
   ListEventSourceMappingsCommand,
   DeleteEventSourceMappingCommand,
+  UpdateFunctionConfigurationCommand,
 } from '@aws-sdk/client-lambda';
 import { ResourceProvisioner } from '../../../src/server/services/resource-provisioner';
+import { ConfigManager } from '../../../src/server/services/config-manager';
 import type {
   DynamoDBResource,
   SQSResource,
@@ -163,6 +166,7 @@ describe('createDynamoDBTable (via provisionResources)', () => {
     const resource = dynamoResource({
       attributeDefinitions: undefined as any, // exercise `|| []` fallback
       streamEnabled: true,
+      streamViewType: 'KEYS_ONLY',
       globalSecondaryIndexes: [
         { IndexName: 'gsi1', KeySchema: [{ AttributeName: 'gsiKey', KeyType: 'HASH' }], Projection: { ProjectionType: 'ALL' } },
       ],
@@ -175,8 +179,43 @@ describe('createDynamoDBTable (via provisionResources)', () => {
     const attrNames = input.AttributeDefinitions.map((a: any) => a.AttributeName).sort();
     expect(attrNames).toEqual(['gsiKey', 'lsiKey', 'pk']);
     expect(input.StreamSpecification.StreamEnabled).toBe(true);
+    expect(input.StreamSpecification.StreamViewType).toBe('KEYS_ONLY');
     expect(input.GlobalSecondaryIndexes).toBeDefined();
     expect(input.LocalSecondaryIndexes).toBeDefined();
+  });
+
+  it('defaults stream view type and applies enabled TTL after table creation', async () => {
+    dynamoMock.on(CreateTableCommand).resolves({});
+    dynamoMock.on(UpdateTimeToLiveCommand).resolves({});
+    await provisioner.provisionResources('svc', [dynamoResource({
+      streamEnabled: true,
+      ttl: { attributeName: 'expiresAt', enabled: true },
+    })]);
+    const createInput = dynamoMock.commandCalls(CreateTableCommand)[0].args[0].input as any;
+    const ttlInput = dynamoMock.commandCalls(UpdateTimeToLiveCommand)[0].args[0].input as any;
+    expect(createInput.StreamSpecification.StreamViewType).toBe('NEW_AND_OLD_IMAGES');
+    expect(ttlInput.TableName).toBe('orders-table');
+    expect(ttlInput.TimeToLiveSpecification).toEqual({ AttributeName: 'expiresAt', Enabled: true });
+  });
+
+  it('applies disabled TTL to an existing table and treats already-disabled as steady state', async () => {
+    dynamoMock.on(CreateTableCommand).rejects(namedError('ResourceInUseException'));
+    dynamoMock.on(UpdateTimeToLiveCommand).rejects(new Error('TimeToLive is already disabled'));
+    await provisioner.provisionResources('svc', [dynamoResource({
+      ttl: { attributeName: 'ttl', enabled: false },
+    })]);
+    const ttlInput = dynamoMock.commandCalls(UpdateTimeToLiveCommand)[0].args[0].input as any;
+    expect(ttlInput.TimeToLiveSpecification).toEqual({ AttributeName: 'ttl', Enabled: false });
+    expect(console.warn).not.toHaveBeenCalledWith(expect.stringContaining('Failed to update TTL'));
+  });
+
+  it('warns when applying TTL fails for a non-steady-state reason', async () => {
+    dynamoMock.on(CreateTableCommand).resolves({});
+    dynamoMock.on(UpdateTimeToLiveCommand).rejects(new Error('ttl down'));
+    await provisioner.provisionResources('svc', [dynamoResource({
+      ttl: { attributeName: 'ttl', enabled: true },
+    })]);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Failed to update TTL'));
   });
 
   it('omits GSI/LSI/stream when none provided', async () => {
@@ -349,6 +388,23 @@ describe('provisionResources orchestration', () => {
     expect(provisioner.getCurrentRegion()).toBe('eu-west-1');
     const createFn = lambdaMock.commandCalls(CreateFunctionCommand)[0].args[0].input as any;
     expect(createFn.Environment.Variables.INVOKE_URL).toBe('http://host.docker.internal:3002');
+  });
+
+  it('uses lambdaRuntime.invokeHost when deriving the default invokeUrl from invokePort', async () => {
+    jest.spyOn(ConfigManager.getInstance(), 'getInvokeHost').mockReturnValue('172.19.0.1');
+    lambdaMock.on(GetFunctionCommand).rejects(namedError('ResourceNotFoundException'));
+    lambdaMock.on(CreateFunctionCommand).resolves({});
+    lambdaMock.on(ListEventSourceMappingsCommand).resolves({ EventSourceMappings: [] });
+    lambdaMock.on(CreateEventSourceMappingCommand).resolves({});
+
+    await provisioner.provisionResources(
+      'svc',
+      [eventSource({ eventSourceArn: 'arn:aws:sqs:us-east-1:000:q' })],
+      { invokePort: 13010 },
+    );
+
+    const createFn = lambdaMock.commandCalls(CreateFunctionCommand)[0].args[0].input as any;
+    expect(createFn.Environment.Variables.INVOKE_URL).toBe('http://172.19.0.1:13010');
   });
 
   it('does not reinitialize when region matches current', async () => {
@@ -625,6 +681,62 @@ describe('createEventSourceMapping', () => {
     expect(input.BatchSize).toBe(50);
   });
 
+  it('applies CFN stream mapping fidelity fields and resolves OnFailure destinations', async () => {
+    sqsMock.on(CreateQueueCommand).resolves({});
+    sqsMock.on(GetQueueUrlCommand).resolves({ QueueUrl: 'http://localhost:4566/000/relay-dlq' });
+    sqsMock.on(GetQueueAttributesCommand).resolves({ Attributes: { QueueArn: 'arn:aws:sqs:us-east-1:000:relay-dlq' } });
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:3000' } } } });
+    lambdaMock.on(ListEventSourceMappingsCommand).resolves({ EventSourceMappings: [] });
+    lambdaMock.on(CreateEventSourceMappingCommand).resolves({});
+
+    await provisioner.provisionResources(
+      'svc',
+      [
+        sqsResource({ logicalId: 'RelayDlq', name: 'relay-dlq' }),
+        eventSource({
+          eventSourceArn: 'arn:aws:dynamodb:us-east-1:000:table/orders/stream/2024',
+          startingPosition: 'LATEST',
+          maximumRetryAttempts: 2,
+          onFailureDestination: 'RelayDlq::Arn',
+          maximumBatchingWindowInSeconds: 3,
+          functionResponseTypes: ['ReportBatchItemFailures'],
+          filterCriteria: { Filters: [{ Pattern: '{"eventName":["INSERT"]}' }] },
+        }),
+      ],
+      { invokeUrl: 'http://host:3000' },
+    );
+
+    const input = lambdaMock.commandCalls(CreateEventSourceMappingCommand)[0].args[0].input as any;
+    expect(input.StartingPosition).toBe('LATEST');
+    expect(input.MaximumRetryAttempts).toBe(2);
+    expect(input.DestinationConfig).toEqual({ OnFailure: { Destination: 'arn:aws:sqs:us-east-1:000:relay-dlq' } });
+    expect(input.MaximumBatchingWindowInSeconds).toBe(3);
+    expect(input.FunctionResponseTypes).toEqual(['ReportBatchItemFailures']);
+    expect(input.FilterCriteria).toEqual({ Filters: [{ Pattern: '{"eventName":["INSERT"]}' }] });
+  });
+
+  it('warns and continues when an OnFailure destination cannot be resolved', async () => {
+    sqsMock.on(ListQueuesCommand).resolves({ QueueUrls: [] });
+    dynamoMock.on(ListTablesCommand).resolves({ TableNames: [] });
+    snsMock.on(ListTopicsCommand).resolves({ Topics: [] });
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:3000' } } } });
+    lambdaMock.on(ListEventSourceMappingsCommand).resolves({ EventSourceMappings: [] });
+    lambdaMock.on(CreateEventSourceMappingCommand).resolves({});
+
+    await provisioner.provisionResources(
+      'svc',
+      [eventSource({
+        eventSourceArn: 'arn:aws:dynamodb:us-east-1:000:table/orders/stream/2024',
+        onFailureDestination: 'MissingDlq::Arn',
+      })],
+      { invokeUrl: 'http://host:3000' },
+    );
+
+    const input = lambdaMock.commandCalls(CreateEventSourceMappingCommand)[0].args[0].input as any;
+    expect(input.DestinationConfig).toBeUndefined();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Could not resolve OnFailure destination'));
+  });
+
   it('does not set StartingPosition for SQS sources and defaults batch size to 10', async () => {
     lambdaMock.on(GetFunctionCommand).resolves({});
     lambdaMock.on(ListEventSourceMappingsCommand).resolves({ EventSourceMappings: [] });
@@ -666,8 +778,10 @@ describe('createEventSourceMapping', () => {
 });
 
 describe('ensureLambdaProxyExists', () => {
-  it('short-circuits when the proxy function already exists', async () => {
-    lambdaMock.on(GetFunctionCommand).resolves({});
+  it('short-circuits when the proxy function already exists with the expected invoke URL', async () => {
+    lambdaMock.on(GetFunctionCommand).resolves({
+      Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:3000' } } },
+    });
     lambdaMock.on(ListEventSourceMappingsCommand).resolves({ EventSourceMappings: [] });
     lambdaMock.on(CreateEventSourceMappingCommand).resolves({});
     await provisioner.provisionResources(
@@ -676,6 +790,32 @@ describe('ensureLambdaProxyExists', () => {
       { invokeUrl: 'http://host:3000' },
     );
     expect(lambdaMock.commandCalls(CreateFunctionCommand)).toHaveLength(0);
+    expect(lambdaMock.commandCalls(UpdateFunctionConfigurationCommand)).toHaveLength(0);
+  });
+
+  it('updates a stale proxy INVOKE_URL without recreating the function', async () => {
+    lambdaMock.on(GetFunctionCommand).resolves({
+      Configuration: { Environment: { Variables: { INVOKE_URL: 'http://old-host:13010' } } },
+    });
+    lambdaMock.on(UpdateFunctionConfigurationCommand).resolves({});
+    lambdaMock.on(ListEventSourceMappingsCommand).resolves({ EventSourceMappings: [] });
+    lambdaMock.on(CreateEventSourceMappingCommand).resolves({});
+    await provisioner.provisionResources(
+      'svc',
+      [eventSource({ eventSourceArn: 'arn:aws:sqs:us-east-1:000:q' })],
+      { invokeUrl: 'http://new-host:13010' },
+    );
+    expect(lambdaMock.commandCalls(CreateFunctionCommand)).toHaveLength(0);
+    const input = lambdaMock.commandCalls(UpdateFunctionConfigurationCommand)[0].args[0].input as any;
+    expect(input).toEqual({
+      FunctionName: 'svc-api-processOrder',
+      Environment: {
+        Variables: {
+          INVOKE_URL: 'http://new-host:13010',
+          FUNCTION_NAME: 'svc-api-processOrder',
+        },
+      },
+    });
   });
 
   it('creates the proxy (AdmZip runs) when GetFunction returns ResourceNotFoundException', async () => {

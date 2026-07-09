@@ -209,7 +209,7 @@ export class ResourceProvisioner {
           StreamSpecification: resource.streamEnabled
             ? {
                 StreamEnabled: true,
-                StreamViewType: 'NEW_AND_OLD_IMAGES',
+                StreamViewType: resource.streamViewType || 'NEW_AND_OLD_IMAGES',
               }
             : undefined,
         }),
@@ -230,20 +230,22 @@ export class ResourceProvisioner {
   }
 
   private async applyTimeToLive(resource: DynamoDBResource): Promise<void> {
-    if (!resource.ttl?.enabled) return;
+    if (!resource.ttl) return;
     try {
       await this.dynamoClient.send(
         new UpdateTimeToLiveCommand({
           TableName: resource.name,
-          TimeToLiveSpecification: { AttributeName: resource.ttl.attributeName, Enabled: true },
+          TimeToLiveSpecification: { AttributeName: resource.ttl.attributeName, Enabled: resource.ttl.enabled },
         }),
       );
-      console.log(`  ✓ Enabled TTL on ${resource.name} (attribute: ${resource.ttl.attributeName})`);
+      const state = resource.ttl.enabled ? 'Enabled' : 'Disabled';
+      console.log(`  ✓ ${state} TTL on ${resource.name} (attribute: ${resource.ttl.attributeName})`);
     } catch (error: any) {
       // Re-registering re-sends the same TTL state, which DynamoDB rejects with
-      // "TimeToLive is already enabled" — that's the steady state, not a failure.
-      if (!String(error?.message || '').includes('already enabled')) {
-        console.warn(`  ⚠ Failed to enable TTL on ${resource.name}: ${error?.message || error}`);
+      // "TimeToLive is already enabled/disabled" — that's the steady state, not
+      // a failure.
+      if (!/already (enabled|disabled)/i.test(String(error?.message || ''))) {
+        console.warn(`  ⚠ Failed to update TTL on ${resource.name}: ${error?.message || error}`);
       }
     }
   }

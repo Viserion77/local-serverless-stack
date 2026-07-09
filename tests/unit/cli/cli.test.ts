@@ -569,33 +569,38 @@ describe('bin/cli.js helpers', () => {
   // stopOrchestrator
   // ---------------------------------------------------------------------------
   describe('stopOrchestrator', () => {
-    it('warns when not running', () => {
+    it('warns when not running', async () => {
       mockFs.existsSync.mockReturnValue(false);
       const cli = loadCli();
-      cli.stopOrchestrator();
+      await cli.stopOrchestrator();
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('not running'));
     });
-    it('kills the process and removes the pid file', () => {
+    it('kills the process, waits until it exits, and removes the pid file', async () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('12345\n');
+      killSpy.mockImplementation((_pid: any, signal?: any) => {
+        if (signal === 0) throw new Error('gone');
+        return true as any;
+      });
       const cli = loadCli();
-      cli.stopOrchestrator();
+      await cli.stopOrchestrator();
       expect(killSpy).toHaveBeenCalledWith('12345', 'SIGTERM');
+      expect(killSpy).toHaveBeenCalledWith('12345', 0);
       expect(mockFs.unlinkSync).toHaveBeenCalled();
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('stopped'), expect.anything());
     });
-    it('reports a failure and removes a leftover pid file when kill throws', () => {
+    it('reports a failure and removes a leftover pid file when SIGTERM throws', async () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('999');
       killSpy.mockImplementation(() => {
         throw new Error('no such process');
       });
       const cli = loadCli();
-      cli.stopOrchestrator();
+      await cli.stopOrchestrator();
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to stop'), 'no such process');
       expect(mockFs.unlinkSync).toHaveBeenCalled();
     });
-    it('handles a kill failure when the pid file already vanished', () => {
+    it('handles a SIGTERM failure when the pid file already vanished', async () => {
       // The pid file exists at the gate (1st .pid lookup) but is gone by the time
       // the catch re-checks it (2nd .pid lookup); config lookups (.json) stay false.
       let pidLookups = 0;
@@ -609,9 +614,21 @@ describe('bin/cli.js helpers', () => {
         throw new Error('gone');
       });
       const cli = loadCli();
-      cli.stopOrchestrator();
+      await cli.stopOrchestrator();
       expect(errorSpy).toHaveBeenCalled();
       expect(mockFs.unlinkSync).not.toHaveBeenCalled();
+    });
+    it('warns after the exit wait times out but still removes the pid file', async () => {
+      jest.useFakeTimers();
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockReturnValue('12345');
+      killSpy.mockReturnValue(true as any);
+      const cli = loadCli();
+      const pending = cli.stopOrchestrator();
+      await jest.advanceTimersByTimeAsync(10000);
+      await pending;
+      expect(mockFs.unlinkSync).toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('did not exit within 10s'));
     });
   });
 

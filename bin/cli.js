@@ -268,19 +268,24 @@ function startOrchestrator() {
 function waitForExit(pid, timeoutMs = 10000, intervalMs = 200) {
   return new Promise(resolve => {
     const deadline = Date.now() + timeoutMs;
-    const timer = setInterval(() => {
+    let timer;
+    const finish = (value) => {
+      if (timer) clearInterval(timer);
+      resolve(value);
+    };
+    const check = () => {
       try {
         process.kill(pid, 0);
       } catch (e) {
-        clearInterval(timer);
-        resolve(true);
+        finish(true);
         return;
       }
       if (Date.now() >= deadline) {
-        clearInterval(timer);
-        resolve(false);
+        finish(false);
       }
-    }, intervalMs);
+    };
+    timer = setInterval(check, intervalMs);
+    check();
   });
 }
 
@@ -716,6 +721,7 @@ module.exports = {
   getArgValue,
   runtimePaths,
   getOrchestratorPath,
+  waitForExit,
   formatError,
   buildHttpError,
   firstPositional,

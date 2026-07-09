@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.6.0] - 2026-07-09
+
+Corrections from integrating LSS 0.5.0 in a real monorepo using osls 4, serverless-esbuild ESM artifacts, HTTP API v2 authorizers, DynamoDB Streams, and Docker-in-Docker devcontainers.
+
+### Added
+- **Configurable LocalStack proxy callback host**: `lambdaRuntime.invokeHost` and `LSS_INVOKE_HOST` now control the host used when generated LocalStack Lambda proxies call back into LSS's invoke listener. The default remains `host.docker.internal`; devcontainers/DinD can point it at the Docker network gateway (for example `172.19.0.1`).
+- **Native TypeScript source loading when available**: in `source` mode, the runtime worker now tries Node's native TypeScript type stripping (`process.features.typescript`) before requiring `esbuild-register`, `tsx`, or `ts-node`.
+
+### Fixed
+- **Artifact resolution for osls/serverless package output**: `package.artifact` values such as `s7-identity.zip` are now resolved relative to `.serverless/` as well as the service root, and nonexistent declared candidates no longer suppress the `.serverless/*.zip` scan fallback.
+- **Stale LocalStack proxy `INVOKE_URL`**: re-registering a service now updates an existing proxy Lambda when the expected invoke URL changed (port renumbering or `invokeHost` changes).
+- **Service identity collisions**: service registration now uses the `service:` name from `serverless-state.json` instead of the directory basename, with migration for same-root legacy cache entries.
+- **Event source mapping fidelity**: CloudFormation `StartingPosition`, `MaximumRetryAttempts`, `FunctionResponseTypes`, `MaximumBatchingWindowInSeconds`, `FilterCriteria`, and `DestinationConfig.OnFailure` are parsed/applied where supported; duplicate checks compare the resolved live ARN instead of unresolved CFN refs.
+- **DynamoDB table fidelity**: `StreamViewType` is preserved and `TimeToLiveSpecification` is applied after table creation or on re-registration, including disabled TTL declarations.
+- **CLI stop/start race**: `lss stop` now waits for the orchestrator process to exit (with timeout) before returning, reducing immediate `lss start` failures from a still-bound port.
+
+### Changed
+- The root package version is now `0.6.0`. The `serverless-lss` plugin package was not changed.
+
+### Tests
+- Added/updated unit coverage for artifact resolution, Lambda runtime config env overrides, CloudFormation parsing, ResourceProvisioner proxy/TTL/event-source behavior, and the async CLI stop flow.
+
 ## [0.5.0] - 2026-07-08
 
 API Gateway & Lambda runtime emulation: LSS now registers every function and HTTP route a service declares, executes the handlers itself in per-service workers, and answers on the service's own API (30xx) and Lambda-invoke (130xx) ports — making `serverless-offline` optional. Monorepo callers and the LocalStack event proxies keep their ports and contracts unchanged; only the process answering changes.

@@ -4,6 +4,13 @@
 
 ### High Priority
 
+- [ ] **v0.7 follow-ups from the 0.6.0 real-monorepo audit**
+  - Fix cleanup of event-source proxy Lambdas: cleanup still derives legacy proxy names from `serviceName + functionName` instead of the fully resolved Lambda name.
+  - Make CLI `start` wait for the HTTP health endpoint/port readiness, not only for the child process to stay alive for 2 seconds.
+  - Add diagnostics for duplicate `service:` names registered from different roots, so intentional collisions are explicit.
+  - Expand Event Source Mapping fidelity beyond the 0.6.0 fields when needed (`ParallelizationFactor`, `BisectBatchOnFunctionError`, `MaximumRecordAgeInSeconds`, `TumblingWindowInSeconds`, `ScalingConfig`, source access config).
+  - Decide whether generated LocalStack proxy Lambdas should follow the service runtime instead of always using `nodejs20.x`.
+
 - [ ] **LocalStack Integration Testing**
   - Test with all AWS services (DynamoDB, SQS, SNS, Lambda)
   - Validate event source mappings work correctly
