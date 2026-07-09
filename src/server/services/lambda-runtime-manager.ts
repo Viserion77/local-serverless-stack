@@ -12,6 +12,7 @@ import { fileURLToPath } from 'url';
 import AdmZip from 'adm-zip';
 import { ConfigManager, LambdaExecutionMode } from './config-manager.js';
 import { FunctionRegistry, ServiceEntry } from './function-registry.js';
+import { resolveArtifacts } from './artifact-resolver.js';
 import type { RegisteredFunction } from './serverless-state-parser.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -367,23 +368,7 @@ export class LambdaRuntimeManager {
   }
 
   private findArtifacts(entry: ServiceEntry): string[] {
-    const candidates = new Set<string>();
-    for (const fn of entry.functions) {
-      if (fn.artifact) {
-        candidates.add(path.isAbsolute(fn.artifact) ? fn.artifact : path.resolve(entry.root, fn.artifact));
-      }
-    }
-    if (candidates.size === 0) {
-      const serverlessDir = path.join(entry.root, '.serverless');
-      try {
-        for (const file of fs.readdirSync(serverlessDir)) {
-          if (file.endsWith('.zip')) candidates.add(path.join(serverlessDir, file));
-        }
-      } catch {
-        // No .serverless dir — source mode will handle it.
-      }
-    }
-    return [...candidates].filter(p => fs.existsSync(p));
+    return resolveArtifacts(entry.root, entry.functions.map(fn => fn.artifact));
   }
 
   // Extract artifact zips into a content-addressed dir under ~/.lss so repeated

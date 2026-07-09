@@ -39,6 +39,11 @@ export interface LambdaRuntimeConfig {
   // apiPort (30xx) → invokePort (130xx) derivation when a service doesn't
   // declare an explicit invoke port. Default: 10000.
   invokePortOffset?: number;
+  // Hostname the LocalStack event proxies use to call back into the orchestrator
+  // host (default: "host.docker.internal"). Override when that name doesn't
+  // resolve to this machine — e.g. Docker-in-Docker devcontainers, where the
+  // correct host is the docker network gateway (e.g. "172.17.0.1").
+  invokeHost?: string;
 }
 
 // Per-service runtime overrides, keyed like `servicePackaging` (directory
@@ -279,6 +284,12 @@ export class ConfigManager {
         watch: process.env.LSS_LAMBDA_WATCH === 'true' || process.env.LSS_LAMBDA_WATCH === '1',
       };
     }
+    if (process.env.LSS_INVOKE_HOST) {
+      this.config.lambdaRuntime = {
+        ...this.config.lambdaRuntime,
+        invokeHost: process.env.LSS_INVOKE_HOST,
+      };
+    }
   }
 
   getConfig(): LSSConfig {
@@ -422,6 +433,10 @@ export class ConfigManager {
 
   getInvokePortOffset(): number {
     return this.config.lambdaRuntime?.invokePortOffset ?? 10000;
+  }
+
+  getInvokeHost(): string {
+    return this.config.lambdaRuntime?.invokeHost ?? 'host.docker.internal';
   }
 
   /**

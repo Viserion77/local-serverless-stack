@@ -30,6 +30,8 @@ export interface DynamoDBResource {
   attributeDefinitions: Array<{ AttributeName: string; AttributeType: string }>;
   billingMode?: string;
   streamEnabled?: boolean;
+  // TimeToLiveSpecification — applied via UpdateTimeToLive after CreateTable.
+  ttl?: { attributeName: string; enabled: boolean };
   globalSecondaryIndexes?: Array<{
     IndexName: string;
     KeySchema: Array<{ AttributeName: string; KeyType: string }>;
@@ -84,6 +86,15 @@ export interface EventSourceMapping {
   eventSourceArn: string;
   batchSize?: number;
   enabled: boolean;
+  // Stream-only settings (DynamoDB Streams / Kinesis).
+  startingPosition?: string;
+  maximumRetryAttempts?: number;
+  // ARN reference ("Dlq::Arn") or literal ARN of the OnFailure destination.
+  onFailureDestination?: string;
+  // Valid for SQS and streams alike.
+  maximumBatchingWindowInSeconds?: number;
+  functionResponseTypes?: string[];
+  filterCriteria?: { Filters?: Array<{ Pattern?: string }> };
 }
 
 export type Resource = LambdaResource | DynamoDBResource | SQSResource | SNSResource | S3Resource | EventSourceMapping;
@@ -150,11 +161,15 @@ export class CloudFormationParser {
     // one for UpdateTable, but the CFN resource doesn't).
     const streamSpec = props.StreamSpecification as { StreamEnabled?: boolean; StreamViewType?: string } | undefined;
     const streamEnabled = streamSpec ? Boolean(streamSpec.StreamViewType || streamSpec.StreamEnabled) : false;
+    const ttlSpec = props.TimeToLiveSpecification as { AttributeName?: string; Enabled?: boolean } | undefined;
 
     return {
       type: 'dynamodb',
       logicalId: key,
       name: (props.TableName as string) || key,
+      ttl: ttlSpec?.AttributeName
+        ? { attributeName: ttlSpec.AttributeName, enabled: ttlSpec.Enabled !== false }
+        : undefined,
       keySchema: (props.KeySchema as Array<{ AttributeName: string; KeyType: string }>) || [],
       attributeDefinitions: (props.AttributeDefinitions as Array<{ AttributeName: string; AttributeType: string }>) || [],
       billingMode: props.BillingMode as string | undefined,
@@ -231,12 +246,20 @@ export class CloudFormationParser {
 
   private parseEventSource(_key: string, resource: CloudFormationResource): EventSourceMapping {
     const props = (resource.Properties || {}) as Record<string, unknown>;
+    const destination = (props.DestinationConfig as { OnFailure?: { Destination?: unknown } } | undefined)
+      ?.OnFailure?.Destination;
     return {
       type: 'event-source',
       functionName: this.extractFunctionName(props.FunctionName),
       eventSourceArn: this.extractArn(props.EventSourceArn),
       batchSize: props.BatchSize as number | undefined,
       enabled: props.Enabled !== false,
+      startingPosition: props.StartingPosition as string | undefined,
+      maximumRetryAttempts: props.MaximumRetryAttempts as number | undefined,
+      onFailureDestination: destination !== undefined ? this.extractArn(destination) || undefined : undefined,
+      maximumBatchingWindowInSeconds: props.MaximumBatchingWindowInSeconds as number | undefined,
+      functionResponseTypes: props.FunctionResponseTypes as string[] | undefined,
+      filterCriteria: props.FilterCriteria as EventSourceMapping['filterCriteria'],
     };
   }
 

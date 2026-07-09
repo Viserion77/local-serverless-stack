@@ -262,7 +262,29 @@ function startOrchestrator() {
   }, 2000);
 }
 
-function stopOrchestrator() {
+// Poll kill(pid, 0) until the process is gone. SIGTERM alone isn't enough to
+// return from `stop`: an immediate `lss start` would race the dying orchestrator
+// for the server port and crash with EADDRINUSE.
+function waitForExit(pid, timeoutMs = 10000, intervalMs = 200) {
+  return new Promise(resolve => {
+    const deadline = Date.now() + timeoutMs;
+    const timer = setInterval(() => {
+      try {
+        process.kill(pid, 0);
+      } catch (e) {
+        clearInterval(timer);
+        resolve(true);
+        return;
+      }
+      if (Date.now() >= deadline) {
+        clearInterval(timer);
+        resolve(false);
+      }
+    }, intervalMs);
+  });
+}
+
+async function stopOrchestrator() {
   const { pidFile } = runtimePaths();
   if (!fs.existsSync(pidFile)) {
     console.log('⚠️  LSS Orchestrator is not running');
@@ -273,13 +295,20 @@ function stopOrchestrator() {
 
   try {
     process.kill(pid, 'SIGTERM');
-    fs.unlinkSync(pidFile);
-    console.log('🛑 LSS Orchestrator stopped (PID:', pid + ')');
   } catch (e) {
     console.error('❌ Failed to stop process:', e.message);
     if (fs.existsSync(pidFile)) {
       fs.unlinkSync(pidFile);
     }
+    return;
+  }
+
+  const exited = await waitForExit(pid);
+  fs.unlinkSync(pidFile);
+  if (exited) {
+    console.log('🛑 LSS Orchestrator stopped (PID:', pid + ')');
+  } else {
+    console.warn(`⚠️  Process ${pid} did not exit within 10s of SIGTERM — the server port may still be busy. Check \`lss status\` before starting again.`);
   }
 }
 

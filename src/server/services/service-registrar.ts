@@ -64,10 +64,10 @@ export class ServiceRegistrar {
     const cache = await this.ensureCache();
 
     const resolvedPath = path.resolve(input.servicePath);
-    const serviceName = path.basename(resolvedPath);
+    const dirName = path.basename(resolvedPath);
     const effectiveRegion = input.region || configManager.getConfig().region || 'us-east-1';
 
-    const template = await this.readTemplate(resolvedPath, serviceName) as Parameters<CloudFormationParser['parse']>[0];
+    const template = await this.readTemplate(resolvedPath, dirName) as Parameters<CloudFormationParser['parse']>[0];
     const resources = cfnParser.parse(template);
     const templateHash = cfnParser.calculateHash(template);
 
@@ -80,11 +80,17 @@ export class ServiceRegistrar {
     let routes: ServiceMetadata['routes'] = [];
     let authorizers: ServiceMetadata['authorizers'] = [];
     let stage = 'dev';
+    // The service's identity is the `service:` name from serverless.yml (via
+    // serverless-state.json), not the directory basename — two products can
+    // both live in a folder called "bff". The basename remains the fallback
+    // for stateless registrations.
+    let serviceName = dirName;
 
     const cfnLambdas = resources.filter((r): r is LambdaResource => r.type === 'lambda');
 
     if (state) {
       const parsed = stateParser.parse(state);
+      if (parsed.serviceName) serviceName = parsed.serviceName;
       warnings.push(...parsed.warnings);
       stage = parsed.stage;
       routes = parsed.routes;
@@ -118,6 +124,18 @@ export class ServiceRegistrar {
     const invokePort = runtimeConfig.invokePort
       ?? input.invokePort
       ?? (apiPort ? apiPort + configManager.getInvokePortOffset() : undefined);
+
+    // 0.5.x keyed the cache by directory basename. When the real service name
+    // differs, migrate: drop the legacy entry for this same root (data plane +
+    // cache) so re-registration doesn't leave a ghost service behind.
+    if (serviceName !== dirName) {
+      const legacy = await cache.getMetadata(dirName);
+      if (legacy && legacy.root === resolvedPath) {
+        await this.deactivate(dirName);
+        await cache.deleteService(dirName);
+        console.log(`♻️  Migrated cached service "${dirName}" → "${serviceName}"`);
+      }
+    }
 
     const metadata: Omit<ServiceMetadata, 'name'> = {
       root: resolvedPath,

@@ -1,4 +1,4 @@
-import { DynamoDBClient, CreateTableCommand, ListTablesCommand, DeleteTableCommand, DescribeTableCommand } from '@aws-sdk/client-dynamodb';
+import { DynamoDBClient, CreateTableCommand, ListTablesCommand, DeleteTableCommand, DescribeTableCommand, UpdateTimeToLiveCommand } from '@aws-sdk/client-dynamodb';
 import { SQSClient, CreateQueueCommand, ListQueuesCommand, GetQueueAttributesCommand, DeleteQueueCommand, GetQueueUrlCommand } from '@aws-sdk/client-sqs';
 import { SNSClient, CreateTopicCommand, ListTopicsCommand, DeleteTopicCommand } from '@aws-sdk/client-sns';
 import {
@@ -11,9 +11,10 @@ import {
   ListObjectsV2Command,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
-import { LambdaClient, CreateFunctionCommand, GetFunctionCommand, DeleteFunctionCommand, AddPermissionCommand } from '@aws-sdk/client-lambda';
+import { LambdaClient, CreateFunctionCommand, GetFunctionCommand, DeleteFunctionCommand, AddPermissionCommand, UpdateFunctionConfigurationCommand } from '@aws-sdk/client-lambda';
 import { CreateEventSourceMappingCommand, ListEventSourceMappingsCommand, DeleteEventSourceMappingCommand } from '@aws-sdk/client-lambda';
 import { LocalStackManager } from './localstack-manager.js';
+import { ConfigManager } from './config-manager.js';
 import { SeedManager } from './seed-manager.js';
 import type {
   Resource,
@@ -86,8 +87,11 @@ export class ResourceProvisioner {
     }
     SeedManager.getInstance().setRegion(this.currentRegion);
 
+    // The default callback host is overridable (lambdaRuntime.invokeHost /
+    // LSS_INVOKE_HOST) for setups where "host.docker.internal" doesn't reach
+    // the orchestrator — e.g. Docker-in-Docker devcontainers.
     const invokeUrl = metadata?.invokeUrl
-      || (metadata?.invokePort ? `http://host.docker.internal:${metadata.invokePort}` : undefined);
+      || (metadata?.invokePort ? `http://${ConfigManager.getInstance().getInvokeHost()}:${metadata.invokePort}` : undefined);
 
     // Rebuild the logical id map for this service so resolveEventSourceArn can
     // jump straight from "OrderProcessingQueue" to the actual queue name.
@@ -218,6 +222,28 @@ export class ResourceProvisioner {
         // Table already exists, ignore
       } else {
         throw error;
+      }
+    }
+    // Applied to pre-existing tables too, so tables created before LSS knew
+    // about TTL pick it up on re-registration.
+    await this.applyTimeToLive(resource);
+  }
+
+  private async applyTimeToLive(resource: DynamoDBResource): Promise<void> {
+    if (!resource.ttl?.enabled) return;
+    try {
+      await this.dynamoClient.send(
+        new UpdateTimeToLiveCommand({
+          TableName: resource.name,
+          TimeToLiveSpecification: { AttributeName: resource.ttl.attributeName, Enabled: true },
+        }),
+      );
+      console.log(`  ✓ Enabled TTL on ${resource.name} (attribute: ${resource.ttl.attributeName})`);
+    } catch (error: any) {
+      // Re-registering re-sends the same TTL state, which DynamoDB rejects with
+      // "TimeToLive is already enabled" — that's the steady state, not a failure.
+      if (!String(error?.message || '').includes('already enabled')) {
+        console.warn(`  ⚠ Failed to enable TTL on ${resource.name}: ${error?.message || error}`);
       }
     }
   }
@@ -474,22 +500,37 @@ export const handler = async (event, context) => {
       // Create Lambda proxy function if it doesn't exist
       await this.ensureLambdaProxyExists(serviceName, actualFunctionName, actualFunctionName, invokeUrl);
 
-      // Check if mapping already exists
+      // Check if mapping already exists — compare against the RESOLVED arn:
+      // `mapping.eventSourceArn` may still be a CFN ref ("IdentityTable::StreamArn")
+      // that no live mapping's EventSourceArn would ever contain.
       const existingMappings = await this.lambdaClient.send(
         new ListEventSourceMappingsCommand({
           FunctionName: actualFunctionName,
         }),
       );
 
-      if (existingMappings.EventSourceMappings?.some(m => m.EventSourceArn?.includes(mapping.eventSourceArn))) {
-        console.log(`  ⚠ Event source mapping already exists: ${actualFunctionName} <- ${mapping.eventSourceArn}`);
+      if (existingMappings.EventSourceMappings?.some(m => m.EventSourceArn === eventSourceArn)) {
+        console.log(`  ⚠ Event source mapping already exists: ${actualFunctionName} <- ${eventSourceArn}`);
         return;
       }
 
       // Stream-based sources (DynamoDB Streams, Kinesis) require StartingPosition;
-      // SQS forbids it. Detect from the resolved ARN service segment.
+      // SQS forbids it (as it does MaximumRetryAttempts/DestinationConfig).
+      // Detect from the resolved ARN service segment.
       const isStreamSource = eventSourceArn.startsWith('arn:aws:dynamodb:')
         || eventSourceArn.startsWith('arn:aws:kinesis:');
+
+      // The OnFailure destination may itself be a CFN ref to a DLQ/topic.
+      let destinationConfig: { OnFailure: { Destination: string } } | undefined;
+      if (isStreamSource && mapping.onFailureDestination) {
+        try {
+          destinationConfig = {
+            OnFailure: { Destination: await this.resolveEventSourceArn(mapping.onFailureDestination) },
+          };
+        } catch (error: any) {
+          console.warn(`  ⚠ Could not resolve OnFailure destination ${mapping.onFailureDestination}: ${error?.message || error}`);
+        }
+      }
 
       await this.lambdaClient.send(
         new CreateEventSourceMappingCommand({
@@ -497,7 +538,12 @@ export const handler = async (event, context) => {
           EventSourceArn: eventSourceArn,
           BatchSize: mapping.batchSize || 10,
           Enabled: mapping.enabled,
-          StartingPosition: isStreamSource ? 'TRIM_HORIZON' : undefined,
+          StartingPosition: isStreamSource ? (mapping.startingPosition as any) || 'TRIM_HORIZON' : undefined,
+          MaximumRetryAttempts: isStreamSource ? mapping.maximumRetryAttempts : undefined,
+          DestinationConfig: destinationConfig,
+          MaximumBatchingWindowInSeconds: mapping.maximumBatchingWindowInSeconds,
+          FunctionResponseTypes: mapping.functionResponseTypes as any,
+          FilterCriteria: mapping.filterCriteria as any,
         }),
       );
       console.log(`  ✓ Created event source mapping: ${actualFunctionName} <- ${mapping.eventSourceArn}`);
@@ -518,12 +564,29 @@ export const handler = async (event, context) => {
   ): Promise<void> {
     try {
       // Check if function already exists
-      await this.lambdaClient.send(
+      const existing = await this.lambdaClient.send(
         new GetFunctionCommand({
           FunctionName: proxyName,
         }),
       );
-      // Function exists, no need to create
+      // A proxy survives across registrations, but the orchestrator's ports may
+      // not (project port renumbering, invokeHost change). Re-point a stale
+      // proxy instead of leaving it calling the old URL forever.
+      const currentUrl = existing.Configuration?.Environment?.Variables?.INVOKE_URL;
+      if (invokeUrl && currentUrl !== invokeUrl) {
+        await this.lambdaClient.send(
+          new UpdateFunctionConfigurationCommand({
+            FunctionName: proxyName,
+            Environment: {
+              Variables: {
+                INVOKE_URL: invokeUrl,
+                FUNCTION_NAME: invokeName,
+              },
+            },
+          }),
+        );
+        console.log(`  ✓ Updated Lambda proxy INVOKE_URL: ${proxyName} -> ${invokeUrl}`);
+      }
       return;
     } catch (error: any) {
       if (error.name !== 'ResourceNotFoundException') {
