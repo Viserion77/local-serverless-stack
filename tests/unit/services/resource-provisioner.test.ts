@@ -1570,3 +1570,78 @@ describe('EventBridge cleanup (via cleanupResources)', () => {
     expect(console.error).toHaveBeenCalledWith('Failed to cleanup eventbus:domain-events:', 'bus boom');
   });
 });
+
+describe('EventBridge defensive branches (non-Error rejections and permission fallbacks)', () => {
+  it('event-rule provisioning falls back to "Unknown error" on a non-Error rejection', async () => {
+    // The SDK mock wraps thrown values into Errors; reject from the client
+    // instance so `error instanceof Error` is genuinely false.
+    jest.spyOn((provisioner as any).eventBridgeClient, 'send').mockRejectedValue('kaput');
+    await provisioner.provisionResources('svc', [eventRuleResource()]);
+    expect(console.error).toHaveBeenCalledWith(
+      'Failed to provision event-rule relay-rule:',
+      'Unknown error',
+    );
+  });
+
+  it('eventbus cleanup falls back to "Unknown error" on a non-Error rejection', async () => {
+    jest.spyOn((provisioner as any).eventBridgeClient, 'send').mockRejectedValue('nope');
+    await provisioner.cleanupResources('svc', [eventBusResource()]);
+    expect(console.error).toHaveBeenCalledWith(
+      'Failed to cleanup eventbus:domain-events:',
+      'Unknown error',
+    );
+  });
+
+  it('swallows AddPermission ResourceConflictException while wiring rule targets', async () => {
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    eventBridgeMock.on(PutTargetsCommand).resolves({});
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:13070' } } } });
+    lambdaMock.on(AddPermissionCommand).rejects(namedError('ResourceConflictException'));
+
+    await provisioner.provisionResources(
+      'svc',
+      [
+        eventBusResource(),
+        lambdaResource({ logicalId: 'ConsumerLambdaFunction', name: 'svc-dev-consumer' }),
+        eventRuleResource(),
+      ],
+      { invokeUrl: 'http://host:13070' },
+    );
+
+    // Conflict is fine (statement already exists): no warning, target still wired.
+    expect(console.warn).not.toHaveBeenCalledWith(
+      expect.stringContaining('Could not add EventBridge invoke permission'),
+    );
+    expect(eventBridgeMock.commandCalls(PutTargetsCommand)).toHaveLength(1);
+  });
+
+  it('warns with the raw error when AddPermission rejects a message-less value while wiring rule targets', async () => {
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    eventBridgeMock.on(PutTargetsCommand).resolves({});
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:13070' } } } });
+    jest.spyOn((provisioner as any).lambdaClient, 'send').mockImplementation((cmd: any) => {
+      if (cmd instanceof AddPermissionCommand) {
+        return Promise.reject({ name: 'SomethingElse' });
+      }
+      return Promise.resolve({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:13070' } } } });
+    });
+
+    await provisioner.provisionResources(
+      'svc',
+      [
+        eventBusResource(),
+        lambdaResource({ logicalId: 'ConsumerLambdaFunction', name: 'svc-dev-consumer' }),
+        eventRuleResource(),
+      ],
+      { invokeUrl: 'http://host:13070' },
+    );
+
+    // `error?.message || error` falls back to the raw value when message is absent.
+    expect(console.warn).toHaveBeenCalledWith(
+      expect.stringContaining('Could not add EventBridge invoke permission for svc-dev-consumer'),
+    );
+    expect(eventBridgeMock.commandCalls(PutTargetsCommand)).toHaveLength(1);
+  });
+});

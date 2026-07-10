@@ -30,8 +30,11 @@ The self engine: an in-process AWS emulator that replaces LocalStack for the typ
 - `GET /api/health` now includes an `engine: {kind, running, endpoint, ...}` block; the `localstack` boolean stays truthy when the active engine is healthy (client/UI compatibility).
 - The root package version is now `0.8.0`. The `serverless-lss` plugin package was not changed.
 
+### Fixed
+- **Branch-coverage gate restored to 100%**: closed the six uncovered branches left by the 0.7.0 EventBridge work (`cloudformation-parser.ts` — bus/rule with no `Properties`, rule with no `Targets`; `resource-provisioner.ts` — non-Error rejections in the event-rule pass and eventbus cleanup, `AddPermission` conflict/message-less fallbacks while wiring rule targets). `npm run test:coverage` passes again.
+
 ### Tests
-- ~700 new unit tests (1796 total, up from 1100): wire router/SigV4/aws-chunked, store WAL/compaction/hydration/LRU-budget, DynamoDB expression engine (223 assertions) + emulator core, SQS/S3/EventBridge/SNS/STS/lambda-ctl emulators, dispatcher loops/stream tailers/scheduler, self-backend boot; engine selection covered in `config-manager` and `cli` suites. End-to-end smoke with real AWS SDK v3 clients against a booted engine (CRUD/Query/GSI, queue lifecycle, binary S3 round trip, per-entry PutEvents, ESM hold, restart persistence).
+- ~700 new unit tests (1802 total, up from 1100): wire router/SigV4/aws-chunked, store WAL/compaction/hydration/LRU-budget, DynamoDB expression engine (223 assertions) + emulator core, SQS/S3/EventBridge/SNS/STS/lambda-ctl emulators, dispatcher loops/stream tailers/scheduler, self-backend boot; engine selection covered in `config-manager` and `cli` suites. End-to-end smoke with real AWS SDK v3 clients against a booted engine (CRUD/Query/GSI, queue lifecycle, binary S3 round trip, per-entry PutEvents, ESM hold, restart persistence).
 
 ## [0.7.0] - 2026-07-10
 

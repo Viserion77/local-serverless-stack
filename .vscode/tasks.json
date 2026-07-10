@@ -55,7 +55,7 @@
     },
     {
       "label": "test: coverage (gate 100%)",
-      "detail": "Gate de cobertura do CI. Atenção: falha hoje em 99.68% de branches por gap pré-existente da main (cloudformation-parser/resource-provisioner)",
+      "detail": "Gate de cobertura do CI (100% em statements/branches/functions/lines)",
       "type": "npm",
       "script": "test:coverage",
       "group": "test",
@@ -99,9 +99,9 @@
     },
     {
       "label": "validate: pre-prod",
-      "detail": "Gate antes de publicar: lint > typecheck > testes unitários > build completo (cobertura fica como task separada até o gap da main ser fechado)",
+      "detail": "Gate antes de publicar: lint > typecheck > cobertura 100% > build completo",
       "dependsOrder": "sequence",
-      "dependsOn": ["lint", "typecheck: all projects", "test: unit", "build: all"],
+      "dependsOn": ["lint", "typecheck: all projects", "test: coverage (gate 100%)", "build: all"],
       "group": "test",
       "icon": { "id": "rocket", "color": "terminal.ansiGreen" },
       "problemMatcher": []
