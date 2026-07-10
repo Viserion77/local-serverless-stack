@@ -37,6 +37,8 @@ const LSS_ENV_VARS = [
   'LSS_LAMBDA_EXECUTION',
   'LSS_LAMBDA_WATCH',
   'LSS_INVOKE_HOST',
+  'LSS_ENGINE',
+  'LSS_ENGINE_PORT',
   'HOME',
 ];
 
@@ -829,5 +831,144 @@ describe('printSummary', () => {
     cm.printSummary();
     const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
     expect(out).toContain('LocalStack Auth Token: not set');
+  });
+});
+
+describe('engine selection (self engine)', () => {
+  function cmWith(config: Record<string, unknown>): CM {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify(config));
+    return freshConfigManager();
+  }
+
+  it('getEngineKind defaults to localstack', () => {
+    const cm = freshConfigManager();
+    expect(cm.getEngineKind()).toBe('localstack');
+    expect(cm.isSelfEngine()).toBe(false);
+  });
+
+  it('engine from the config file', () => {
+    expect(cmWith({ engine: 'self' }).getEngineKind()).toBe('self');
+  });
+
+  it('LSS_ENGINE env overrides the file (case-insensitive)', () => {
+    process.env.LSS_ENGINE = 'SELF';
+    expect(cmWith({ engine: 'localstack' }).getEngineKind()).toBe('self');
+  });
+
+  it('LSS_ENGINE accepts localstack', () => {
+    process.env.LSS_ENGINE = 'localstack';
+    expect(cmWith({ engine: 'self' }).getEngineKind()).toBe('localstack');
+  });
+
+  it('LSS_ENGINE ignores invalid values', () => {
+    process.env.LSS_ENGINE = 'bogus';
+    expect(freshConfigManager().getEngineKind()).toBe('localstack');
+  });
+
+  it('LSS_ENGINE_PORT merges over the file selfEngine block', () => {
+    process.env.LSS_ENGINE_PORT = '24566';
+    const cm = cmWith({ engine: 'self', selfEngine: { account: '111111111111' } });
+    const resolved = cm.getSelfEngineConfig();
+    expect(resolved.port).toBe(24566);
+    expect(resolved.account).toBe('111111111111');
+  });
+
+  it('getSelfEngineConfig applies every default', () => {
+    const resolved = freshConfigManager().getSelfEngineConfig();
+    expect(resolved.port).toBe(14566);
+    expect(resolved.dataDir).toBe(path.join(require('os').homedir(), '.lss', 'engine'));
+    expect(resolved.account).toBe('000000000000');
+    expect(resolved.idleUnloadMs).toBe(300000);
+    expect(resolved.memoryBudgetMb).toBe(128);
+    expect(resolved.fsync).toBe(false);
+    expect(resolved.fallbackEndpoint).toBeNull();
+    expect(resolved.persistence).toBe(true);
+    expect(resolved.region).toBe('us-east-1');
+  });
+
+  it('getSelfEngineConfig honors explicit values', () => {
+    const cm = cmWith({
+      selfEngine: {
+        port: 15000,
+        dataDir: '/abs/engine',
+        idleUnloadMs: 1000,
+        memoryBudgetMb: 64,
+        fsync: true,
+        fallbackEndpoint: 'http://localhost:4566',
+      },
+    });
+    const resolved = cm.getSelfEngineConfig();
+    expect(resolved.port).toBe(15000);
+    expect(resolved.dataDir).toBe('/abs/engine');
+    expect(resolved.idleUnloadMs).toBe(1000);
+    expect(resolved.memoryBudgetMb).toBe(64);
+    expect(resolved.fsync).toBe(true);
+    expect(resolved.fallbackEndpoint).toBe('http://localhost:4566');
+  });
+
+  it('resolves a relative dataDir against cwd', () => {
+    const cm = cmWith({ selfEngine: { dataDir: 'rel/engine' } });
+    expect(cm.getSelfEngineConfig().dataDir).toBe(path.resolve(process.cwd(), 'rel/engine'));
+  });
+
+  it('defaults dataDir under stateDir when stateDir is set (test isolation)', () => {
+    const cm = cmWith({ stateDir: '/abs/state' });
+    expect(cm.getSelfEngineConfig().dataDir).toBe(path.join('/abs/state', 'engine'));
+  });
+
+  it('getEngineEndpoint follows the active engine', () => {
+    expect(freshConfigManager().getEngineEndpoint()).toBe('http://localhost:4566');
+    expect(cmWith({ engine: 'self', selfEngine: { port: 15000 } }).getEngineEndpoint())
+      .toBe('http://localhost:15000');
+  });
+
+  it('printSummary in self mode shows engine lines and hides LocalStack lines', () => {
+    const cm = cmWith({
+      engine: 'self',
+      selfEngine: { fallbackEndpoint: 'http://localhost:4566' },
+    });
+    cm.printSummary();
+    const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(out).toContain('Engine: self');
+    expect(out).toContain('Self Engine Port: 14566');
+    expect(out).toContain('Self Engine Data Dir:');
+    expect(out).toContain('Self Engine Fallback: http://localhost:4566');
+    expect(out).not.toContain('LocalStack Mode');
+  });
+
+  it('printSummary in self mode omits the fallback line when unset', () => {
+    const cm = cmWith({ engine: 'self' });
+    cm.printSummary();
+    const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(out).toContain('Engine: self');
+    expect(out).not.toContain('Self Engine Fallback');
+  });
+
+  it('printSummary in localstack mode shows the engine kind and LocalStack lines', () => {
+    const cm = freshConfigManager();
+    cm.printSummary();
+    const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(out).toContain('Engine: localstack');
+    expect(out).toContain('LocalStack Mode: managed');
+  });
+});
+
+describe('getInvokeHost under the self engine', () => {
+  it('defaults to 127.0.0.1 in self mode (nothing runs in Docker)', () => {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify({ engine: 'self' }));
+    expect(freshConfigManager().getInvokeHost()).toBe('127.0.0.1');
+  });
+
+  it('an explicit invokeHost still wins in self mode', () => {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(
+      JSON.stringify({ engine: 'self', lambdaRuntime: { invokeHost: '10.0.0.7' } }),
+    );
+    expect(freshConfigManager().getInvokeHost()).toBe('10.0.0.7');
   });
 });

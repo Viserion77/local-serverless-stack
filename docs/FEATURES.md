@@ -136,6 +136,27 @@ serverless-offline process running. See `docs/PRD_API_LAMBDA_EMULATION.md` for t
 | `LssClient` namespaces | `lambdas.list/get/invoke/logs`, `apis.list/clearAuthorizerCache`, `services.runtime/startRuntime/stopRuntime`. | unit (`client/*`) |
 | Dashboard menus | Lambdas (list/detail with invoke + logs) and APIs (routes per service with listener status) sections in the Vue UI. | manual (like the rest of the UI) |
 
+## 13. Self engine (in-process AWS emulator — LocalStack replacement)
+
+Opt-in via `engine: "self"` / `lss start --self-engine`: the orchestrator serves the AWS wire API
+itself on one port (default 14566) — no Docker, no auth token. The provisioner, explorers, seeds and
+application SDKs work unchanged (the endpoint is the seam); events are delivered in-process to the
+LSS Lambda runtime. Coverage matrix and storage model: `docs/SELF_ENGINE.md`; design:
+`docs/PRD_SELF_ENGINE.md`. Status: v1 — the differential (self vs LocalStack) integration suite is
+the next milestone and rows below will gain integration assertions with it.
+
+| Feature | Promise | Asserted by |
+|---|---|---|
+| Engine selection | `engine`/`selfEngine` config keys, `LSS_ENGINE`/`LSS_ENGINE_PORT` env, `--self-engine` CLI (rejected combined with `--external`/`--pro`/`--localstack-token`); LocalStack remains the default. | unit (`config-manager`, `cli`) |
+| Wire front door | SigV4-scope/X-Amz-Target/path routing on one port; per-protocol error shapes (`__type`, Query XML, S3 XML with body-less HEAD, Lambda + `x-amzn-ErrorType`); `x-amzn-query-error` SQS compat header; aws-chunked PutObject decoding; `/_localstack/health` alias; `fallbackEndpoint` verbatim reverse proxy for anything unimplemented. | unit (`engine/http`) |
+| Storage & footprint | JSONL snapshot + WAL per table (torn-tail-safe replay, compaction), atomic JSON catalogs, content-addressed S3 blobs (never in heap), hydrate-on-first-touch + idle dehydrate + `memoryBudgetMb` LRU, debounced flushes with opt-in fsync. | unit (`engine/store`) |
+| DynamoDB emulation | Full expression language (KeyCondition/Condition/Filter/Update/Projection, decimal-exact `N` arithmetic), GSI/LSI with projection + sparse semantics, Limit-before-filter parity, LEK paging, streams records, lazy TTL, AWS error names the provisioner relies on. | unit (`engine/dynamodb`, 265 tests) |
+| SQS emulation | Queues (FIFO groups/dedup), event-driven long poll, visibility redelivery, live counters for QueueInspector, MD5 digests, CreateQueue idempotency duality. | unit (`engine/sqs`) |
+| S3 emulation | Buckets, binary-exact object round trips, Range reads, ListObjectsV2 pagination/delimiter/encoding, DeleteObjects, CopyObject, notification configuration (incl. legacy XML names), versioning flag. | unit (`engine/s3`) |
+| EventBridge + SNS + STS | Buses/rules/targets, PutEvents per-entry results, pattern matcher (exact/array-OR/prefix/exists/nested; unsupported operators rejected at PutRule), minimal SNS, `GetCallerIdentity`. | unit (`engine/events`, `engine/sns-sts`) |
+| Lambda control plane | Proxy absorption as metadata (INVOKE_URL kept as HTTP fallback), ESM lifecycle with `Enabled` toggle (QueueInspector hold/release), Invoke passthrough (`X-Amz-Invocation-Type`). | unit (`engine/lambda-ctl`) |
+| In-process event delivery | SQS→Lambda loops (batch size/window, visibility semantics), DynamoDB stream tailers (TRIM_HORIZON/LATEST, retry-then-advance, OnFailure destination), S3 notification fan-out (globs + prefix/suffix), EventBridge targets (`Input`/`InputPath`), schedules (`rate` + 6-field cron) — all through `LambdaRuntimeManager.invoke()`, no proxies, no polling loops. | unit (`engine/dispatch`, `engine/self-backend`) |
+
 ---
 
 ### How the integration suite boots

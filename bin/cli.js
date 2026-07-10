@@ -96,6 +96,8 @@ function getConfig(config) {
     localstackImage: config.localstackImage,
     localstackAuthToken: config.localstackAuthToken,
     stateDir: config.stateDir,
+    engine: config.engine || 'localstack',
+    selfEnginePort: (config.selfEngine && config.selfEngine.port) || 14566,
   };
 }
 
@@ -150,7 +152,11 @@ function startOrchestrator() {
       const cfg = getConfig(config);
       console.log('✅ LSS Orchestrator already running (PID:', pid + ')');
       console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
-      console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort}`);
+      if (cfg.engine === 'self') {
+        console.log(`🔧 Self Engine: http://localhost:${cfg.selfEnginePort}`);
+      } else {
+        console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort}`);
+      }
       if (cfg.enableDynamoProxy) {
         console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
       }
@@ -183,6 +189,13 @@ function startOrchestrator() {
   const useExternal = process.argv.includes('--external');
   const usePro = process.argv.includes('--pro');
   const cliToken = getArgValue('--localstack-token');
+  const useSelfEngine = process.argv.includes('--self-engine');
+
+  const engine = useSelfEngine ? 'self' : cfg.engine;
+  if (engine === 'self' && (useExternal || usePro || cliToken)) {
+    console.error('❌ --self-engine cannot be combined with --external, --pro or --localstack-token (those are LocalStack options).');
+    process.exit(1);
+  }
 
   const mode = useExternal ? 'external' : cfg.mode;
   const edition = usePro ? 'pro' : cfg.localstackEdition;
@@ -223,6 +236,9 @@ function startOrchestrator() {
   if (authToken) {
     env.LOCALSTACK_AUTH_TOKEN = authToken;
   }
+  if (engine === 'self') {
+    env.LSS_ENGINE = 'self';
+  }
   // Hand the same config file to the server so its ConfigManager reads the
   // identical serverPort/localstackPort/seedsDir/region/mode (not just the
   // hand-translated subset above). Keeps the two config loaders in agreement.
@@ -243,7 +259,11 @@ function startOrchestrator() {
 
   console.log('🚀 LSS Orchestrator started (PID:', child.pid + ')');
   console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
-  console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort} (mode: ${mode}, edition: ${edition})`);
+  if (engine === 'self') {
+    console.log(`🔧 Self Engine: http://localhost:${cfg.selfEnginePort} (no Docker)`);
+  } else {
+    console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort} (mode: ${mode}, edition: ${edition})`);
+  }
   if (enableDynamoProxy) {
     console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
   }
@@ -638,6 +658,7 @@ Options:
                                Applies to start/stop/status/logs so an isolated instance
                                can be addressed without cd-ing into its folder.
   --enable-dynamo-proxy        Enable DynamoDB proxy on port 8000 (for start command)
+  --self-engine                Use the in-process AWS engine instead of LocalStack (no Docker)
   --external                   Connect to a LocalStack already running, do not spawn a container
   --pro                        Use the LocalStack Pro image (requires LOCALSTACK_AUTH_TOKEN)
   --localstack-token <token>   Pass a LOCALSTACK_AUTH_TOKEN to the container
@@ -677,6 +698,7 @@ Configuration:
 
 Examples:
   npx lss start                              # Start the orchestrator (managed LocalStack)
+  npx lss start --self-engine                # Use the in-process engine (no Docker, port 14566)
   npx lss start --enable-dynamo-proxy        # Start with DynamoDB proxy enabled
   npx lss start --external                   # Connect to an external LocalStack
   npx lss start --pro                        # Use LocalStack Pro (token required)

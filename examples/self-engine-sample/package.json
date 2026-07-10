@@ -1,0 +1,16 @@
+{
+  "name": "self-engine-sample",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Three microservices (orders → billing → notifications) running entirely on the LSS self engine: DynamoDB, SQS, S3 and EventBridge emulated in-process — no Docker, no LocalStack, no auth token.",
+  "scripts": {
+    "lss:start": "node ../../bin/cli.js start --self-engine",
+    "lss:stop": "node ../../bin/cli.js stop",
+    "lss:status": "node ../../bin/cli.js status",
+    "register:orders": "npm --prefix orders-service run package",
+    "register:billing": "npm --prefix billing-service run package",
+    "register:notifications": "npm --prefix notifications-service run package",
+    "register:all": "npm run register:orders && npm run register:billing && npm run register:notifications",
+    "setup": "npm --prefix orders-service install && npm --prefix billing-service install && npm --prefix notifications-service install"
+  }
+}

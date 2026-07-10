@@ -189,6 +189,8 @@ describe('bin/cli.js helpers', () => {
         localstackImage: undefined,
         localstackAuthToken: undefined,
         stateDir: undefined,
+        engine: 'localstack',
+        selfEnginePort: 14566,
       });
     });
 
@@ -205,11 +207,15 @@ describe('bin/cli.js helpers', () => {
         localstackImage: 'custom/image',
         localstackAuthToken: 'tok',
         stateDir: '.lss',
+        engine: 'self',
+        selfEngine: { port: 15000 },
       });
       expect(out.serverPort).toBe(4000);
       expect(out.enableDynamoProxy).toBe(true);
       expect(out.localstackImage).toBe('custom/image');
       expect(out.stateDir).toBe('.lss');
+      expect(out.engine).toBe('self');
+      expect(out.selfEnginePort).toBe(15000);
     });
   });
 
@@ -791,6 +797,72 @@ describe('bin/cli.js helpers', () => {
       expect(env.LOCALSTACK_AUTH_TOKEN).toBe('TKN');
       expect(env.LSS_CONFIG_PATH).toBe('/abs/lss.config.json');
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('DynamoDB Proxy'));
+    });
+
+    it('--self-engine sets LSS_ENGINE=self in the spawned env and prints the Self Engine line', () => {
+      jest.useFakeTimers();
+      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
+      mockSpawn.mockReturnValue(makeChild() as any);
+      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine']);
+      cli.startOrchestrator();
+      const [, , opts] = mockSpawn.mock.calls[0];
+      expect((opts as any).env.LSS_ENGINE).toBe('self');
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Self Engine: http://localhost:14566'));
+    });
+
+    it('engine "self" from the config file selects the self engine with its configured port', () => {
+      jest.useFakeTimers();
+      mockFs.existsSync.mockImplementation((p: any) => {
+        const s = String(p);
+        return s.endsWith('index.js') || s.endsWith('lss.config.json');
+      });
+      mockFs.readFileSync.mockReturnValue(
+        JSON.stringify({ engine: 'self', selfEngine: { port: 15000 } }),
+      );
+      mockSpawn.mockReturnValue(makeChild() as any);
+      const cli = loadCli(['node', 'cli.js', 'start']);
+      cli.startOrchestrator();
+      const [, , opts] = mockSpawn.mock.calls[0];
+      expect((opts as any).env.LSS_ENGINE).toBe('self');
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Self Engine: http://localhost:15000'));
+    });
+
+    it('rejects --self-engine combined with --external', async () => {
+      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
+      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine', '--external']);
+      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('cannot be combined'));
+      expect(mockSpawn).not.toHaveBeenCalled();
+    });
+
+    it('rejects --self-engine combined with --pro', async () => {
+      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
+      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine', '--pro']);
+      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('cannot be combined'));
+    });
+
+    it('rejects --self-engine combined with --localstack-token', async () => {
+      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
+      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine', '--localstack-token', 'TKN']);
+      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('cannot be combined'));
+    });
+
+    it('reports already running with the Self Engine line when engine is self', () => {
+      mockFs.existsSync.mockImplementation((p: any) => {
+        const s = String(p);
+        return s.endsWith('.pid') || s.endsWith('lss.config.json');
+      });
+      mockFs.readFileSync.mockImplementation((p: any) => {
+        if (String(p).endsWith('lss.config.json')) {
+          return JSON.stringify({ engine: 'self' }) as any;
+        }
+        return '111' as any;
+      });
+      const cli = loadCli();
+      cli.startOrchestrator();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Self Engine: http://localhost:14566'));
     });
 
     it('uses LOCALSTACK_AUTH_TOKEN env when no CLI token or config token is set', () => {

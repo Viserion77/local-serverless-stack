@@ -1,0 +1,61 @@
+service: notifications-service
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: dev
+  environment:
+    NOTIFICATIONS_TABLE: notifications-Notifications
+    AWS_ENDPOINT: http://localhost:14566
+
+plugins:
+  - serverless-lss
+
+custom:
+  accountId: '000000000000'
+  orchestrator:
+    enabled: true
+    orchestratorUrl: http://localhost:3140
+  lss:
+    apiPort: 3033
+    invokePort: 13033
+
+functions:
+  # EventBridge rule on the bus OWNED BY billing-service (referenced by ARN).
+  # The handler receives the real EventBridge envelope (source, detail-type,
+  # detail) — no Records wrapper.
+  onOrderBilled:
+    handler: src/handlers/onOrderBilled.handler
+    events:
+      - eventBridge:
+          eventBus: arn:aws:events:${self:provider.region}:${self:custom.accountId}:event-bus/billing-events
+          pattern:
+            source:
+              - billing
+            detail-type:
+              - OrderBilled
+
+  # GET /notifications — the observable end of the pipeline.
+  listNotifications:
+    handler: src/handlers/listNotifications.handler
+    events:
+      - httpApi:
+          path: /notifications
+          method: get
+
+resources:
+  Resources:
+    NotificationsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: notifications-Notifications
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
