@@ -1,0 +1,199 @@
+{
+  // LSS task palette — Terminal > Run Task (Ctrl+Shift+P > "Tasks: Run Task").
+  // Icons are VS Code codicons (no emoji); colors use the terminal.ansi* theme keys.
+  "version": "2.0.0",
+  "tasks": [
+    // ------------------------------------------------------------------
+    // Build & dev
+    // ------------------------------------------------------------------
+    {
+      "label": "build: all",
+      "detail": "UI + server + client + plugin (npm run build)",
+      "type": "npm",
+      "script": "build",
+      "group": { "kind": "build", "isDefault": true },
+      "icon": { "id": "package", "color": "terminal.ansiBlue" },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "build: server",
+      "detail": "tsc do orquestrador + engine (npm run server:build)",
+      "type": "npm",
+      "script": "server:build",
+      "group": "build",
+      "icon": { "id": "server-process", "color": "terminal.ansiBlue" },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "dev: orchestrator + UI (watch)",
+      "detail": "tsx watch no server + vite dev na UI (npm run dev)",
+      "type": "npm",
+      "script": "dev",
+      "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
+      "problemMatcher": []
+    },
+
+    // ------------------------------------------------------------------
+    // Tests & validation
+    // ------------------------------------------------------------------
+    {
+      "label": "test: unit",
+      "detail": "Suite unitária completa (npm test)",
+      "type": "npm",
+      "script": "test",
+      "group": { "kind": "test", "isDefault": true },
+      "icon": { "id": "beaker", "color": "terminal.ansiGreen" },
+      "problemMatcher": []
+    },
+    {
+      "label": "test: watch",
+      "detail": "Suite unitária em watch mode",
+      "type": "npm",
+      "script": "test:watch",
+      "icon": { "id": "sync", "color": "terminal.ansiCyan" },
+      "problemMatcher": []
+    },
+    {
+      "label": "test: coverage (gate 100%)",
+      "detail": "Gate de cobertura do CI. Atenção: falha hoje em 99.68% de branches por gap pré-existente da main (cloudformation-parser/resource-provisioner)",
+      "type": "npm",
+      "script": "test:coverage",
+      "group": "test",
+      "icon": { "id": "shield", "color": "terminal.ansiYellow" },
+      "problemMatcher": []
+    },
+    {
+      "label": "test: integration (Docker + LOCALSTACK_AUTH_TOKEN)",
+      "detail": "Suite de integração com LocalStack real — exige Docker e token",
+      "type": "npm",
+      "script": "test:integration",
+      "group": "test",
+      "icon": { "id": "plug", "color": "terminal.ansiMagenta" },
+      "problemMatcher": []
+    },
+    {
+      "label": "lint",
+      "detail": "eslint no repositório inteiro",
+      "type": "npm",
+      "script": "lint",
+      "group": "test",
+      "icon": { "id": "checklist", "color": "terminal.ansiMagenta" },
+      "problemMatcher": ["$eslint-stylish"]
+    },
+    {
+      "label": "lint: fix",
+      "detail": "eslint --fix",
+      "type": "npm",
+      "script": "lint:fix",
+      "icon": { "id": "wand", "color": "terminal.ansiMagenta" },
+      "problemMatcher": ["$eslint-stylish"]
+    },
+    {
+      "label": "typecheck: all projects",
+      "detail": "tsc --noEmit em server/client/plugin + vue-tsc na UI",
+      "type": "shell",
+      "command": "npx tsc --noEmit -p src/server/tsconfig.json && npx tsc --noEmit -p src/client/tsconfig.json && npx tsc --noEmit -p packages/serverless-plugin/tsconfig.json && cd src/ui && npx vue-tsc --noEmit",
+      "group": "test",
+      "icon": { "id": "verified", "color": "terminal.ansiBlue" },
+      "problemMatcher": ["$tsc"]
+    },
+    {
+      "label": "validate: pre-prod",
+      "detail": "Gate antes de publicar: lint > typecheck > testes unitários > build completo (cobertura fica como task separada até o gap da main ser fechado)",
+      "dependsOrder": "sequence",
+      "dependsOn": ["lint", "typecheck: all projects", "test: unit", "build: all"],
+      "group": "test",
+      "icon": { "id": "rocket", "color": "terminal.ansiGreen" },
+      "problemMatcher": []
+    },
+
+    // ------------------------------------------------------------------
+    // Example: self-engine-sample (no Docker)
+    // ------------------------------------------------------------------
+    {
+      "label": "example self-engine: setup",
+      "detail": "npm install nos 3 microserviços do exemplo",
+      "type": "shell",
+      "command": "npm run setup",
+      "options": { "cwd": "${workspaceFolder}/examples/self-engine-sample" },
+      "icon": { "id": "desktop-download", "color": "terminal.ansiBlue" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example self-engine: start (no Docker)",
+      "detail": "Sobe o LSS com a engine própria na porta 14566",
+      "type": "shell",
+      "command": "npm run lss:start",
+      "options": { "cwd": "${workspaceFolder}/examples/self-engine-sample" },
+      "icon": { "id": "zap", "color": "terminal.ansiGreen" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example self-engine: register services",
+      "detail": "sls package nos 3 serviços (registra e provisiona na engine)",
+      "type": "shell",
+      "command": "npm run register:all",
+      "options": { "cwd": "${workspaceFolder}/examples/self-engine-sample" },
+      "icon": { "id": "cloud-upload", "color": "terminal.ansiBlue" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example self-engine: drive pipeline",
+      "detail": "POST /orders e acompanha o fluxo orders > billing > notifications",
+      "type": "shell",
+      "command": "curl -s -X POST http://localhost:3031/orders -H 'content-type: application/json' -d '{\"customerId\":\"u-ada\",\"total\":42.5}' && echo && sleep 2 && echo '--- ORDERS:' && curl -s http://localhost:3031/orders && echo && echo '--- RECEIPTS:' && curl -s http://localhost:3032/receipts && echo && echo '--- NOTIFICATIONS:' && curl -s http://localhost:3033/notifications && echo",
+      "options": { "cwd": "${workspaceFolder}/examples/self-engine-sample" },
+      "icon": { "id": "run-all", "color": "terminal.ansiCyan" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example self-engine: stop",
+      "type": "shell",
+      "command": "npm run lss:stop",
+      "options": { "cwd": "${workspaceFolder}/examples/self-engine-sample" },
+      "icon": { "id": "debug-stop", "color": "terminal.ansiRed" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example self-engine: demo completo",
+      "detail": "start > register > pipeline — o diferencial do LSS em uma task",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "example self-engine: start (no Docker)",
+        "example self-engine: register services",
+        "example self-engine: drive pipeline"
+      ],
+      "icon": { "id": "rocket", "color": "terminal.ansiYellow" },
+      "problemMatcher": []
+    },
+
+    // ------------------------------------------------------------------
+    // Example: eventbridge-sample (LocalStack via Docker)
+    // ------------------------------------------------------------------
+    {
+      "label": "example eventbridge: start (Docker)",
+      "detail": "Sobe o LSS com LocalStack gerenciado (exige Docker; token para imagens >= 2026.5)",
+      "type": "shell",
+      "command": "npm run lss:start",
+      "options": { "cwd": "${workspaceFolder}/examples/eventbridge-sample" },
+      "icon": { "id": "server-environment", "color": "terminal.ansiGreen" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example eventbridge: register services",
+      "type": "shell",
+      "command": "npm run register:all",
+      "options": { "cwd": "${workspaceFolder}/examples/eventbridge-sample" },
+      "icon": { "id": "cloud-upload", "color": "terminal.ansiBlue" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example eventbridge: stop",
+      "type": "shell",
+      "command": "npm run lss:stop",
+      "options": { "cwd": "${workspaceFolder}/examples/eventbridge-sample" },
+      "icon": { "id": "debug-stop", "color": "terminal.ansiRed" },
+      "problemMatcher": []
+    }
+  ]
+}
