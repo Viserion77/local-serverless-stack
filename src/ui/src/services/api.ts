@@ -229,7 +229,7 @@ export interface ResourceOwnersResponse {
 }
 
 export interface ServiceResource {
-  type: 'lambda' | 'dynamodb' | 'sqs' | 'sns' | 's3' | 'event-source';
+  type: 'lambda' | 'dynamodb' | 'sqs' | 'sns' | 's3' | 'eventbus' | 'event-rule' | 'event-source';
   name: string;
 }
 
@@ -239,6 +239,8 @@ export interface ResourceBreakdown {
   queues: number;
   topics: number;
   buckets: number;
+  buses?: number;
+  eventRules?: number;
 }
 
 export interface BucketSnapshot {

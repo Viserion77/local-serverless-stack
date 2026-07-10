@@ -27,7 +27,7 @@ const deleteDialogOpen = ref(false);
 
 const grouped = computed(() => {
   const byType: Record<string, ServiceResource[]> = {
-    lambda: [], dynamodb: [], sqs: [], sns: [], s3: [], 'event-source': [],
+    lambda: [], dynamodb: [], sqs: [], sns: [], s3: [], eventbus: [], 'event-rule': [], 'event-source': [],
   };
   for (const r of service.value?.resources || []) {
     if (!byType[r.type]) byType[r.type] = [];
@@ -318,6 +318,40 @@ watch(() => props.serviceName, load);
                 variant="soft"
               >
                 λ {{ r.name }}
+              </TTag>
+            </TStack>
+          </TStack>
+
+          <TStack v-if="grouped.eventbus?.length" direction="vertical" gap="0.5rem">
+            <TStack direction="horizontal" gap="0.5rem" align="center">
+              <TBadge tone="info" variant="soft">EventBridge buses</TBadge>
+              <span class="muted">{{ grouped.eventbus.length }}</span>
+            </TStack>
+            <TStack direction="horizontal" gap="0.375rem" wrap>
+              <TTag
+                v-for="r in grouped.eventbus"
+                :key="`eb-${r.name}`"
+                size="sm"
+                variant="soft"
+              >
+                {{ r.name }}
+              </TTag>
+            </TStack>
+          </TStack>
+
+          <TStack v-if="grouped['event-rule']?.length" direction="vertical" gap="0.5rem">
+            <TStack direction="horizontal" gap="0.5rem" align="center">
+              <TBadge tone="info" variant="soft">EventBridge rules</TBadge>
+              <span class="muted">{{ grouped['event-rule'].length }}</span>
+            </TStack>
+            <TStack direction="horizontal" gap="0.375rem" wrap>
+              <TTag
+                v-for="(r, idx) in grouped['event-rule']"
+                :key="`er-${idx}-${r.name}`"
+                size="sm"
+                variant="outline"
+              >
+                {{ r.name }}
               </TTag>
             </TStack>
           </TStack>

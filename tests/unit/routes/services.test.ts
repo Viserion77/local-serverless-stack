@@ -278,7 +278,7 @@ describe('GET /api/services', () => {
     expect(res.status).toBe(200);
     expect(res.body[0].resourcesCount).toBe(6);
     expect(res.body[0].resourceBreakdown).toEqual({
-      lambdas: 1, tables: 1, queues: 1, topics: 1, buckets: 1,
+      lambdas: 1, tables: 1, queues: 1, topics: 1, buckets: 1, buses: 0, eventRules: 0,
     });
     expect(res.body[0].functionsCount).toBe(2);
     expect(res.body[0].routesCount).toBe(1);

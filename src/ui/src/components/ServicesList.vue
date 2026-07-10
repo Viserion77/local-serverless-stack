@@ -266,6 +266,20 @@ onBeforeUnmount(() => {
           >
             🪣 {{ (row.resourceBreakdown as any).buckets }}
           </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.buses"
+            size="sm"
+            variant="soft"
+          >
+            🔀 {{ (row.resourceBreakdown as any).buses }}
+          </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.eventRules"
+            size="sm"
+            variant="soft"
+          >
+            🎯 {{ (row.resourceBreakdown as any).eventRules }}
+          </TTag>
           <span
             v-if="!row.resourcesCount"
             class="muted"
