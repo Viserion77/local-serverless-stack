@@ -269,7 +269,9 @@ function waitForExit(pid, timeoutMs = 10000, intervalMs = 200) {
   return new Promise(resolve => {
     const deadline = Date.now() + timeoutMs;
     let timer;
+    let done = false;
     const finish = (value) => {
+      done = true;
       if (timer) clearInterval(timer);
       resolve(value);
     };
@@ -284,8 +286,12 @@ function waitForExit(pid, timeoutMs = 10000, intervalMs = 200) {
         finish(false);
       }
     };
-    timer = setInterval(check, intervalMs);
+    // Fast path: the process is often already gone — check synchronously so
+    // `stop` resolves without ever scheduling (and leaking) an interval.
     check();
+    if (!done) {
+      timer = setInterval(check, intervalMs);
+    }
   });
 }
 

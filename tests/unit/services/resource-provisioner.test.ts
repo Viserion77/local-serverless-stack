@@ -218,6 +218,29 @@ describe('createDynamoDBTable (via provisionResources)', () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Failed to update TTL'));
   });
 
+  it('logs the Disabled state when a disabled TTL update succeeds', async () => {
+    dynamoMock.on(CreateTableCommand).resolves({});
+    dynamoMock.on(UpdateTimeToLiveCommand).resolves({});
+    await provisioner.provisionResources('svc', [dynamoResource({
+      ttl: { attributeName: 'ttl', enabled: false },
+    })]);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('✓ Disabled TTL on orders-table'));
+  });
+
+  it('warns with the raw value when the TTL update rejects a non-Error', async () => {
+    // Genuine non-Error straight from the client instance so `error?.message`
+    // is undefined → both the regex input `|| ''` and the warn `|| error`
+    // fallbacks are taken.
+    jest.spyOn((provisioner as any).dynamoClient, 'send').mockImplementation((cmd: any) => {
+      if (cmd instanceof UpdateTimeToLiveCommand) return Promise.reject('ttl-weird');
+      return Promise.resolve({});
+    });
+    await provisioner.provisionResources('svc', [dynamoResource({
+      ttl: { attributeName: 'ttl', enabled: true },
+    })]);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('ttl-weird'));
+  });
+
   it('omits GSI/LSI/stream when none provided', async () => {
     dynamoMock.on(CreateTableCommand).resolves({});
     await provisioner.provisionResources('svc', [dynamoResource({ globalSecondaryIndexes: [], localSecondaryIndexes: [] })]);
@@ -735,6 +758,31 @@ describe('createEventSourceMapping', () => {
     const input = lambdaMock.commandCalls(CreateEventSourceMappingCommand)[0].args[0].input as any;
     expect(input.DestinationConfig).toBeUndefined();
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Could not resolve OnFailure destination'));
+  });
+
+  it('warns with the raw value when the OnFailure resolution rejects a non-Error', async () => {
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:3000' } } } });
+    lambdaMock.on(ListEventSourceMappingsCommand).resolves({ EventSourceMappings: [] });
+    lambdaMock.on(CreateEventSourceMappingCommand).resolves({});
+    // The stream ARN resolves as-is; only the destination ref throws — with a
+    // genuine non-Error so the warn's `error?.message || error` fallback is taken.
+    jest.spyOn(provisioner as any, 'resolveEventSourceArn').mockImplementation(async (ref: any) => {
+      if (ref === 'BadDlq::Arn') throw 'weird-non-error';
+      return ref;
+    });
+
+    await provisioner.provisionResources(
+      'svc',
+      [eventSource({
+        eventSourceArn: 'arn:aws:dynamodb:us-east-1:000:table/orders/stream/2024',
+        onFailureDestination: 'BadDlq::Arn',
+      })],
+      { invokeUrl: 'http://host:3000' },
+    );
+
+    const input = lambdaMock.commandCalls(CreateEventSourceMappingCommand)[0].args[0].input as any;
+    expect(input.DestinationConfig).toBeUndefined();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('weird-non-error'));
   });
 
   it('does not set StartingPosition for SQS sources and defaults batch size to 10', async () => {
