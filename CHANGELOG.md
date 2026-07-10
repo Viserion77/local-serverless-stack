@@ -15,6 +15,10 @@ EventBridge support: LSS can now provision the shared event bus and rule→Lambd
 - **Resources-only stacks**: a registered service that declares only `resources:` (no functions, no ports) provisions its resources without starting a runtime worker, gateway listeners or watcher — this already worked structurally since 0.5.0 gated those on declared functions/ports, and is now covered by tests for the EventBus-only infra-stack case.
 - **Cleanup parity**: unregistering a service removes rule targets and rules first, then deletes its event buses.
 - **Dashboard visibility**: EventBridge buses and rules show up in the service detail page (own sections) and as counters in the services list (`resourceBreakdown.buses`/`eventRules`), so a resources-only infra stack no longer renders as "N total" with an empty body.
+- **Example `examples/eventbridge-sample`**: resources-only `events-stack` owning the shared bus (+ skipped Archive), a producer publishing `UserSignedUp` via `PutEvents`, and a consumer with an `events: eventBridge` trigger storing events in DynamoDB — registered with `sls package` only, no deploy. Its LocalStack runs on port `14566`, outside the standard 4566–4599 range, so a real LocalStack publishing that range (docker-compose defaults) can't intercept the example's `localhost` traffic on Docker Desktop/WSL2.
+
+### Fixed
+- **EventBridge event shape through proxies**: the generated LocalStack proxy Lambda no longer wraps EventBridge events in a `Records` array — handlers receive `source`/`detail-type`/`detail` at the top level, exactly like on AWS. SQS/DynamoDB/SNS batches keep their `Records` shape. Proxies created by earlier versions keep the old code until recreated (only their `INVOKE_URL` is updated in place); delete the proxy function or reset LocalStack to pick up the fix.
 
 ### Changed
 - `AWS::Events::Archive` resources are accepted and skipped with a registration warning: LocalStack mocks Archives (CloudFormation reports `CREATE_COMPLETE` but `ListArchives` stays empty), so provisioning one locally would only fake success.

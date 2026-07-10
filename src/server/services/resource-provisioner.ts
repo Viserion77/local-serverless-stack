@@ -459,14 +459,13 @@ export const handler = async (event, context) => {
   const invokeUrl = process.env.INVOKE_URL || '${invokeUrl}';
   const parsedUrl = url.parse(invokeUrl);
 
-  // Transform event based on source
-  // LocalStack sends events through different sources (SQS, DynamoDB, SNS, etc.)
-  // We need to pass them correctly to the Serverless Offline handler
+  // SQS/DynamoDB/SNS deliver batches under Records; EventBridge delivers the
+  // event object itself (source / detail-type / detail) with no wrapper — real
+  // AWS Lambda targets read event.detail directly, so wrapping it would break
+  // handlers written for production. Wrap only non-EventBridge-shaped events.
   let transformedEvent = event;
-  
-  // If the event already has Records (SQS/DynamoDB/SNS event), use it as is
-  // Otherwise wrap it in a Records array
-  if (!event.Records) {
+  const isEventBridgeEvent = Boolean(event && event['detail-type'] !== undefined && event.source !== undefined);
+  if (!event.Records && !isEventBridgeEvent) {
     transformedEvent = {
       Records: [event]
     };
