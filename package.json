@@ -1,6 +1,6 @@
 {
   "name": "local-serverless-stack",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "description": "Local control plane for serverless development with LocalStack orchestration",
   "author": "LSS Contributors",
   "license": "MIT",
@@ -65,6 +65,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.709.0",
+    "@aws-sdk/client-eventbridge": "^3.709.0",
     "@aws-sdk/client-lambda": "^3.709.0",
     "@aws-sdk/client-s3": "^3.1051.0",
     "@aws-sdk/client-sns": "^3.709.0",

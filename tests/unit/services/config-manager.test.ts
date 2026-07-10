@@ -418,7 +418,7 @@ describe('getters: defaults (no file, no env)', () => {
   });
 
   it('getServices defaults to the standard list', () => {
-    expect(cm.getServices()).toEqual(['dynamodb', 'sqs', 'sns', 's3', 'lambda']);
+    expect(cm.getServices()).toEqual(['dynamodb', 'sqs', 'sns', 's3', 'lambda', 'events']);
   });
 
   it('isPersistence defaults to true', () => {

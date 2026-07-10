@@ -12,6 +12,8 @@ import {
   SQSResource,
   SNSResource,
   S3Resource,
+  EventBusResource,
+  EventRuleResource,
   EventSourceMapping,
 } from '../../../src/server/services/cloudformation-parser';
 
@@ -554,6 +556,150 @@ describe('parseEventSource', () => {
     } as never) as EventSourceMapping[];
     expect(res.functionName).toBe('');
     expect(res.eventSourceArn).toBe('');
+  });
+});
+
+describe('parseEventBus', () => {
+  it('parses an explicit bus name', () => {
+    const [res] = parser.parse({
+      Resources: {
+        SharedBus: {
+          Type: 'AWS::Events::EventBus',
+          Properties: { Name: 'domain-events' },
+        },
+      },
+    } as never) as EventBusResource[];
+    expect(res).toEqual({ type: 'eventbus', logicalId: 'SharedBus', name: 'domain-events' });
+  });
+
+  it('falls back to the logical id when Name is missing', () => {
+    const [res] = parser.parse({
+      Resources: {
+        SharedBus: { Type: 'AWS::Events::EventBus', Properties: {} },
+      },
+    } as never) as EventBusResource[];
+    expect(res.name).toBe('SharedBus');
+  });
+});
+
+describe('parseEventRule', () => {
+  it('parses pattern, bus Ref, state and lambda targets', () => {
+    const [res] = parser.parse({
+      Resources: {
+        RelayRule: {
+          Type: 'AWS::Events::Rule',
+          Properties: {
+            Name: 'relay-rule',
+            EventBusName: { Ref: 'SharedBus' },
+            EventPattern: { source: ['identity'], 'detail-type': ['UserCreated'] },
+            State: 'ENABLED',
+            Targets: [
+              {
+                Arn: { 'Fn::GetAtt': ['ConsumerLambdaFunction', 'Arn'] },
+                Id: 'consumer-target',
+                Input: '{"static":true}',
+              },
+            ],
+          },
+        },
+      },
+    } as never) as EventRuleResource[];
+
+    expect(res.type).toBe('event-rule');
+    expect(res.name).toBe('relay-rule');
+    expect(res.eventBusRef).toBe('SharedBus');
+    expect(res.eventBusUnresolved).toBeUndefined();
+    expect(res.eventPattern).toEqual({ source: ['identity'], 'detail-type': ['UserCreated'] });
+    expect(res.enabled).toBe(true);
+    expect(res.targets).toEqual([
+      { id: 'consumer-target', functionRef: 'ConsumerLambdaFunction', input: '{"static":true}', inputPath: undefined },
+    ]);
+  });
+
+  it('handles schedule rules on the default bus, DISABLED state and name fallback', () => {
+    const [res] = parser.parse({
+      Resources: {
+        CronRule: {
+          Type: 'AWS::Events::Rule',
+          Properties: {
+            ScheduleExpression: 'rate(5 minutes)',
+            State: 'DISABLED',
+            Targets: [{ Arn: { 'Fn::GetAtt': ['JobLambdaFunction', 'Arn'] }, Id: 'job' }],
+          },
+        },
+      },
+    } as never) as EventRuleResource[];
+
+    expect(res.name).toBe('CronRule');
+    expect(res.eventBusRef).toBeUndefined();
+    expect(res.scheduleExpression).toBe('rate(5 minutes)');
+    expect(res.enabled).toBe(false);
+  });
+
+  it('flags an unresolvable EventBusName (Fn::ImportValue) instead of dropping it silently', () => {
+    const [res] = parser.parse({
+      Resources: {
+        CrossStackRule: {
+          Type: 'AWS::Events::Rule',
+          Properties: {
+            EventBusName: { 'Fn::ImportValue': 'shared-bus-name' },
+            EventPattern: { source: ['x'] },
+            Targets: [{ Arn: { 'Fn::GetAtt': ['FnLambdaFunction', 'Arn'] }, Id: 't' }],
+          },
+        },
+      },
+    } as never) as EventRuleResource[];
+    expect(res.eventBusRef).toBeUndefined();
+    expect(res.eventBusUnresolved).toBe(true);
+  });
+
+  it('keeps literal ARN targets, defaults missing Ids, skips unresolvable targets', () => {
+    const [res] = parser.parse({
+      Resources: {
+        Rule: {
+          Type: 'AWS::Events::Rule',
+          Properties: {
+            EventPattern: { source: ['x'] },
+            Targets: [
+              { Arn: 'arn:aws:lambda:us-east-1:000000000000:function:svc-dev-handler' },
+              { Arn: { 'Fn::Sub': 'not-resolvable' }, Id: 'ignored' },
+            ],
+          },
+        },
+      },
+    } as never) as EventRuleResource[];
+    expect(res.targets).toHaveLength(1);
+    expect(res.targets[0].functionRef).toBe('arn:aws:lambda:us-east-1:000000000000:function:svc-dev-handler');
+    expect(res.targets[0].id).toBe('arn:aws:lambda:us-east-1:000000000000:function:svc-dev-handler');
+  });
+});
+
+describe('AWS::Events::Archive', () => {
+  it('is skipped with a warning (LocalStack mocks Archives)', () => {
+    const warnings: string[] = [];
+    const resources = parser.parse({
+      Resources: {
+        BusArchive: {
+          Type: 'AWS::Events::Archive',
+          Properties: { ArchiveName: 'domain-events-archive' },
+        },
+      },
+    } as never, warnings);
+    expect(resources).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('BusArchive');
+    expect(warnings[0]).toContain('Archive');
+  });
+
+  it('does not touch the warnings sink for supported or unknown types', () => {
+    const warnings: string[] = [];
+    parser.parse({
+      Resources: {
+        Bus: { Type: 'AWS::Events::EventBus', Properties: {} },
+        Role: { Type: 'AWS::IAM::Role', Properties: {} },
+      },
+    } as never, warnings);
+    expect(warnings).toEqual([]);
   });
 });
 

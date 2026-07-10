@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.0] - 2026-07-10
+
+EventBridge support: LSS can now provision the shared event bus and rule→Lambda triggers that previously required the last remaining `serverless deploy` (CloudFormation) step in local monorepo setups.
+
+### Added
+- **`AWS::Events::EventBus` provisioning**: buses declared in the `resources:` section are created in LocalStack on registration (idempotent — re-registration tolerates an existing bus). `PutEvents` from handlers already worked via the SDK; the bus just had to exist.
+- **`AWS::Events::Rule` triggers**: rules (event pattern or schedule, `ENABLED`/`DISABLED` state honored) are created on the declared bus and their Lambda targets wired through the same proxy model used by streams/SQS — EventBridge → proxy Lambda in LocalStack → LSS invoke API (130xx). Target `Input`/`InputPath` pass through; the bus is resolved from the template's logical ids, a literal name, or an ARN. Rules whose `EventBusName` can't be resolved from the template (e.g. `Fn::ImportValue`) are skipped with a warning instead of silently landing on the default bus.
+- **Resources-only stacks**: a registered service that declares only `resources:` (no functions, no ports) provisions its resources without starting a runtime worker, gateway listeners or watcher — this already worked structurally since 0.5.0 gated those on declared functions/ports, and is now covered by tests for the EventBus-only infra-stack case.
+- **Cleanup parity**: unregistering a service removes rule targets and rules first, then deletes its event buses.
+
+### Changed
+- `AWS::Events::Archive` resources are accepted and skipped with a registration warning: LocalStack mocks Archives (CloudFormation reports `CREATE_COMPLETE` but `ListArchives` stays empty), so provisioning one locally would only fake success.
+- `CloudFormationParser.parse()` accepts an optional warnings sink; the registrar forwards template-level warnings (like skipped Archives) to the registering client alongside state-file warnings.
+- New runtime dependency: `@aws-sdk/client-eventbridge`.
+
+### Tests
+- Parser coverage for `AWS::Events::EventBus`/`Rule`/`Archive` (bus name fallback, pattern/schedule/state, `Fn::ImportValue` flagging, literal-ARN targets, warning sink) and ResourceProvisioner coverage for bus creation, rule wiring (proxy reuse, permissions, default vs named vs literal bus), unresolvable-bus/unsupported-target skips, and cleanup ordering.
+
 ## [0.6.0] - 2026-07-09
 
 Corrections from integrating LSS 0.5.0 in a real monorepo using osls 4, serverless-esbuild ESM artifacts, HTTP API v2 authorizers, DynamoDB Streams, and Docker-in-Docker devcontainers.

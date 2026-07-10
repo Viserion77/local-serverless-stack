@@ -67,15 +67,15 @@ export class ServiceRegistrar {
     const dirName = path.basename(resolvedPath);
     const effectiveRegion = input.region || configManager.getConfig().region || 'us-east-1';
 
+    const warnings: string[] = [];
     const template = await this.readTemplate(resolvedPath, dirName) as Parameters<CloudFormationParser['parse']>[0];
-    const resources = cfnParser.parse(template);
+    const resources = cfnParser.parse(template, warnings);
     const templateHash = cfnParser.calculateHash(template);
 
     // serverless-state.json is the declarative source for routes/authorizers.
     // Missing state (older setups) degrades gracefully: functions still come
     // from the CFN template, HTTP routes are just unavailable.
     const state = await this.readState(resolvedPath);
-    const warnings: string[] = [];
     let functions: RegisteredFunction[] = [];
     let routes: ServiceMetadata['routes'] = [];
     let authorizers: ServiceMetadata['authorizers'] = [];

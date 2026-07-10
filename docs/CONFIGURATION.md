@@ -30,7 +30,7 @@ Both files should contain valid JSON with the following optional properties:
   "enableDynamoProxy": false,
   "dynamoProxyPort": 8000,
   "region": "us-east-1",
-  "services": ["dynamodb", "sqs", "sns", "s3", "lambda"],
+  "services": ["dynamodb", "sqs", "sns", "s3", "lambda", "events"],
   "persistence": true,
   "debug": false,
   "autoPackage": false,
@@ -94,7 +94,7 @@ Both files should contain valid JSON with the following optional properties:
   - AWS region for LocalStack
   - Example: `"us-east-1"`
 
-- **services** (array, default: ["dynamodb", "sqs", "sns", "s3", "lambda"])
+- **services** (array, default: ["dynamodb", "sqs", "sns", "s3", "lambda", "events"])
   - AWS services to enable in LocalStack
   - Example: `["dynamodb", "sqs", "sns", "lambda", "s3", "secretsmanager"]`
 
@@ -283,7 +283,7 @@ When only `apiPort` is known, the orchestrator derives the invoke port via
   "enableDynamoProxy": true,
   "dynamoProxyPort": 8001,
   "region": "eu-west-1",
-  "services": ["dynamodb", "sqs", "sns", "lambda", "s3"],
+  "services": ["dynamodb", "sqs", "sns", "lambda", "s3", "events"],
   "persistence": true,
   "debug": false
 }

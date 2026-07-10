@@ -45,6 +45,7 @@ LocalStack. `autoPackage` can run the packaging command on demand when the templ
 | SNS topics | Created and discoverable. | unit + integration |
 | S3 buckets | Created with versioning and `s3:ObjectCreated:*` notifications (prefix/suffix filters). | unit + integration |
 | Lambda event source mappings | SQS→Lambda and DynamoDB Stream→Lambda wired via LocalStack. | unit (`resource-provisioner`) + integration |
+| EventBridge buses & rules | `AWS::Events::EventBus` created in LocalStack; `AWS::Events::Rule` (pattern or schedule) wired to Lambda targets through the same proxy → invoke-API model; `AWS::Events::Archive` skipped with a warning (LocalStack mocks it). | unit (`cloudformation-parser`, `resource-provisioner`) |
 | Lambda proxies | Generated proxy functions forward events to the `serverless-offline` invoke endpoint. | unit (`resource-provisioner`) |
 | `GET /api/resources` / `…/owners` | List provisioned resources (tables/queues/topics/buckets) and map them to owning services. | unit (`routes/resources`) + integration |
 

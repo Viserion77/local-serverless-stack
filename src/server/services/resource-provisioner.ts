@@ -13,6 +13,15 @@ import {
 } from '@aws-sdk/client-s3';
 import { LambdaClient, CreateFunctionCommand, GetFunctionCommand, DeleteFunctionCommand, AddPermissionCommand, UpdateFunctionConfigurationCommand } from '@aws-sdk/client-lambda';
 import { CreateEventSourceMappingCommand, ListEventSourceMappingsCommand, DeleteEventSourceMappingCommand } from '@aws-sdk/client-lambda';
+import {
+  EventBridgeClient,
+  CreateEventBusCommand,
+  DeleteEventBusCommand,
+  PutRuleCommand,
+  PutTargetsCommand,
+  RemoveTargetsCommand,
+  DeleteRuleCommand,
+} from '@aws-sdk/client-eventbridge';
 import { LocalStackManager } from './localstack-manager.js';
 import { ConfigManager } from './config-manager.js';
 import { SeedManager } from './seed-manager.js';
@@ -22,6 +31,8 @@ import type {
   SQSResource,
   SNSResource,
   S3Resource,
+  EventBusResource,
+  EventRuleResource,
   EventSourceMapping,
 } from './cloudformation-parser.js';
 import AdmZip from 'adm-zip';
@@ -33,6 +44,7 @@ export class ResourceProvisioner {
   private snsClient!: SNSClient;
   private s3Client!: S3Client;
   private lambdaClient!: LambdaClient;
+  private eventBridgeClient!: EventBridgeClient;
   private currentRegion: string = 'us-east-1';
   // CFN logical id → resource snapshot for the service currently being
   // provisioned. Lets resolveEventSourceArn map Fn::GetAtt references
@@ -65,6 +77,7 @@ export class ResourceProvisioner {
     // rather than as a virtual-host subdomain (which resolves to host.docker.internal).
     this.s3Client = new S3Client({ ...config, forcePathStyle: true });
     this.lambdaClient = new LambdaClient(config);
+    this.eventBridgeClient = new EventBridgeClient(config);
   }
 
   getS3Client(): S3Client {
@@ -125,6 +138,10 @@ export class ResourceProvisioner {
             await this.createS3Bucket(resource);
             provisionedCount++;
             break;
+          case 'eventbus':
+            await this.createEventBus(resource);
+            provisionedCount++;
+            break;
         }
       } catch (error: any) {
         if (!error.message?.includes('already exists')) {
@@ -146,6 +163,19 @@ export class ResourceProvisioner {
         if (!errorMessage.includes('already exists') && errorName !== 'ResourceConflictException') {
           console.error(`Failed to provision event-source for ${eventSource.functionName}:`, errorMessage);
         }
+      }
+    }
+
+    // EventBridge rules ride the same proxy model as event source mappings:
+    // rule + pattern on the bus → Lambda proxy in LocalStack → LSS invoke API.
+    const eventRules = resources.filter(r => r.type === 'event-rule') as EventRuleResource[];
+    for (const rule of eventRules) {
+      try {
+        await this.createEventRule(serviceName, rule, invokeUrl);
+        provisionedCount++;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`Failed to provision event-rule ${rule.name}:`, errorMessage);
       }
     }
 
@@ -558,6 +588,104 @@ export const handler = async (event, context) => {
     }
   }
 
+  private async createEventBus(resource: EventBusResource): Promise<void> {
+    try {
+      await this.eventBridgeClient.send(new CreateEventBusCommand({ Name: resource.name }));
+      console.log(`  ✓ Created EventBridge bus: ${resource.name}`);
+    } catch (error: any) {
+      if (error?.name === 'ResourceAlreadyExistsException') {
+        console.log(`  ⚠ EventBridge bus already exists: ${resource.name}`);
+      } else {
+        throw error;
+      }
+    }
+  }
+
+  // Resolve a rule's EventBusName: a logical id from the same template maps to
+  // the provisioned bus name; anything else is a literal name/ARN, both of
+  // which PutRule/PutTargets accept. Undefined targets the default bus.
+  private resolveEventBusName(busRef?: string): string | undefined {
+    if (!busRef) return undefined;
+    const direct = this.resourcesByLogicalId.get(busRef);
+    if (direct && direct.type === 'eventbus') {
+      return direct.name;
+    }
+    return busRef;
+  }
+
+  private async createEventRule(serviceName: string, rule: EventRuleResource, invokeUrl?: string): Promise<void> {
+    if (rule.eventBusUnresolved) {
+      // Binding it to the default bus instead would "work" but never match the
+      // producers' events — skipping with a warning is the honest failure.
+      console.warn(`  ⚠ Skipped EventBridge rule ${rule.name}: EventBusName could not be resolved from the template (e.g. Fn::ImportValue).`);
+      return;
+    }
+
+    const eventBusName = this.resolveEventBusName(rule.eventBusRef);
+
+    // PutRule/PutTargets are upserts, so re-registration is naturally idempotent.
+    await this.eventBridgeClient.send(
+      new PutRuleCommand({
+        Name: rule.name,
+        EventBusName: eventBusName,
+        EventPattern: rule.eventPattern ? JSON.stringify(rule.eventPattern) : undefined,
+        ScheduleExpression: rule.scheduleExpression,
+        State: rule.enabled ? 'ENABLED' : 'DISABLED',
+      }),
+    );
+    console.log(`  ✓ Put EventBridge rule: ${rule.name}${eventBusName ? ` (bus: ${eventBusName})` : ''}`);
+
+    const targets: Array<{ Id: string; Arn: string; Input?: string; InputPath?: string }> = [];
+    for (const target of rule.targets) {
+      // Targets arrive as logical ids (Fn::GetAtt) or literal Lambda ARNs.
+      const actualFunctionName = target.functionRef.startsWith('arn:aws:')
+        ? target.functionRef.split(':function:')[1]?.split(':')[0]
+        : this.resolveLambdaName(serviceName, target.functionRef);
+      if (!actualFunctionName) {
+        console.warn(`  ⚠ Skipped EventBridge target ${target.id} on rule ${rule.name}: unsupported target ${target.functionRef}`);
+        continue;
+      }
+
+      await this.ensureLambdaProxyExists(serviceName, actualFunctionName, actualFunctionName, invokeUrl);
+
+      const ruleArn = `arn:aws:events:${this.currentRegion}:000000000000:rule/${eventBusName ? `${eventBusName}/` : ''}${rule.name}`;
+      try {
+        await this.lambdaClient.send(
+          new AddPermissionCommand({
+            FunctionName: actualFunctionName,
+            StatementId: `events-invoke-${rule.name}`,
+            Action: 'lambda:InvokeFunction',
+            Principal: 'events.amazonaws.com',
+            SourceArn: ruleArn,
+          }),
+        );
+      } catch (error: any) {
+        // ResourceConflictException = statement already exists, which is fine.
+        if (error?.name !== 'ResourceConflictException') {
+          console.warn(`  ⚠ Could not add EventBridge invoke permission for ${actualFunctionName}: ${error?.message || error}`);
+        }
+      }
+
+      targets.push({
+        Id: target.id,
+        Arn: `arn:aws:lambda:${this.currentRegion}:000000000000:function:${actualFunctionName}`,
+        Input: target.input,
+        InputPath: target.inputPath,
+      });
+    }
+
+    if (targets.length === 0) return;
+
+    await this.eventBridgeClient.send(
+      new PutTargetsCommand({
+        Rule: rule.name,
+        EventBusName: eventBusName,
+        Targets: targets as any,
+      }),
+    );
+    console.log(`  ✓ Wired ${targets.length} target(s) on EventBridge rule: ${rule.name}`);
+  }
+
   private async ensureLambdaProxyExists(
     serviceName: string,
     proxyName: string,
@@ -818,7 +946,20 @@ export const handler = async (event, context) => {
       return;
     }
 
+    // Rebuild the logical id map so event-rule cleanup can resolve which bus
+    // each rule lives on (same lookup provisioning uses).
+    this.resourcesByLogicalId.clear();
+    for (const r of resources) {
+      if ('logicalId' in r && r.logicalId) {
+        this.resourcesByLogicalId.set(r.logicalId, r);
+      }
+    }
+
     let cleaned = 0;
+    // Buses are deleted after the main loop: EventBridge refuses to delete a
+    // bus that still has rules, and template order doesn't guarantee the rules
+    // come first.
+    const eventBuses: EventBusResource[] = [];
     for (const resource of resources) {
       try {
         switch (resource.type) {
@@ -838,6 +979,13 @@ export const handler = async (event, context) => {
             await this.deleteS3Bucket(resource.name);
             cleaned++;
             break;
+          case 'eventbus':
+            eventBuses.push(resource);
+            break;
+          case 'event-rule':
+            await this.deleteEventRule(resource);
+            cleaned++;
+            break;
           case 'event-source':
             await this.deleteEventSourceMapping(serviceName, resource.functionName);
             cleaned++;
@@ -850,7 +998,51 @@ export const handler = async (event, context) => {
       }
     }
 
+    for (const bus of eventBuses) {
+      try {
+        await this.deleteEventBus(bus.name);
+        cleaned++;
+      } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        console.error(`Failed to cleanup eventbus:${bus.name}:`, errorMessage);
+      }
+    }
+
     console.log(`✅ Cleaned up ${cleaned} resources for ${serviceName}`);
+  }
+
+  private async deleteEventRule(rule: EventRuleResource): Promise<void> {
+    const eventBusName = this.resolveEventBusName(rule.eventBusRef);
+    try {
+      if (rule.targets.length > 0) {
+        await this.eventBridgeClient.send(
+          new RemoveTargetsCommand({
+            Rule: rule.name,
+            EventBusName: eventBusName,
+            Ids: rule.targets.map(t => t.id),
+          }),
+        );
+      }
+      await this.eventBridgeClient.send(
+        new DeleteRuleCommand({ Name: rule.name, EventBusName: eventBusName }),
+      );
+      console.log(`Deleted EventBridge rule: ${rule.name}`);
+    } catch (error: any) {
+      if (error?.name !== 'ResourceNotFoundException') {
+        throw error;
+      }
+    }
+  }
+
+  private async deleteEventBus(busName: string): Promise<void> {
+    try {
+      await this.eventBridgeClient.send(new DeleteEventBusCommand({ Name: busName }));
+      console.log(`Deleted EventBridge bus: ${busName}`);
+    } catch (error: any) {
+      if (error?.name !== 'ResourceNotFoundException') {
+        throw error;
+      }
+    }
   }
 
   private async deleteDynamoDBTable(tableName: string): Promise<void> {

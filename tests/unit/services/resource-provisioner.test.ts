@@ -46,6 +46,15 @@ import {
   DeleteEventSourceMappingCommand,
   UpdateFunctionConfigurationCommand,
 } from '@aws-sdk/client-lambda';
+import {
+  EventBridgeClient,
+  CreateEventBusCommand,
+  DeleteEventBusCommand,
+  PutRuleCommand,
+  PutTargetsCommand,
+  RemoveTargetsCommand,
+  DeleteRuleCommand,
+} from '@aws-sdk/client-eventbridge';
 import { ResourceProvisioner } from '../../../src/server/services/resource-provisioner';
 import { ConfigManager } from '../../../src/server/services/config-manager';
 import type {
@@ -53,6 +62,8 @@ import type {
   SQSResource,
   SNSResource,
   S3Resource,
+  EventBusResource,
+  EventRuleResource,
   EventSourceMapping,
   LambdaResource,
 } from '../../../src/server/services/cloudformation-parser';
@@ -62,6 +73,7 @@ const sqsMock = mockClient(SQSClient);
 const snsMock = mockClient(SNSClient);
 const s3Mock = mockClient(S3Client);
 const lambdaMock = mockClient(LambdaClient);
+const eventBridgeMock = mockClient(EventBridgeClient);
 
 let provisioner: ResourceProvisioner;
 
@@ -78,6 +90,7 @@ beforeEach(() => {
   snsMock.reset();
   s3Mock.reset();
   lambdaMock.reset();
+  eventBridgeMock.reset();
   provisioner = ResourceProvisioner.getInstance();
   (provisioner as any).resourcesByLogicalId.clear();
   (provisioner as any).currentRegion = 'us-east-1';
@@ -96,6 +109,7 @@ afterAll(() => {
   snsMock.restore();
   s3Mock.restore();
   lambdaMock.restore();
+  eventBridgeMock.restore();
 });
 
 const dynamoResource = (over: Partial<DynamoDBResource> = {}): DynamoDBResource => ({
@@ -147,6 +161,24 @@ const eventSource = (over: Partial<EventSourceMapping> = {}): EventSourceMapping
   functionName: 'ProcessOrderLambdaFunction',
   eventSourceArn: 'OrderQueue',
   enabled: true,
+  ...over,
+});
+
+const eventBusResource = (over: Partial<EventBusResource> = {}): EventBusResource => ({
+  type: 'eventbus',
+  logicalId: 'SharedBus',
+  name: 'domain-events',
+  ...over,
+});
+
+const eventRuleResource = (over: Partial<EventRuleResource> = {}): EventRuleResource => ({
+  type: 'event-rule',
+  logicalId: 'RelayRule',
+  name: 'relay-rule',
+  eventBusRef: 'SharedBus',
+  eventPattern: { source: ['identity'] },
+  enabled: true,
+  targets: [{ id: 'consumer-target', functionRef: 'ConsumerLambdaFunction' }],
   ...over,
 });
 
@@ -1300,5 +1332,241 @@ describe('defensive branches (non-Error rejections and crafted inputs)', () => {
     jest.spyOn((provisioner as any).snsClient, 'send').mockRejectedValue('nope');
     await provisioner.cleanupResources('svc', [snsResource()]);
     expect(console.error).toHaveBeenCalledWith('Failed to cleanup sns:order-topic:', 'Unknown error');
+  });
+});
+
+describe('createEventBus (via provisionResources)', () => {
+  it('creates the bus in LocalStack', async () => {
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    await provisioner.provisionResources('infra', [eventBusResource()], {});
+    const input = eventBridgeMock.commandCalls(CreateEventBusCommand)[0].args[0].input;
+    expect(input).toEqual({ Name: 'domain-events' });
+    expect(console.log).toHaveBeenCalledWith('  ✓ Created EventBridge bus: domain-events');
+  });
+
+  it('swallows ResourceAlreadyExistsException on re-registration', async () => {
+    eventBridgeMock.on(CreateEventBusCommand).rejects(namedError('ResourceAlreadyExistsException'));
+    await provisioner.provisionResources('infra', [eventBusResource()], {});
+    expect(console.log).toHaveBeenCalledWith('  ⚠ EventBridge bus already exists: domain-events');
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('rethrows other errors (logged by the first-pass catch)', async () => {
+    eventBridgeMock.on(CreateEventBusCommand).rejects(namedError('InternalException', 'boom'));
+    await provisioner.provisionResources('infra', [eventBusResource()], {});
+    expect(console.error).toHaveBeenCalledWith(
+      'Failed to provision eventbus:domain-events:',
+      'boom',
+    );
+  });
+
+  it('registers a resources-only stack (bus without functions/ports) without needing an invoke URL', async () => {
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    // No invokePort/invokeUrl in metadata — nothing in this stack needs a proxy.
+    await provisioner.provisionResources('infra', [eventBusResource()]);
+    expect(eventBridgeMock.commandCalls(CreateEventBusCommand)).toHaveLength(1);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith('✅ Provisioned 1 resources for infra');
+  });
+});
+
+describe('createEventRule (via provisionResources)', () => {
+  it('puts the rule on the bus resolved from the logical-id map and wires the Lambda proxy target', async () => {
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    eventBridgeMock.on(PutTargetsCommand).resolves({});
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:13070' } } } });
+    lambdaMock.on(AddPermissionCommand).resolves({});
+
+    await provisioner.provisionResources(
+      'svc',
+      [
+        eventBusResource(),
+        lambdaResource({ logicalId: 'ConsumerLambdaFunction', name: 'svc-dev-consumer' }),
+        eventRuleResource({ targets: [{ id: 'consumer-target', functionRef: 'ConsumerLambdaFunction', input: '{"static":true}' }] }),
+      ],
+      { invokeUrl: 'http://host:13070' },
+    );
+
+    const ruleInput = eventBridgeMock.commandCalls(PutRuleCommand)[0].args[0].input as any;
+    expect(ruleInput.Name).toBe('relay-rule');
+    expect(ruleInput.EventBusName).toBe('domain-events');
+    expect(ruleInput.EventPattern).toBe(JSON.stringify({ source: ['identity'] }));
+    expect(ruleInput.State).toBe('ENABLED');
+
+    const permissionInput = lambdaMock.commandCalls(AddPermissionCommand)[0].args[0].input as any;
+    expect(permissionInput.Principal).toBe('events.amazonaws.com');
+    expect(permissionInput.FunctionName).toBe('svc-dev-consumer');
+    expect(permissionInput.SourceArn).toBe('arn:aws:events:us-east-1:000000000000:rule/domain-events/relay-rule');
+
+    const targetsInput = eventBridgeMock.commandCalls(PutTargetsCommand)[0].args[0].input as any;
+    expect(targetsInput.Rule).toBe('relay-rule');
+    expect(targetsInput.EventBusName).toBe('domain-events');
+    expect(targetsInput.Targets).toEqual([
+      {
+        Id: 'consumer-target',
+        Arn: 'arn:aws:lambda:us-east-1:000000000000:function:svc-dev-consumer',
+        Input: '{"static":true}',
+        InputPath: undefined,
+      },
+    ]);
+  });
+
+  it('targets the default bus (and a bus-less rule ARN) when eventBusRef is absent', async () => {
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    eventBridgeMock.on(PutTargetsCommand).resolves({});
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:13070' } } } });
+    lambdaMock.on(AddPermissionCommand).resolves({});
+
+    await provisioner.provisionResources(
+      'svc',
+      [
+        lambdaResource({ logicalId: 'ConsumerLambdaFunction', name: 'svc-dev-consumer' }),
+        eventRuleResource({ eventBusRef: undefined, scheduleExpression: 'rate(5 minutes)', eventPattern: undefined, enabled: false }),
+      ],
+      { invokeUrl: 'http://host:13070' },
+    );
+
+    const ruleInput = eventBridgeMock.commandCalls(PutRuleCommand)[0].args[0].input as any;
+    expect(ruleInput.EventBusName).toBeUndefined();
+    expect(ruleInput.EventPattern).toBeUndefined();
+    expect(ruleInput.ScheduleExpression).toBe('rate(5 minutes)');
+    expect(ruleInput.State).toBe('DISABLED');
+    const permissionInput = lambdaMock.commandCalls(AddPermissionCommand)[0].args[0].input as any;
+    expect(permissionInput.SourceArn).toBe('arn:aws:events:us-east-1:000000000000:rule/relay-rule');
+  });
+
+  it('passes a literal bus name/ARN through when the ref is not a template logical id', async () => {
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    eventBridgeMock.on(PutTargetsCommand).resolves({});
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:13070' } } } });
+    lambdaMock.on(AddPermissionCommand).resolves({});
+
+    await provisioner.provisionResources(
+      'svc',
+      [
+        lambdaResource({ logicalId: 'ConsumerLambdaFunction', name: 'svc-dev-consumer' }),
+        eventRuleResource({ eventBusRef: 'shared-domain-bus' }),
+      ],
+      { invokeUrl: 'http://host:13070' },
+    );
+
+    const ruleInput = eventBridgeMock.commandCalls(PutRuleCommand)[0].args[0].input as any;
+    expect(ruleInput.EventBusName).toBe('shared-domain-bus');
+  });
+
+  it('resolves literal Lambda ARN targets to the function name', async () => {
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    eventBridgeMock.on(PutTargetsCommand).resolves({});
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:13070' } } } });
+    lambdaMock.on(AddPermissionCommand).resolves({});
+
+    await provisioner.provisionResources(
+      'svc',
+      [eventRuleResource({
+        eventBusRef: undefined,
+        targets: [{ id: 't', functionRef: 'arn:aws:lambda:us-east-1:000000000000:function:other-svc-dev-consumer' }],
+      })],
+      { invokeUrl: 'http://host:13070' },
+    );
+
+    const targetsInput = eventBridgeMock.commandCalls(PutTargetsCommand)[0].args[0].input as any;
+    expect(targetsInput.Targets[0].Arn).toBe('arn:aws:lambda:us-east-1:000000000000:function:other-svc-dev-consumer');
+  });
+
+  it('skips the whole rule with a warning when EventBusName was unresolvable', async () => {
+    await provisioner.provisionResources(
+      'svc',
+      [eventRuleResource({ eventBusRef: undefined, eventBusUnresolved: true })],
+      { invokeUrl: 'http://host:13070' },
+    );
+    expect(eventBridgeMock.commandCalls(PutRuleCommand)).toHaveLength(0);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Skipped EventBridge rule relay-rule'));
+  });
+
+  it('skips unsupported targets (non-Lambda ARN) and omits PutTargets when none remain', async () => {
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    await provisioner.provisionResources(
+      'svc',
+      [eventRuleResource({
+        eventBusRef: undefined,
+        targets: [{ id: 'q', functionRef: 'arn:aws:sqs:us-east-1:000000000000:some-queue' }],
+      })],
+      { invokeUrl: 'http://host:13070' },
+    );
+    expect(eventBridgeMock.commandCalls(PutRuleCommand)).toHaveLength(1);
+    expect(eventBridgeMock.commandCalls(PutTargetsCommand)).toHaveLength(0);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Skipped EventBridge target q'));
+  });
+
+  it('swallows AddPermission ResourceConflictException and warns on other permission errors', async () => {
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    eventBridgeMock.on(PutTargetsCommand).resolves({});
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:13070' } } } });
+    lambdaMock.on(AddPermissionCommand).rejectsOnce(namedError('ResourceConflictException'))
+      .rejects(namedError('AccessDeniedException', 'denied'));
+
+    await provisioner.provisionResources(
+      'svc',
+      [
+        lambdaResource({ logicalId: 'ConsumerLambdaFunction', name: 'svc-dev-consumer' }),
+        eventRuleResource({ eventBusRef: undefined }),
+        eventRuleResource({ logicalId: 'OtherRule', name: 'other-rule', eventBusRef: undefined }),
+      ],
+      { invokeUrl: 'http://host:13070' },
+    );
+
+    // Both rules still fully wired despite the permission hiccups.
+    expect(eventBridgeMock.commandCalls(PutTargetsCommand)).toHaveLength(2);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Could not add EventBridge invoke permission'));
+  });
+
+  it('logs rule-pass failures without aborting provisioning', async () => {
+    eventBridgeMock.on(PutRuleCommand).rejects(namedError('InternalException', 'put-rule boom'));
+    await provisioner.provisionResources(
+      'svc',
+      [eventRuleResource({ eventBusRef: undefined })],
+      { invokeUrl: 'http://host:13070' },
+    );
+    expect(console.error).toHaveBeenCalledWith('Failed to provision event-rule relay-rule:', 'put-rule boom');
+  });
+});
+
+describe('EventBridge cleanup (via cleanupResources)', () => {
+  it('removes targets, deletes rules, then deletes buses last', async () => {
+    const order: string[] = [];
+    eventBridgeMock.on(RemoveTargetsCommand).callsFake(() => { order.push('remove-targets'); return {}; });
+    eventBridgeMock.on(DeleteRuleCommand).callsFake(() => { order.push('delete-rule'); return {}; });
+    eventBridgeMock.on(DeleteEventBusCommand).callsFake(() => { order.push('delete-bus'); return {}; });
+
+    // Bus listed BEFORE its rule: cleanup must still delete the bus last.
+    await provisioner.cleanupResources('infra', [eventBusResource(), eventRuleResource()]);
+
+    expect(order).toEqual(['remove-targets', 'delete-rule', 'delete-bus']);
+    const removeInput = eventBridgeMock.commandCalls(RemoveTargetsCommand)[0].args[0].input as any;
+    expect(removeInput).toEqual({ Rule: 'relay-rule', EventBusName: 'domain-events', Ids: ['consumer-target'] });
+    const deleteRuleInput = eventBridgeMock.commandCalls(DeleteRuleCommand)[0].args[0].input as any;
+    expect(deleteRuleInput).toEqual({ Name: 'relay-rule', EventBusName: 'domain-events' });
+    expect(eventBridgeMock.commandCalls(DeleteEventBusCommand)[0].args[0].input).toEqual({ Name: 'domain-events' });
+    expect(console.log).toHaveBeenCalledWith('✅ Cleaned up 2 resources for infra');
+  });
+
+  it('skips RemoveTargets for a rule without targets and swallows not-found deletes', async () => {
+    eventBridgeMock.on(DeleteRuleCommand).rejects(namedError('ResourceNotFoundException'));
+    eventBridgeMock.on(DeleteEventBusCommand).rejects(namedError('ResourceNotFoundException'));
+    await provisioner.cleanupResources('infra', [
+      eventBusResource(),
+      eventRuleResource({ targets: [] }),
+    ]);
+    expect(eventBridgeMock.commandCalls(RemoveTargetsCommand)).toHaveLength(0);
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('logs bus and rule cleanup failures independently', async () => {
+    eventBridgeMock.on(RemoveTargetsCommand).rejects(namedError('InternalException', 'rt boom'));
+    eventBridgeMock.on(DeleteEventBusCommand).rejects(namedError('InternalException', 'bus boom'));
+    await provisioner.cleanupResources('infra', [eventBusResource(), eventRuleResource()]);
+    expect(console.error).toHaveBeenCalledWith('Failed to cleanup event-rule:relay-rule:', 'rt boom');
+    expect(console.error).toHaveBeenCalledWith('Failed to cleanup eventbus:domain-events:', 'bus boom');
   });
 });

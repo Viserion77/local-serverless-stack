@@ -220,7 +220,7 @@ local-serverless-stack/
 ### LocalStack Settings
 
 LocalStack is configured with:
-- Services: `dynamodb,sqs,sns,s3,lambda`
+- Services: `dynamodb,sqs,sns,s3,lambda,events`
 - Persistence: Enabled (volume: `lss-localstack-data`)
 - Lambda executor: `local` (no Docker-in-Docker required)
 - Docker socket: Mounted from host

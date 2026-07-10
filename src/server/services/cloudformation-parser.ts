@@ -81,6 +81,37 @@ export interface S3Resource {
   notifications: S3NotificationConfig[];
 }
 
+export interface EventBusResource {
+  type: 'eventbus';
+  logicalId: string;
+  name: string;
+}
+
+export interface EventRuleTarget {
+  id: string;
+  // CFN function reference (Fn::GetAtt logical id), literal Lambda ARN or name.
+  functionRef: string;
+  // Optional CFN Target passthroughs (Input is a JSON string in CFN).
+  input?: string;
+  inputPath?: string;
+}
+
+export interface EventRuleResource {
+  type: 'event-rule';
+  logicalId: string;
+  name: string;
+  // Logical id of a bus in the same template, or a literal bus name/ARN.
+  // Absent → the default bus. `eventBusUnresolved` marks an EventBusName the
+  // parser couldn't reduce to a string (e.g. Fn::ImportValue) — provisioning
+  // must skip the rule rather than silently bind it to the default bus.
+  eventBusRef?: string;
+  eventBusUnresolved?: boolean;
+  eventPattern?: Record<string, unknown>;
+  scheduleExpression?: string;
+  enabled: boolean;
+  targets: EventRuleTarget[];
+}
+
 export interface EventSourceMapping {
   type: 'event-source';
   functionName: string;
@@ -98,10 +129,20 @@ export interface EventSourceMapping {
   filterCriteria?: { Filters?: Array<{ Pattern?: string }> };
 }
 
-export type Resource = LambdaResource | DynamoDBResource | SQSResource | SNSResource | S3Resource | EventSourceMapping;
+export type Resource =
+  | LambdaResource
+  | DynamoDBResource
+  | SQSResource
+  | SNSResource
+  | S3Resource
+  | EventBusResource
+  | EventRuleResource
+  | EventSourceMapping;
 
 export class CloudFormationParser {
-  parse(template: CloudFormationTemplate): Resource[] {
+  // `warnings` collects non-fatal template findings (e.g. resource types LSS
+  // deliberately skips) so callers can surface them to the registering client.
+  parse(template: CloudFormationTemplate, warnings?: string[]): Resource[] {
     const resources: Resource[] = [];
 
     if (!template.Resources) {
@@ -109,7 +150,7 @@ export class CloudFormationParser {
     }
 
     for (const [key, resource] of Object.entries(template.Resources)) {
-      const parsed = this.parseResource(key, resource);
+      const parsed = this.parseResource(key, resource, warnings);
       if (parsed) {
         resources.push(parsed);
       }
@@ -118,7 +159,7 @@ export class CloudFormationParser {
     return resources;
   }
 
-  private parseResource(key: string, resource: CloudFormationResource): Resource | null {
+  private parseResource(key: string, resource: CloudFormationResource, warnings?: string[]): Resource | null {
     switch (resource.Type) {
       case 'AWS::Lambda::Function':
         return this.parseLambda(key, resource);
@@ -136,6 +177,15 @@ export class CloudFormationParser {
         return this.parseS3(key, resource);
       case 'AWS::Lambda::EventSourceMapping':
         return this.parseEventSource(key, resource);
+      case 'AWS::Events::EventBus':
+        return this.parseEventBus(key, resource);
+      case 'AWS::Events::Rule':
+        return this.parseEventRule(key, resource);
+      case 'AWS::Events::Archive':
+        // LocalStack mocks Archives: CFN reports CREATE_COMPLETE but ListArchives
+        // stays empty, so provisioning one locally would only fake success.
+        warnings?.push(`AWS::Events::Archive "${key}" is not provisioned locally — LocalStack mocks Archives (created but never listed/replayable).`);
+        return null;
       default:
         return null;
     }
@@ -247,6 +297,55 @@ export class CloudFormationParser {
       versioningEnabled: versioning?.Status === 'Enabled',
       notifications,
     };
+  }
+
+  private parseEventBus(key: string, resource: CloudFormationResource): EventBusResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    return {
+      type: 'eventbus',
+      logicalId: key,
+      name: (props.Name as string) || key,
+    };
+  }
+
+  private parseEventRule(key: string, resource: CloudFormationResource): EventRuleResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+
+    const parsed: EventRuleResource = {
+      type: 'event-rule',
+      logicalId: key,
+      name: (props.Name as string) || key,
+      enabled: props.State !== 'DISABLED',
+      targets: [],
+    };
+
+    if (props.EventBusName !== undefined) {
+      // Ref/Fn::GetAtt on an AWS::Events::EventBus both reduce to its logical id;
+      // a plain string is a literal bus name or ARN (both accepted by PutRule).
+      const busRef = this.extractFunctionName(props.EventBusName);
+      if (busRef) parsed.eventBusRef = busRef;
+      else parsed.eventBusUnresolved = true;
+    }
+    if (props.EventPattern !== undefined) {
+      parsed.eventPattern = props.EventPattern as Record<string, unknown>;
+    }
+    if (props.ScheduleExpression !== undefined) {
+      parsed.scheduleExpression = props.ScheduleExpression as string;
+    }
+
+    for (const raw of (props.Targets as unknown[]) || []) {
+      const target = raw as Record<string, unknown>;
+      const functionRef = this.extractFunctionName(target.Arn);
+      if (!functionRef) continue;
+      parsed.targets.push({
+        id: (target.Id as string) || functionRef,
+        functionRef,
+        input: target.Input as string | undefined,
+        inputPath: target.InputPath as string | undefined,
+      });
+    }
+
+    return parsed;
   }
 
   private parseEventSource(_key: string, resource: CloudFormationResource): EventSourceMapping {
