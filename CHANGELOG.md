@@ -23,6 +23,7 @@ The self engine: an in-process AWS emulator that replaces LocalStack for the typ
 - **Docs**: `docs/SELF_ENGINE.md` (coverage matrix, storage model, known divergences), `docs/PRD_SELF_ENGINE.md` (design), FEATURES.md §13, CONFIGURATION.md and README (self engine as the headline feature).
 
 ### Changed
+- **Dashboard component library updated**: `@treeui/vue` `^0.6.1` → `^0.10.0` (latest). No API changes required in the LSS components — `vue-tsc` and the Vite build pass unchanged.
 - **Engine seam**: the LocalStack container lifecycle moved to `src/server/engine/backends/localstack-backend.ts`; `services/localstack-manager.ts` is now a thin facade over the new `EngineManager`, so the provisioner/explorers/seeds keep their imports and work against whichever engine is active (they always speak AWS SDK to `getConfig().endpoint`). Self-engine code is loaded via dynamic `import()` — LocalStack-mode memory footprint is unchanged.
 - `lambdaRuntime.invokeHost` defaults to `127.0.0.1` in self-engine mode (nothing runs inside Docker); explicit config still wins.
 - `GET /api/health` now includes an `engine: {kind, running, endpoint, ...}` block; the `localstack` boolean stays truthy when the active engine is healthy (client/UI compatibility).
