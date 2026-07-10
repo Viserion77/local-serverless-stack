@@ -12,7 +12,7 @@ import { dynamoRouter } from './routes/dynamo.js';
 import { configRouter } from './routes/config.js';
 import { lambdasRouter } from './routes/lambdas.js';
 import { apisRouter } from './routes/apis.js';
-import { LocalStackManager } from './services/localstack-manager.js';
+import { EngineManager } from './engine/engine-manager.js';
 import { ConfigManager } from './services/config-manager.js';
 import { QueueInspector } from './services/queue-inspector.js';
 import { ServiceRegistrar } from './services/service-registrar.js';
@@ -46,9 +46,13 @@ app.use('/api/apis', apisRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {
+  const engine = EngineManager.getInstance();
   res.json({
     status: 'ok',
-    localstack: LocalStackManager.getInstance().isRunning(),
+    // Kept for client/UI compatibility: truthy when the ACTIVE engine
+    // (LocalStack or self) is healthy.
+    localstack: engine.isRunning(),
+    engine: engine.healthDetail(),
     dynamoProxy: {
       enabled: configManager.isEnableDynamoProxy(),
       running: Boolean(dynamoProxyServer?.listening),
@@ -70,13 +74,13 @@ async function start() {
   try {
     console.log('🚀 Starting Orchestrator Server...');
 
-    // Initialize LocalStack
-    const localstack = LocalStackManager.getInstance();
-    await localstack.start();
+    // Initialize the AWS engine (LocalStack container or in-process self engine)
+    const engine = EngineManager.getInstance();
+    await engine.start();
 
     app.listen(PORT, () => {
       console.log(`✅ Server running on http://localhost:${PORT}`);
-      console.log(`✅ LocalStack running on ${localstack.getEndpoint()}`);
+      console.log(`✅ Engine (${engine.getKind()}) running on ${engine.getEndpoint()}`);
     });
 
     QueueInspector.getInstance().startPolling();
@@ -95,7 +99,7 @@ async function start() {
     // Optional DynamoDB proxy
     if (configManager.isEnableDynamoProxy()) {
       const proxyPort = configManager.getDynamoProxyPort();
-      dynamoProxyServer = startDynamoProxy(localstack.getEndpoint(), proxyPort);
+      dynamoProxyServer = startDynamoProxy(engine.getEndpoint(), proxyPort);
     }
 
     // Print configuration summary
@@ -115,8 +119,7 @@ async function shutdown() {
   await LambdaRuntimeManager.getInstance().stopAll();
   processManager.stopAll();
   await processManager.cleanup();
-  const localstack = LocalStackManager.getInstance();
-  await localstack.stop();
+  await EngineManager.getInstance().stop();
   process.exit(0);
 }
 

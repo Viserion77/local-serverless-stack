@@ -1,0 +1,19 @@
+{
+  "name": "orders-service-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "POST /orders stores the order in DynamoDB and enqueues it on SQS for billing; GET /orders lists them. Port 3031 (invoke 13031).",
+  "scripts": {
+    "package": "serverless package",
+    "register": "serverless package"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/client-sqs": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0"
+  },
+  "devDependencies": {
+    "serverless": "3.40.0",
+    "serverless-lss": "file:../../../packages/serverless-plugin"
+  }
+}

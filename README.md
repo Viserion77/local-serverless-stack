@@ -2,22 +2,73 @@
 
 [![npm version](https://img.shields.io/npm/v/local-serverless-stack.svg)](https://www.npmjs.com/package/local-serverless-stack)
 
-**Local control plane for serverless development with LocalStack orchestration**
+**Local control plane for serverless development — with its own in-process AWS engine (no Docker) or LocalStack orchestration**
 
-LSS provides a unified local development environment for serverless microservices, eliminating the need to run separate LocalStack instances for each service.
+LSS provides a unified local development environment for serverless microservices: one orchestrator provisions and serves every AWS resource your services declare, eliminating the need to run separate LocalStack instances (or, with the **self engine**, any LocalStack at all).
 
 ## Features
 
-- **Centralized LocalStack**: Single LocalStack instance manages DynamoDB, SQS, SNS, S3, and Lambda
-- **Auto-provisioning**: Parses CloudFormation templates from `sls package` and provisions resources automatically
-- **Event source mappings**: Automatically connects SQS queues, streams, and S3 notifications to Lambda handlers via LocalStack
-- **Lambda runtime & API emulation**: LSS can answer on the same API (30xx) and Lambda invoke (130xx) ports that serverless-offline used
+- **⚡ Self engine (the LSS differentiator)**: DynamoDB, SQS, S3, EventBridge, SNS and the Lambda control plane emulated **in-process** by the orchestrator — no Docker, no LocalStack, no auth token. Boots in milliseconds, stores data in local files, delivers events straight into your handlers. See [Self engine](#self-engine--no-docker-no-localstack-no-auth-token) below.
+- **Centralized provisioning**: Parses CloudFormation templates from `sls package` and provisions resources automatically — into the self engine or a single shared LocalStack, your choice per instance
+- **Event source mappings**: Automatically connects SQS queues, streams, S3 notifications and EventBridge rules to Lambda handlers
+- **Lambda runtime & API emulation**: LSS answers on the same API (30xx) and Lambda invoke (130xx) ports that serverless-offline used
 - **Web UI**: Vue 3 dashboard to monitor services, resources, and event mappings
 - **Hot reload**: Watch for code changes and auto-rebuild/reprovision
 - **Process management**: Start/stop microservices from the orchestrator
 - **CLI Tool**: Simple commands to manage the orchestrator (start/stop/status/logs)
 
 See [docs/FEATURES.md](docs/FEATURES.md) for the complete feature inventory and how each capability is tested.
+
+## Self engine — no Docker, no LocalStack, no auth token
+
+LocalStack got heavy (a container eating 1 GB+ of RAM) and stopped being free by default
+(community images `>= 2026.5` require an auth token). The **self engine** replaces it for
+the typical serverless dev loop: the orchestrator itself serves the real AWS wire
+protocols on one port, so your application code, the AWS SDK, the dashboard and `lss seed`
+all work unchanged — there is simply no container underneath.
+
+```bash
+npx lss start --self-engine        # or "engine": "self" in lss.config.json
+```
+
+```
+AWS_ENDPOINT=http://localhost:14566   # point your services here, done
+```
+
+What you get:
+
+- **DynamoDB** with the full expression language (KeyCondition/Filter/Update/Projection,
+  exact decimal arithmetic), GSIs/LSIs, TTL and streams — items persisted in local
+  JSONL files under `~/.lss/engine/`, hydrated lazily and unloaded when idle.
+- **SQS** with FIFO, visibility redelivery and live counters; **S3** with byte-exact
+  object round trips and notifications; **EventBridge** with buses, pattern-filtered
+  rules and `rate()`/cron schedules; minimal **SNS** and **STS**.
+- **Events delivered in-process**: SQS batches, DynamoDB streams, S3 notifications and
+  EventBridge targets go straight from the engine to the LSS Lambda runtime — no proxy
+  Lambdas, no polling containers.
+
+```mermaid
+flowchart LR
+    APP[Your services<br/>AWS SDK → :14566] --> ENG
+    subgraph ORCH["One orchestrator process — no Docker"]
+        ENG[Self engine<br/>DynamoDB · SQS · S3<br/>EventBridge · SNS · STS]
+        ENG -->|in-process events| RT[LSS Lambda runtime<br/>your handlers, ports 30xx/130xx]
+        ENG --- FS[(local files<br/>~/.lss/engine)]
+    end
+```
+
+Measured on [examples/self-engine-sample](examples/self-engine-sample/) (3 microservices:
+orders → billing → notifications): engine boot **~10 ms**; a full pipeline crossing
+DynamoDB + SQS + S3 + EventBridge across the three services completes in **~170 ms** —
+with the whole stack being the orchestrator process plus one small worker per service.
+
+Migration is gradual: LocalStack mode remains the default and fully supported; a running
+instance picks one engine. Anything the self engine doesn't implement yet answers with an
+explicit error naming the operation — or is forwarded verbatim to a LocalStack via
+`selfEngine.fallbackEndpoint`. Coverage matrix and storage model:
+[docs/SELF_ENGINE.md](docs/SELF_ENGINE.md) · design/PRD:
+[docs/PRD_SELF_ENGINE.md](docs/PRD_SELF_ENGINE.md) · runnable demo:
+[examples/self-engine-sample](examples/self-engine-sample/).
 
 ## Architecture
 
@@ -41,18 +92,18 @@ local-serverless-stack/
 
 **Components**:
 - **CLI** (`bin/cli.js`): Background process management (start/stop/status/logs)
-- **Server** (`src/server/`): Express API + LocalStack orchestration
+- **Server** (`src/server/`): Express API + engine orchestration
+- **Engine** (`src/server/engine/`): the AWS provider behind everything — either the in-process **self engine** (port 14566, no Docker) or a managed/external **LocalStack** container (port 4566)
 - **UI** (`src/ui/`): Vue 3 dashboard for monitoring
 - **Plugin** (`packages/serverless-plugin/`): Auto-registration for Serverless Framework
-- **LocalStack**: Docker container (port 4566) with AWS services
 
 ## Quick Start
 
 ### Prerequisites
 
 - Node.js >= 20
-- Docker (for LocalStack)
 - Serverless Framework 3.40.0
+- Docker — **only for the LocalStack engine**; the self engine (`--self-engine`) needs none
 
 ### Installation
 
@@ -86,8 +137,11 @@ See the [plugin documentation](packages/serverless-plugin/README.md) for configu
 LSS provides a simple CLI to manage the orchestrator in background mode:
 
 ```bash
-# Start the orchestrator in background
+# Start the orchestrator in background (managed LocalStack)
 npx lss start
+
+# Start with the in-process self engine instead — no Docker
+npx lss start --self-engine
 
 # Check if orchestrator is running
 npx lss status
@@ -105,6 +159,12 @@ npx lss help
 ### CLI Output
 
 ```bash
+$ npx lss start --self-engine
+🚀 LSS Orchestrator started (PID: 12345)
+📊 Server: http://localhost:3100
+🔧 Self Engine: http://localhost:14566 (no Docker)
+✅ Service is running
+
 $ npx lss start
 🚀 LSS Orchestrator started (PID: 12345)
 📊 Dashboard: http://localhost:3100
@@ -214,8 +274,25 @@ local-serverless-stack/
 ### Environment Variables
 
 - `PORT`: Orchestrator API port (default: 3100)
+- `LSS_ENGINE`: AWS engine — `localstack` (default) or `self` (in-process, no Docker)
+- `LSS_ENGINE_PORT`: Self engine port (default: 14566)
 - `ENABLE_DYNAMO_PROXY`: Enable DynamoDB proxy on port 8000 (default: false)
 - `DYNAMO_PROXY_PORT`: DynamoDB proxy port (default: 8000)
+
+### Engine selection
+
+```jsonc
+// lss.config.json
+{
+  "engine": "self",              // "localstack" (default) | "self"
+  "selfEngine": { "port": 14566 } // full reference: docs/SELF_ENGINE.md
+}
+```
+
+The self engine's default port sits **outside 4566–4599** on purpose: a real LocalStack
+install intercepts that whole range on some hosts (Docker Desktop/WSL2). `--self-engine`
+cannot be combined with the LocalStack-only flags (`--external`, `--pro`,
+`--localstack-token`).
 
 ### LocalStack Settings
 
@@ -478,6 +555,17 @@ sequenceDiagram
    - Real handler executes in serverless-offline process
    - Response returned through proxy chain
    - Message deleted from queue on success, or sent to DLQ on failure
+
+> **Self-engine mode collapses this whole chain**: the engine's event source mapping
+> delivers the SQS batch **in-process** to the LSS Lambda runtime — no LocalStack
+> polling, no proxy Lambda, no HTTP hop:
+>
+> ```
+> LocalStack mode:  SQS → LocalStack ESM → proxy Lambda (container) → HTTP → handler
+> Self engine:      SQS (engine) → dispatcher → handler
+> ```
+>
+> The same applies to DynamoDB streams, S3 notifications and EventBridge targets.
 
 ## CLI Implementation Details
 

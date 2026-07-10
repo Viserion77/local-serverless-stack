@@ -12,8 +12,9 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
+# IDE (shared task definitions stay versioned)
+.vscode/*
+!.vscode/tasks.json
 .idea/
 *.swp
 *.swo

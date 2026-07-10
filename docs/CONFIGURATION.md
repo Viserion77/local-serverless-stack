@@ -53,6 +53,19 @@ Both files should contain valid JSON with the following optional properties:
   - The Serverless Plugin connects to this server to register services
   - Example: `3100`
 
+- **engine** (`"localstack"` | `"self"`, default: `"localstack"`)
+  - Which AWS provider backs the orchestrator: the LocalStack container, or the
+    in-process self engine (no Docker, no auth token). Env: `LSS_ENGINE`; CLI:
+    `lss start --self-engine`. The `localstack*` keys below are ignored in self
+    mode. See [SELF_ENGINE.md](SELF_ENGINE.md).
+
+- **selfEngine** (object, optional — only used when `engine` is `"self"`)
+  - `port` (default 14566, env `LSS_ENGINE_PORT`), `dataDir` (default
+    `~/.lss/engine`, or `<stateDir>/engine` when `stateDir` is set), `account`,
+    `idleUnloadMs`, `memoryBudgetMb`, `fsync`, `fallbackEndpoint` (forward
+    unimplemented AWS calls to a LocalStack instance during migration).
+  - Full reference: [SELF_ENGINE.md](SELF_ENGINE.md).
+
 - **localstackPort** (number, default: 4566)
   - Port where LocalStack container will expose its API
   - Example: `4566`

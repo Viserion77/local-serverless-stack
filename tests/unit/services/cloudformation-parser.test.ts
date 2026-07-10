@@ -580,9 +580,33 @@ describe('parseEventBus', () => {
     } as never) as EventBusResource[];
     expect(res.name).toBe('SharedBus');
   });
+
+  it('tolerates a bus with no Properties at all', () => {
+    const [res] = parser.parse({
+      Resources: {
+        SharedBus: { Type: 'AWS::Events::EventBus' },
+      },
+    } as never) as EventBusResource[];
+    expect(res).toEqual({ type: 'eventbus', logicalId: 'SharedBus', name: 'SharedBus' });
+  });
 });
 
 describe('parseEventRule', () => {
+  it('tolerates a rule with no Properties at all (no bus, no pattern, no targets)', () => {
+    const [res] = parser.parse({
+      Resources: {
+        BareRule: { Type: 'AWS::Events::Rule' },
+      },
+    } as never) as EventRuleResource[];
+    expect(res).toEqual({
+      type: 'event-rule',
+      logicalId: 'BareRule',
+      name: 'BareRule',
+      enabled: true,
+      targets: [],
+    });
+  });
+
   it('parses pattern, bus Ref, state and lambda targets', () => {
     const [res] = parser.parse({
       Resources: {

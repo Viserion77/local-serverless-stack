@@ -1,8 +1,47 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 export type LocalStackMode = 'managed' | 'external';
 export type LocalStackEdition = 'community' | 'pro';
+
+// Which AWS provider backs the orchestrator:
+//   "localstack" (default): Docker container managed/external as per `mode`.
+//   "self": the in-process self engine (no Docker) — see docs/PRD_SELF_ENGINE.md.
+export type EngineKind = 'localstack' | 'self';
+
+export interface SelfEngineConfig {
+  // Front door port. Default 14566 — deliberately outside 4566–4599, which a
+  // real LocalStack install intercepts on some hosts (Docker Desktop/WSL2).
+  port?: number;
+  // Engine persistence root. Defaults to <stateDir>/engine when stateDir is
+  // set (test isolation), else ~/.lss/engine.
+  dataDir?: string;
+  account?: string;
+  // Dehydrate hydrated data stores idle past this window.
+  idleUnloadMs?: number;
+  // Hard LRU budget for hydrated data across all stores.
+  memoryBudgetMb?: number;
+  // fsync on every WAL flush (paranoid mode). Default: fsync only at
+  // compaction/dehydrate/shutdown.
+  fsync?: boolean;
+  // Reverse-proxy target for AWS services/operations the engine does not
+  // implement (e.g. a LocalStack instance during migration).
+  fallbackEndpoint?: string | null;
+}
+
+// SelfEngineConfig with every default applied.
+export interface ResolvedSelfEngineConfig {
+  port: number;
+  dataDir: string;
+  account: string;
+  idleUnloadMs: number;
+  memoryBudgetMb: number;
+  fsync: boolean;
+  fallbackEndpoint: string | null;
+  persistence: boolean;
+  region: string;
+}
 
 // Per-service packaging overrides. Keyed in `servicePackaging` by the service
 // directory name (basename) OR its path relative to the config file's directory.
@@ -146,6 +185,12 @@ export interface LSSConfig {
 
   // Per-service runtime overrides (ports, execution mode, watch).
   serviceRuntime?: Record<string, ServiceRuntimeConfig>;
+
+  // AWS provider selection ("localstack" default; "self" = in-process engine).
+  engine?: EngineKind;
+
+  // Self-engine settings (only used when engine is "self").
+  selfEngine?: SelfEngineConfig;
 }
 
 export class ConfigManager {
@@ -288,6 +333,18 @@ export class ConfigManager {
       this.config.lambdaRuntime = {
         ...this.config.lambdaRuntime,
         invokeHost: process.env.LSS_INVOKE_HOST,
+      };
+    }
+    if (process.env.LSS_ENGINE) {
+      const engine = process.env.LSS_ENGINE.toLowerCase();
+      if (engine === 'localstack' || engine === 'self') {
+        this.config.engine = engine;
+      }
+    }
+    if (process.env.LSS_ENGINE_PORT) {
+      this.config.selfEngine = {
+        ...this.config.selfEngine,
+        port: parseInt(process.env.LSS_ENGINE_PORT, 10),
       };
     }
   }
@@ -436,7 +493,12 @@ export class ConfigManager {
   }
 
   getInvokeHost(): string {
-    return this.config.lambdaRuntime?.invokeHost ?? 'host.docker.internal';
+    if (this.config.lambdaRuntime?.invokeHost) {
+      return this.config.lambdaRuntime.invokeHost;
+    }
+    // Self engine: nothing runs inside Docker, so callbacks into the invoke
+    // listeners resolve on the loopback directly.
+    return this.isSelfEngine() ? '127.0.0.1' : 'host.docker.internal';
   }
 
   /**
@@ -461,6 +523,41 @@ export class ConfigManager {
     };
   }
 
+  getEngineKind(): EngineKind {
+    return this.config.engine ?? 'localstack';
+  }
+
+  isSelfEngine(): boolean {
+    return this.getEngineKind() === 'self';
+  }
+
+  getSelfEngineConfig(): ResolvedSelfEngineConfig {
+    const selfEngine = this.config.selfEngine ?? {};
+    const stateDir = this.getStateDir();
+    const rawDataDir = selfEngine.dataDir
+      ?? (stateDir ? path.join(stateDir, 'engine') : path.join(os.homedir(), '.lss', 'engine'));
+    return {
+      port: selfEngine.port ?? 14566,
+      dataDir: path.isAbsolute(rawDataDir) ? rawDataDir : path.resolve(process.cwd(), rawDataDir),
+      account: selfEngine.account ?? '000000000000',
+      idleUnloadMs: selfEngine.idleUnloadMs ?? 300000,
+      memoryBudgetMb: selfEngine.memoryBudgetMb ?? 128,
+      fsync: selfEngine.fsync ?? false,
+      fallbackEndpoint: selfEngine.fallbackEndpoint ?? null,
+      persistence: this.isPersistence(),
+      region: this.getRegion(),
+    };
+  }
+
+  // The AWS endpoint every SDK-based consumer (provisioner, explorers, seeds)
+  // should target for the active engine.
+  getEngineEndpoint(): string {
+    if (this.isSelfEngine()) {
+      return `http://localhost:${this.getSelfEngineConfig().port}`;
+    }
+    return this.getLocalStackEndpoint();
+  }
+
   getConfigPath(): string {
     return this.configPath;
   }
@@ -471,11 +568,21 @@ export class ConfigManager {
   printSummary(): void {
     console.log('\n📋 Configuration Summary:');
     console.log(`  Server Port: ${this.getServerPort()} (http://localhost:${this.getServerPort()})`);
-    console.log(`  LocalStack Mode: ${this.getMode()}`);
-    console.log(`  LocalStack Port: ${this.getLocalStackPort()} (${this.getLocalStackEndpoint()})`);
-    if (!this.isExternal()) {
-      console.log(`  LocalStack Image: ${this.getLocalStackImage()} (${this.getLocalStackEdition()})`);
-      console.log(`  LocalStack Auth Token: ${this.getLocalStackAuthToken() ? 'set' : 'not set'}`);
+    console.log(`  Engine: ${this.getEngineKind()}`);
+    if (this.isSelfEngine()) {
+      const selfEngine = this.getSelfEngineConfig();
+      console.log(`  Self Engine Port: ${selfEngine.port} (http://localhost:${selfEngine.port})`);
+      console.log(`  Self Engine Data Dir: ${selfEngine.dataDir}`);
+      if (selfEngine.fallbackEndpoint) {
+        console.log(`  Self Engine Fallback: ${selfEngine.fallbackEndpoint}`);
+      }
+    } else {
+      console.log(`  LocalStack Mode: ${this.getMode()}`);
+      console.log(`  LocalStack Port: ${this.getLocalStackPort()} (${this.getLocalStackEndpoint()})`);
+      if (!this.isExternal()) {
+        console.log(`  LocalStack Image: ${this.getLocalStackImage()} (${this.getLocalStackEdition()})`);
+        console.log(`  LocalStack Auth Token: ${this.getLocalStackAuthToken() ? 'set' : 'not set'}`);
+      }
     }
     console.log(`  DynamoDB Proxy Enabled: ${this.isEnableDynamoProxy()}`);
     if (this.isEnableDynamoProxy()) {
