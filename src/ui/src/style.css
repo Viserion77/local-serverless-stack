@@ -23,6 +23,31 @@ body {
   width: 100%;
 }
 
+/* Two-row sticky header: brand bar (row 1) + navigation tabs (row 2). */
+.app-header {
+  position: sticky;
+  top: 0;
+  z-index: var(--tree-z-popover);
+}
+
+/* Row 2: full-width nav bar; matches the TNavbar background, and the tab
+   list's own bottom border acts as the header's bottom border. */
+.app-subnav {
+  width: 100%;
+  background: color-mix(in srgb, var(--tree-color-bg-surface) 92%, var(--tree-color-bg-subtle));
+  padding-inline: clamp(var(--tree-space-4), 3vw, var(--tree-space-6));
+  /* overflow-x: auto also clips on the block axis — leave room so the 4px
+     focus ring on the tabs isn't cut off at the container edges. */
+  padding-block: 4px;
+  overflow-x: auto;
+}
+
+/* Keep the tab-list border spanning the full scroll width on overflow. */
+.app-subnav .t-tabs {
+  width: max-content;
+  min-width: 100%;
+}
+
 .app-main {
   flex: 1;
   width: 100%;

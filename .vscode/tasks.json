@@ -204,6 +204,64 @@
       "options": { "cwd": "${workspaceFolder}/examples/localstack-free" },
       "icon": { "id": "debug-stop", "color": "terminal.ansiRed" },
       "problemMatcher": []
+    },
+
+    // ------------------------------------------------------------------
+    // Example: localstack-ultimate (LocalStack Pro via Docker + token)
+    // ------------------------------------------------------------------
+    {
+      "label": "example localstack-ultimate: setup",
+      "detail": "npm install no exemplo (SDKs + serverless-offline + plugin LSS)",
+      "type": "shell",
+      "command": "npm run setup",
+      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
+      "icon": { "id": "desktop-download", "color": "terminal.ansiBlue" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example localstack-ultimate: start (Docker + token)",
+      "detail": "Sobe o LSS com LocalStack Pro gerenciado — exige Docker e LOCALSTACK_AUTH_TOKEN obrigatório no .env",
+      "type": "shell",
+      "command": "npm run lss:start",
+      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
+      "icon": { "id": "server-environment", "color": "terminal.ansiGreen" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example localstack-ultimate: offline (HTTP :3002)",
+      "detail": "sls package + RedrivePolicy (wire-dlq) + serverless-offline — fica em primeiro plano, não encadeie em dependsOn",
+      "type": "shell",
+      "command": "npm run offline",
+      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
+      "isBackground": true,
+      "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example localstack-ultimate: seed",
+      "detail": "Recarrega os seeds (Users/Orders/Sessions) no LocalStack Pro — LSS precisa estar de pé",
+      "type": "shell",
+      "command": "npm run seed",
+      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
+      "icon": { "id": "database", "color": "terminal.ansiYellow" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example localstack-ultimate: drive demo",
+      "detail": "POST /users e /orders (incl. ordem envenenada p/ DLQ) e lê /users e /audit em :3002",
+      "type": "shell",
+      "command": "curl -s -X POST http://localhost:3002/dev/users -H 'content-type: application/json' -d '{\"name\":\"Task Runner\",\"email\":\"task@example.com\"}' && echo && echo '--- USERS:' && curl -s http://localhost:3002/dev/users && echo && echo '--- ORDER (SQS -> DynamoDB -> EventBridge):' && curl -s -X POST http://localhost:3002/dev/orders -H 'content-type: application/json' -d '{\"userId\":\"u-alice\",\"items\":[{\"sku\":\"BOOK-02\",\"price\":42,\"qty\":1}]}' && echo && echo '--- POISON ORDER (total 0 -> DLQ apos 3 tentativas, ~30s):' && curl -s -X POST http://localhost:3002/dev/orders -H 'content-type: application/json' -d '{\"userId\":\"u-alice\",\"items\":[{\"sku\":\"BROKEN\",\"price\":0,\"qty\":1}]}' && echo && sleep 5 && echo '--- AUDIT:' && curl -s http://localhost:3002/dev/audit && echo",
+      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
+      "icon": { "id": "run-all", "color": "terminal.ansiCyan" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example localstack-ultimate: stop",
+      "type": "shell",
+      "command": "npm run lss:stop",
+      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
+      "icon": { "id": "debug-stop", "color": "terminal.ansiRed" },
+      "problemMatcher": []
     }
   ]
 }

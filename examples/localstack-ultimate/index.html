@@ -142,6 +142,43 @@ const CONFIG = {
       ],
     },
     {
+      title: 'Order → EventBridge bus → audit trail',
+      desc: 'POSTs an order; after storing it, processOrderQueue does PutEvents (order.processed) onto the ultimate-order-events bus, the auditEvents rule (pattern filter on source) writes it into the AuditTrail table — read back via GET /audit.',
+      steps: [
+        {
+          name: 'enqueue order', method: 'POST', url: 'http://localhost:3002/dev/orders',
+          body: { userId: 'u-bob', items: [{ sku: 'MUG-RED', price: 12, qty: 2 }] },
+          extract: { auditOrderId: 'order.orderId' },
+          pause: 4000,
+        },
+        { name: 'list audit trail (look for order.processed with the new orderId)', method: 'GET', url: 'http://localhost:3002/dev/audit' },
+      ],
+    },
+    {
+      title: 'Poison order → DLQ redrive',
+      desc: 'POSTs an order whose computed total is 0 — processOrderQueue throws and reports it as a batch item failure, SQS re-delivers it every 10s (short visibility timeout) and, after the 3rd receive, redrives it to localstack-ultimate-OrderProcessingDLQ. The flow waits ~35s, then peeks the DLQ via the LSS API; it is also visible in the dashboard\'s Queues tab.',
+      steps: [
+        {
+          name: 'enqueue poison order (total <= 0)', method: 'POST', url: 'http://localhost:3002/dev/orders',
+          body: { userId: 'u-alice', items: [{ sku: 'BROKEN', price: 0, qty: 1 }] },
+          pause: 35000,
+        },
+        { name: 'peek DLQ (message count > 0 after redrive)', method: 'GET', url: 'http://localhost:3111/api/queues/localstack-ultimate-OrderProcessingDLQ' },
+      ],
+    },
+    {
+      title: 'Schedule → purge expired sessions',
+      desc: 'Nothing to trigger here: purgeSessions runs on rate(2 minutes), deletes Sessions rows whose expiresAt is in the past (the seed ships one already-expired session) and publishes sessions.purged onto the bus. Run this a couple of minutes after seeding: the expired session is gone and the audit trail shows the schedule runs.',
+      steps: [
+        {
+          name: 'scan Sessions (s-expired-demo disappears after the first run)', method: 'POST',
+          url: 'http://localhost:3111/api/dynamo/tables/localstack-ultimate-Sessions/scan',
+          body: {},
+        },
+        { name: 'list audit trail (look for sessions.purged entries)', method: 'GET', url: 'http://localhost:3002/dev/audit' },
+      ],
+    },
+    {
       title: 'Upload → S3 notification → list uploads',
       desc: 'POSTs a file under incoming/ (fires the S3 → onUpload Lambda), waits, lists the bucket, then scans Orders for the record the onUpload Lambda wrote.',
       steps: [

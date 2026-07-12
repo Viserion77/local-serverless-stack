@@ -39,6 +39,12 @@ export interface RegisterResult {
 const cfnParser = new CloudFormationParser();
 const stateParser = new ServerlessStateParser();
 
+// True when `serviceRoot` is `projectRoot` itself or lives underneath it.
+export function isInsideProject(serviceRoot: string, projectRoot: string): boolean {
+  const rel = path.relative(path.resolve(projectRoot), path.resolve(serviceRoot));
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
 export class ServiceRegistrar {
   private static instance: ServiceRegistrar;
   private cache = new CacheManager();
@@ -203,16 +209,26 @@ export class ServiceRegistrar {
 
   async rehydrateAll(): Promise<void> {
     const cache = await this.ensureCache();
+    const projectRoot = ConfigManager.getInstance().getProjectRoot();
     const services = await cache.listServices();
+    let reactivated = 0;
     for (const metadata of services) {
+      // The cache dir is project-scoped, so entries here belong to this
+      // orchestrator even when their sources live outside the config file's
+      // directory (config under infra/, services elsewhere) — register()
+      // accepts those layouts, so rehydration must too. Log it for forensics.
+      if (metadata.root && !isInsideProject(metadata.root, projectRoot)) {
+        console.log(`ℹ️  Cached service "${metadata.name}" has its root outside the project root (${metadata.root}) — reactivating anyway`);
+      }
       try {
         await this.activate(metadata);
+        reactivated++;
       } catch (err) {
         console.error(`❌ Failed to activate cached service "${metadata.name}":`, err);
       }
     }
-    if (services.length) {
-      console.log(`🔁 Reactivated ${services.length} cached service(s)`);
+    if (reactivated) {
+      console.log(`🔁 Reactivated ${reactivated} cached service(s)`);
     }
   }
 

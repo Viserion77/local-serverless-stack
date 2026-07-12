@@ -3,7 +3,7 @@ import { DynamoDBDocumentClient } from '@aws-sdk/lib-dynamodb';
 import { EventBridgeClient } from '@aws-sdk/client-eventbridge';
 
 const baseConfig = {
-  region: process.env.AWS_REGION || 'us-east-1',
+  region: process.env.AWS_REGION || 'sa-east-1',
   endpoint: process.env.AWS_ENDPOINT || 'http://localhost:4572',
   credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
 };

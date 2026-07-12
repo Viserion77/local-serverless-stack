@@ -2,6 +2,16 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 
+// Symlink-stable spelling of a directory (e.g. macOS /tmp -> /private/tmp),
+// so the project identity matches the plugin's symlink-resolved process.cwd().
+function realpathOrSelf(dir: string): string {
+  try {
+    return fs.realpathSync(dir);
+  } catch {
+    return dir;
+  }
+}
+
 export type LocalStackMode = 'managed' | 'external';
 export type LocalStackEdition = 'community' | 'pro';
 
@@ -606,6 +616,25 @@ export class ConfigManager {
 
   getConfigPath(): string {
     return this.configPath;
+  }
+
+  /**
+   * Absolute root of the project this orchestrator serves. Anchored on the
+   * loaded config file's directory (LSS_CONFIG_PATH / cwd search). Falls back
+   * to process.cwd() when no config was loaded, or when the config came from
+   * the home directory — that one is a user-global file shared across projects
+   * and must not collapse every project into a single identity.
+   */
+  getProjectRoot(): string {
+    if (this.configPath) {
+      const dir = path.resolve(path.dirname(this.configPath));
+      // Same home the loadConfig() candidates were built from.
+      const home = path.resolve(process.env.HOME || os.homedir());
+      if (dir !== home) {
+        return realpathOrSelf(dir);
+      }
+    }
+    return realpathOrSelf(path.resolve(process.cwd()));
   }
 
   /**

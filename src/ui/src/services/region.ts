@@ -1,4 +1,4 @@
-import { ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 
 const STORAGE_KEY = 'lss-region';
 const DEFAULT_REGION = 'us-east-1';
@@ -11,11 +11,26 @@ function readStored(): string {
   }
 }
 
+// Stored value is only a first-paint cache; the server-configured region
+// takes over once /api/config resolves on app mount (applyConfiguredRegion).
 export const currentRegion = ref<string>(readStored());
 
 watch(currentRegion, (v) => {
   try { localStorage.setItem(STORAGE_KEY, v); } catch { /* ignore */ }
 });
+
+// Region from lss.config.json, kept so it stays selectable in the dropdown
+// even when it is not part of AWS_REGIONS and no longer selected.
+const configuredRegion = ref<string>('');
+
+// Called from App.vue with the region from lss.config.json — on every full
+// load the configured region wins over whatever a previous session stored,
+// unless the user already picked a region while /api/config was in flight.
+export function applyConfiguredRegion(region: string, userPicked = false): void {
+  if (!region) return;
+  configuredRegion.value = region;
+  if (!userPicked) currentRegion.value = region;
+}
 
 export const AWS_REGIONS: { value: string; label: string }[] = [
   { value: 'us-east-1', label: 'us-east-1 — N. Virginia' },
@@ -35,3 +50,14 @@ export const AWS_REGIONS: { value: string; label: string }[] = [
   { value: 'sa-east-1', label: 'sa-east-1 — São Paulo' },
   { value: 'ca-central-1', label: 'ca-central-1 — Canada' },
 ];
+
+// Options for the region select: regions outside the list above (a custom
+// region in lss.config.json, or a stored selection) are appended so they
+// render — and stay selectable after the user switches away from them.
+export const regionOptions = computed(() => {
+  const known = new Set(AWS_REGIONS.map((o) => o.value));
+  const extras = [configuredRegion.value, currentRegion.value]
+    .filter((r, i, arr) => r && !known.has(r) && arr.indexOf(r) === i)
+    .map((r) => ({ value: r, label: r }));
+  return extras.length ? [...AWS_REGIONS, ...extras] : AWS_REGIONS;
+});

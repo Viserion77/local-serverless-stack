@@ -5,10 +5,12 @@
   "description": "LocalStack Ultimate (paid-tier) example for Local Serverless Stack — runs against localstack/localstack-pro with LOCALSTACK_AUTH_TOKEN and keeps the serverless-offline integration path.",
   "scripts": {
     "setup": "npm install",
-    "offline": "dotenv -- serverless package && dotenv -- serverless offline start",
+    "offline": "dotenv -- serverless package && npm run dlq:wire && dotenv -- serverless offline start",
     "package": "dotenv -- serverless package",
     "deploy": "dotenv -- serverless deploy",
     "console": "npx -y http-server . -p 8621 -c-1",
+    "dlq:wire": "node scripts/wire-dlq.js",
+    "seed": "npm run lss:seed",
     "lss:start": "dotenv -- node ../../bin/cli.js start",
     "lss:stop": "dotenv -- node ../../bin/cli.js stop",
     "lss:status": "dotenv -- node ../../bin/cli.js status",
@@ -18,6 +20,7 @@
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "3.974.0",
+    "@aws-sdk/client-eventbridge": "^3.974.0",
     "@aws-sdk/client-s3": "^3.974.0",
     "@aws-sdk/client-sns": "3.974.0",
     "@aws-sdk/client-sqs": "3.974.0",

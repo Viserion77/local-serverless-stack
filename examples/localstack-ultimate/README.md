@@ -15,15 +15,31 @@ workflow you may already have.
 
 - **LocalStack Pro image** — `localstackEdition: "pro"` in `lss.config.json`; the
   container refuses to start without a valid `LOCALSTACK_AUTH_TOKEN` (exit code 55).
-- **serverless-offline compatibility** — HTTP routes served by the offline server on
-  `3002`; registration with LSS fires on `sls package` and on offline startup.
+- **serverless-offline compatibility** — REST (v1) routes with `cors: true` served by
+  the offline server on `3002`; registration with LSS fires on `sls package` and on
+  offline startup.
+- **Region `eu-west-1`** — the whole example (LSS config, provider, SDK clients) runs
+  outside the default region, proving nothing is hardwired to it.
 - **DynamoDB** — PK-only tables, composite key + GSI (`ByStatus`), a stream feeding
-  the `onOrderStream` Lambda, seeds auto-loaded from `seeds/`.
-- **SQS** — `enqueueOrder` sends to the queue, `processOrderQueue` consumes in batches
-  and persists orders with a computed `status`/`total`.
+  the `onOrderStream` Lambda, seeds auto-loaded from `seeds/`. The Users table has
+  deliberately **no TTL** (surfacing a UI warning); the Sessions table carries an
+  `expiresAt` attribute so you can enable **TTL from the UI** (Settings tab).
+- **SQS + DLQ redrive** — `enqueueOrder` sends to the queue, `processOrderQueue`
+  consumes in batches (`ReportBatchItemFailures`) and persists orders with a computed
+  `status`/`total`; poison orders (computed total ≤ 0) are re-received every 10s
+  (short `VisibilityTimeout`) and redriven to `-OrderProcessingDLQ` after 3 receives —
+  watch them pile up in the dashboard's Queues tab.
 - **SNS** — stream handler publishes `order.*` events to a topic.
+- **EventBridge custom bus + pattern rule + audit trail** — `processOrderQueue`
+  (`order.processed`) and `purgeSessions` (`sessions.purged`) `PutEvents` onto the
+  `ultimate-order-events` bus; the `auditEvents` rule (pattern filter on `source`)
+  writes each matched event into the AuditTrail table, readable via `GET /audit`.
+- **Schedule** — `purgeSessions` (`rate(2 minutes)`), provisioned as an EventBridge
+  rule fired by LocalStack, purges expired sessions and leaves an audit entry.
 - **S3 + Lambda notification** — uploads under `incoming/` trigger `onUpload`, which
   reads the object back and indexes it in the Orders table.
+- **Seeds & persistence** — tables pre-filled from `seeds/`; `persistence: true`
+  keeps data across `lss:stop`/`lss:start` cycles.
 - **Dashboard branding** — per-theme brand tokens with a light default (see below).
 
 ## Prerequisites
@@ -71,7 +87,10 @@ npm run lss:start
 
 # 2. Package + start serverless-offline. The plugin registers this service with
 #    LSS (3111), which provisions every CloudFormation resource into the Pro
-#    LocalStack on 4571 and wires the S3 -> onUpload notification.
+#    LocalStack on 4571 and wires the S3 -> onUpload notification, the
+#    EventBridge bus/rules and the SQS event source mapping. In between, the
+#    script applies the queue's RedrivePolicy via scripts/wire-dlq.js (LSS's
+#    CloudFormation parser doesn't carry that attribute yet).
 npm run offline
 ```
 
@@ -89,10 +108,23 @@ curl -X POST http://localhost:3002/dev/users \
   -H 'Content-Type: application/json' \
   -d '{"name":"Dora","email":"dora@example.com"}'
 
-# Enqueue an order
+# Enqueue an order — the SQS consumer stores it and publishes order.processed
+# onto the ultimate-order-events bus
 curl -X POST http://localhost:3002/dev/orders \
   -H 'Content-Type: application/json' \
   -d '{"userId":"u-alice","items":[{"sku":"BOOK-02","price":42,"qty":1}]}'
+
+# The auditEvents rule wrote it into the AuditTrail table (sessions.purged
+# entries from the rate(2 minutes) schedule show up here too)
+curl http://localhost:3002/dev/audit
+
+# Poison order: computed total is 0, so processOrderQueue throws and reports
+# the message as a batch item failure — after 3 receives (~30s at a 10s
+# visibility timeout) SQS redrives it to localstack-ultimate-OrderProcessingDLQ
+# (dashboard -> Queues tab).
+curl -X POST http://localhost:3002/dev/orders \
+  -H 'Content-Type: application/json' \
+  -d '{"userId":"u-alice","items":[{"sku":"BROKEN","price":0,"qty":1}]}'
 
 # Upload to S3 -> triggers the onUpload Lambda via bucket notification
 curl -X POST http://localhost:3002/dev/uploads \
@@ -106,7 +138,8 @@ curl http://localhost:3002/dev/uploads
 
 `index.html` at the example root is a small browser console that pings every port and
 runs the flows above end to end (create user → list, enqueue → verify the SQS consumer
-wrote the order, upload → verify the S3 notification fired). Open it directly from the
+wrote the order, order → audit trail via EventBridge, poison order → DLQ, schedule
+observation, upload → verify the S3 notification fired). Open it directly from the
 filesystem (`file://…/index.html`) or serve it:
 
 ```bash
@@ -143,14 +176,18 @@ removed automatically on stop).
 ## What's different from localstack-free
 
 - `lss.config.json` -> `"localstackEdition": "pro"`, `serverPort: 3111`, `localstackPort: 4571`.
+- Region is **`eu-west-1`** — each example runs in its own region (localstack-free:
+  `sa-east-1`, self-hosted: `us-west-2`), so they also prove multi-region coherence
+  side by side.
 - Service name is `localstack-ultimate`, so resources live under a separate namespace
   (`localstack-ultimate-Users`, `localstack-ultimate-uploads`, etc.).
 - All ports shifted to dodge the community example, so both can run side by side.
 - `LOCALSTACK_AUTH_TOKEN` is **required**; without it the Pro image exits with code 55.
 - The HTTP API is served by **serverless-offline** — the other examples route HTTP
   through the LSS gateway instead.
-- Shape: this is a single service (one `serverless.yml`), while `localstack-free` is a
-  four-service stack exercising authorizers and a shared EventBridge bus.
+- Shape: this is a single service (one `serverless.yml`) owning its own EventBridge
+  bus, while `localstack-free` is a four-service stack exercising authorizers and a
+  **shared** bus across services.
 
 Run both side by side when you want to confirm a behavior is or isn't gated behind a
 paid plan.
@@ -158,11 +195,14 @@ paid plan.
 ## File map
 
 ```
-serverless.yml                 ← service name + paid-tier URLs, cors: true per route
-lss.config.json                ← edition: pro, ports 3111/4571, branding block
+serverless.yml                 ← REST routes + SQS/DLQ + streams + EventBridge bus,
+                                  pattern rule, rate(2 minutes) schedule (eu-west-1)
+lss.config.json                ← edition: pro, region eu-west-1, services incl.
+                                  "events", ports 3111/4571, branding block
 .env / .env.example            ← LOCALSTACK_AUTH_TOKEN (gitignored)
 index.html                     ← validation console (file:// or npm run console)
 assets/logo.svg                ← dashboard logo/favicon
+scripts/wire-dlq.js            ← applies the RedrivePolicy to the live queue
 src/handlers/                  ← HTTP + event handlers, shared respond.js CORS helper
-seeds/                         ← localstack-ultimate-Users / -Orders seed data
+seeds/                         ← localstack-ultimate-Users / -Orders / -Sessions seeds
 ```

@@ -1,6 +1,8 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
+import crypto from 'crypto';
+import { ConfigManager } from './config-manager.js';
 import type { RegisteredFunction, HttpRoute, AuthorizerConfig } from './serverless-state-parser.js';
 
 export interface ServiceMetadata {
@@ -20,11 +22,33 @@ export interface ServiceMetadata {
   authorizers?: AuthorizerConfig[];
 }
 
+// Stable, filesystem-safe cache segment for one project root: a readable slug
+// from the directory basename plus a short hash of the absolute path, so two
+// projects whose directories share a basename still get distinct namespaces.
+export function projectCacheSegment(projectRoot: string): string {
+  const absoluteRoot = path.resolve(projectRoot);
+  const slug = path.basename(absoluteRoot)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40) || 'project';
+  const hash = crypto.createHash('sha256').update(absoluteRoot).digest('hex').slice(0, 8);
+  return `${slug}-${hash}`;
+}
+
 export class CacheManager {
   private cacheDir: string;
 
-  constructor() {
-    this.cacheDir = path.join(os.homedir(), '.lss', 'orchestrator', 'cache');
+  // The registered-services cache is scoped per project (the directory this
+  // orchestrator serves). A single global namespace let same-named services
+  // from different projects overwrite each other and rehydrate into the wrong
+  // orchestrator. Old flat-layout entries (~/.lss/orchestrator/cache/<svc>)
+  // stay on disk but are invisible here.
+  constructor(projectRoot: string = ConfigManager.getInstance().getProjectRoot()) {
+    this.cacheDir = path.join(
+      os.homedir(), '.lss', 'orchestrator', 'cache',
+      'projects', projectCacheSegment(projectRoot),
+    );
   }
 
   async init(): Promise<void> {

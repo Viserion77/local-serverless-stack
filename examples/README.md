@@ -1,14 +1,14 @@
 # LSS Examples
 
 Three complete runnable projects — one per engine flavor. Each is a self-contained
-monorepo slice: its own `lss.config.json`, npm scripts, DynamoDB seeds, dashboard
-branding and a browser validation console.
+monorepo slice: its own `lss.config.json`, AWS region, npm scripts, DynamoDB seeds,
+dashboard branding and a browser validation console.
 
-| Example | Engine | Docker? | Auth token? | Dashboard / engine ports | Services (API / invoke) | What it demonstrates |
-| --- | --- | --- | --- | --- | --- | --- |
-| [localstack-free](localstack-free/) | LocalStack community 4.0 (managed) | Yes | No | 3120 / LocalStack 4572 | users-service 3610/13610 · auth-service 3611/13611 · orders-service 3612/13612 · events-stack (portless) | httpApi v2 + REST v1, Lambda authorizers, shared EventBridge bus (`domain-events`), SQS consumer, schedule, DynamoDB stream → SNS, S3 uploads bucket + notification, seeds |
-| [localstack-ultimate](localstack-ultimate/) | LocalStack Pro image (Ultimate plan) | Yes | Yes (`LOCALSTACK_AUTH_TOKEN`) | 3111 / LocalStack 4571 | one service on serverless-offline: HTTP 3002 / invoke 3003 | The `--pro` path: Pro image with an auth token, serverless-offline kept in charge of the ports (resources named `localstack-ultimate-*`) |
-| [self-hosted](self-hosted/) | LSS self engine (in-process) | No | No | 3140 / engine 14566 | orders 3631 · billing 3632 · notifications 3633 · catalog 3634 (invoke 13631–13634) | The no-Docker engine end to end: DynamoDB, SQS, S3, EventBridge pipeline plus an OpenSearch Serverless catalog (full-text search, filters, aggregations) |
+| Example | Engine | Region | Docker? | Auth token? | Dashboard / engine ports | Services (API / invoke) | What it demonstrates |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| [localstack-free](localstack-free/) | LocalStack community 4.0 (managed) | `sa-east-1` | Yes | No | 3120 / LocalStack 4572 | users-service 3610/13610 · auth-service 3611/13611 · orders-service 3612/13612 · events-stack (portless) | httpApi v2 + REST v1, Lambda authorizers, shared EventBridge bus (`domain-events`), SQS consumer, schedule, DynamoDB stream → SNS, S3 uploads bucket + notification, seeds |
+| [localstack-ultimate](localstack-ultimate/) | LocalStack Pro image (Ultimate plan) | `eu-west-1` | Yes | Yes (`LOCALSTACK_AUTH_TOKEN`) | 3111 / LocalStack 4571 | one service on serverless-offline: HTTP 3002 / invoke 3003 | The `--pro` path: Pro image + serverless-offline in charge of the ports, exercising the full resource menu — EventBridge custom bus + pattern rule with a queryable audit trail (`GET /audit`), `rate(2 minutes)` schedule, SQS DLQ redrive (`ReportBatchItemFailures`), DynamoDB GSI + streams → SNS, S3 notifications, TTL-from-the-UI story (resources named `localstack-ultimate-*`) |
+| [self-hosted](self-hosted/) | LSS self engine (in-process) | `us-west-2` | No | No | 3140 / engine 14566 | orders 3631 · billing 3632 · notifications 3633 · catalog 3634 (invoke 13631–13634) | The no-Docker engine end to end: DynamoDB, SQS, S3, EventBridge pipeline plus an OpenSearch Serverless catalog (full-text search, filters, aggregations) |
 
 ## Shared conventions
 

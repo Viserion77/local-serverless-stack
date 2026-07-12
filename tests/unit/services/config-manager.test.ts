@@ -66,6 +66,9 @@ beforeEach(() => {
   // Default: no config file exists anywhere.
   fs.existsSync.mockReturnValue(false);
   fs.readFileSync.mockReturnValue('{}');
+  // realpath of a path that "doesn't exist" would throw; identity mirrors the
+  // realpathOrSelf fallback and keeps path expectations literal.
+  fs.realpathSync.mockImplementation(((p: string) => p) as typeof fs.realpathSync);
   jest.spyOn(console, 'log').mockImplementation(() => undefined);
   jest.spyOn(console, 'warn').mockImplementation(() => undefined);
 });
@@ -504,6 +507,50 @@ describe('getters: branch coverage on config-provided values', () => {
     fs.existsSync.mockImplementation((p) => p === cwdFile);
     fs.readFileSync.mockReturnValue(JSON.stringify({ stateDir: '/abs/state' }));
     expect(freshConfigManager().getStateDir()).toBe('/abs/state');
+  });
+});
+
+describe('getProjectRoot', () => {
+  it('returns the loaded config file directory (project-local config)', () => {
+    process.env.LSS_CONFIG_PATH = '/custom/proj/lss.json';
+    fs.existsSync.mockImplementation((p) => p === '/custom/proj/lss.json');
+    expect(freshConfigManager().getProjectRoot()).toBe(path.resolve('/custom/proj'));
+  });
+
+  it('falls back to cwd when the config came from the home directory (user-global file)', () => {
+    const homeFile = path.join('/home/tester', 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === homeFile);
+    const cm = freshConfigManager();
+    expect(cm.getConfigPath()).toBe(homeFile);
+    expect(cm.getProjectRoot()).toBe(path.resolve(process.cwd()));
+  });
+
+  it('falls back to cwd when no config file was loaded', () => {
+    expect(freshConfigManager().getProjectRoot()).toBe(path.resolve(process.cwd()));
+  });
+
+  it('uses os.homedir() for the home comparison when HOME is unset', () => {
+    delete process.env.HOME;
+    process.env.LSS_CONFIG_PATH = '/custom/proj/lss.json';
+    fs.existsSync.mockImplementation((p) => p === '/custom/proj/lss.json');
+    expect(freshConfigManager().getProjectRoot()).toBe(path.resolve('/custom/proj'));
+  });
+
+  it('resolves symlinked spellings via realpath (macOS /tmp -> /private/tmp)', () => {
+    process.env.LSS_CONFIG_PATH = '/tmp/demo/lss.json';
+    fs.existsSync.mockImplementation((p) => p === '/tmp/demo/lss.json');
+    fs.realpathSync.mockImplementation(((p: string) =>
+      p === '/tmp/demo' ? '/private/tmp/demo' : p) as typeof fs.realpathSync);
+    expect(freshConfigManager().getProjectRoot()).toBe('/private/tmp/demo');
+  });
+
+  it('keeps the lexical path when realpath fails (directory gone)', () => {
+    process.env.LSS_CONFIG_PATH = '/custom/proj/lss.json';
+    fs.existsSync.mockImplementation((p) => p === '/custom/proj/lss.json');
+    fs.realpathSync.mockImplementation((() => {
+      throw new Error('ENOENT');
+    }) as unknown as typeof fs.realpathSync);
+    expect(freshConfigManager().getProjectRoot()).toBe(path.resolve('/custom/proj'));
   });
 });
 

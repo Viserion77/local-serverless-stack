@@ -130,7 +130,7 @@ curl http://localhost:3612/orders -H 'code: code-admin'
 ```bash
 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test aws lambda invoke \
   --endpoint-url http://localhost:13612 \
-  --region us-east-1 \
+  --region sa-east-1 \
   --function-name orders-service-dev-cleanupExpiredOrders \
   --cli-binary-format raw-in-base64-out \
   --payload '{}' /dev/stdout

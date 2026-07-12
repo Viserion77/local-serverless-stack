@@ -32,6 +32,9 @@ interface ServiceListeners {
   apiStatus: ListenerStatus;
   invokeServer?: http.Server;
   invokeStatus: ListenerStatus;
+  // Pending EADDRINUSE rebind timers — cancelled on stop/remove so a retry
+  // never outlives its service.
+  rebindTimers: Set<NodeJS.Timeout>;
 }
 
 const INVOKE_PATH = /^\/2015-03-31\/functions\/([^/]+)\/invocations\/?$/;
@@ -39,6 +42,9 @@ const INVOKE_PATH = /^\/2015-03-31\/functions\/([^/]+)\/invocations\/?$/;
 export class GatewayManager {
   private static instance: GatewayManager;
   private listeners = new Map<string, ServiceListeners>();
+  // Delay between rebind attempts after an EADDRINUSE. Overridable so tests
+  // don't wait real seconds between retries.
+  rebindIntervalMs = 5000;
 
   static getInstance(): GatewayManager {
     if (!GatewayManager.instance) {
@@ -55,6 +61,7 @@ export class GatewayManager {
       entry,
       apiStatus: 'disabled',
       invokeStatus: 'disabled',
+      rebindTimers: new Set(),
     };
     this.listeners.set(entry.name, state);
     if (!enabled) return;
@@ -66,6 +73,7 @@ export class GatewayManager {
         (req, res) => void this.handleApiRequest(entry.name, req, res),
         status => { state.apiStatus = status; },
         `API gateway for "${entry.name}"`,
+        state.rebindTimers,
       );
     }
 
@@ -76,6 +84,7 @@ export class GatewayManager {
         (req, res) => void this.handleInvokeRequest(entry.name, req, res),
         status => { state.invokeStatus = status; },
         `Lambda invoke endpoint for "${entry.name}"`,
+        state.rebindTimers,
       );
     }
   }
@@ -83,6 +92,10 @@ export class GatewayManager {
   async stopService(serviceName: string): Promise<void> {
     const state = this.listeners.get(serviceName);
     if (!state) return;
+    // Cancel pending rebind attempts first so a conflicted listener can't
+    // come back to life after its service stops.
+    for (const timer of state.rebindTimers) clearTimeout(timer);
+    state.rebindTimers.clear();
     await Promise.all([
       this.close(state.apiServer),
       this.close(state.invokeServer),
@@ -115,32 +128,62 @@ export class GatewayManager {
     };
   }
 
+  // Bind a listener, resolving on the first outcome (listening or failed). An
+  // EADDRINUSE never fails the registration: the listener reports
+  // 'port-conflict' and rebinding is retried every `rebindIntervalMs` until
+  // the port frees up or the service stops.
   private bind(
     port: number,
     handler: (req: http.IncomingMessage, res: http.ServerResponse) => void,
     setStatus: (status: ListenerStatus) => void,
     label: string,
+    rebindTimers: Set<NodeJS.Timeout>,
   ): Promise<http.Server> {
     return new Promise(resolve => {
       const server = http.createServer(handler);
+      let hadConflict = false;
       server.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
           // Port conflicts are first-class during migration (serverless-offline
           // may still own the port) — flag it, never fail the registration.
           setStatus('port-conflict');
-          console.warn(`⚠️  ${label}: port ${port} already in use — listener disabled (is serverless-offline still running?)`);
+          if (!hadConflict) {
+            hadConflict = true;
+            console.warn(`⚠️  ${label}: port ${port} already in use — retrying every ${this.rebindIntervalMs}ms (is serverless-offline still running?)`);
+          }
+          this.scheduleRebind(server, port, rebindTimers);
         } else {
           setStatus('stopped');
           console.error(`❌ ${label}: ${err.message}`);
         }
         resolve(server);
       });
-      server.listen(port, () => {
+      server.on('listening', () => {
         setStatus('online');
-        console.log(`✅ ${label} listening on http://localhost:${port}`);
+        if (hadConflict) {
+          console.log(`✅ ${label} recovered from port conflict — listening on http://localhost:${port}`);
+        } else {
+          console.log(`✅ ${label} listening on http://localhost:${port}`);
+        }
         resolve(server);
       });
+      server.listen(port);
     });
+  }
+
+  // Queue a single rebind attempt after an EADDRINUSE. unref() keeps retries
+  // from holding the process open; the timer is tracked in the service's set
+  // so stop/remove/shutdown paths can cancel it.
+  private scheduleRebind(server: http.Server, port: number, rebindTimers: Set<NodeJS.Timeout>): void {
+    const timer = setTimeout(() => {
+      rebindTimers.delete(timer);
+      // A failed retry re-enters the server's 'error' handler and reschedules.
+      if (!server.listening) {
+        server.listen(port);
+      }
+    }, this.rebindIntervalMs);
+    timer.unref();
+    rebindTimers.add(timer);
   }
 
   private close(server?: http.Server): Promise<void> {

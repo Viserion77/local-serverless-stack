@@ -1,11 +1,13 @@
 // Unit tests for CacheManager. Uses a real temp directory under os.tmpdir()
 // so every fs/promises path runs for real. Catch branches are exercised with
 // missing files / invalid JSON, and listServices' skip branches with a
-// non-directory entry and a directory lacking metadata.
+// non-directory entry and a directory lacking metadata. Per-project scoping
+// (the fix for cross-project cache contamination) is covered at the end.
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import { CacheManager, ServiceMetadata } from '../../../src/server/services/cache-manager';
+import { CacheManager, ServiceMetadata, projectCacheSegment } from '../../../src/server/services/cache-manager';
+import { ConfigManager } from '../../../src/server/services/config-manager';
 
 let cacheDir: string;
 let manager: CacheManager;
@@ -19,7 +21,7 @@ const baseMeta: Omit<ServiceMetadata, 'name'> = {
 
 beforeEach(async () => {
   cacheDir = await fs.mkdtemp(path.join(os.tmpdir(), 'lss-cache-'));
-  manager = new CacheManager();
+  manager = new CacheManager('/proj/example');
   // Point the manager at the throwaway temp dir instead of ~/.lss/...
   (manager as any).cacheDir = cacheDir;
 });
@@ -176,9 +178,77 @@ describe('deleteService', () => {
   });
 });
 
-describe('constructor default cacheDir', () => {
-  it('defaults the cache dir under the home directory', () => {
+describe('per-project cache scoping', () => {
+  const base = (segment: string) =>
+    path.join(os.homedir(), '.lss', 'orchestrator', 'cache', 'projects', segment);
+
+  it('scopes the cache dir to the given project root', () => {
+    const m = new CacheManager('/proj/example');
+    expect((m as any).cacheDir).toBe(base(projectCacheSegment('/proj/example')));
+  });
+
+  it('defaults the project root to the one the ConfigManager serves', () => {
     const m = new CacheManager();
-    expect((m as any).cacheDir).toBe(path.join(os.homedir(), '.lss', 'orchestrator', 'cache'));
+    const projectRoot = ConfigManager.getInstance().getProjectRoot();
+    expect((m as any).cacheDir).toBe(base(projectCacheSegment(projectRoot)));
+  });
+
+  it('gives two projects with the same basename distinct namespaces', () => {
+    const a = projectCacheSegment('/repos/one/orders');
+    const b = projectCacheSegment('/repos/two/orders');
+    expect(a).not.toBe(b);
+    // Same readable slug, different hash suffix.
+    expect(a.startsWith('orders-')).toBe(true);
+    expect(b.startsWith('orders-')).toBe(true);
+  });
+
+  it('projectCacheSegment is stable, filesystem-safe and falls back for unusable basenames', () => {
+    // Stable for the same root (relative and absolute spellings included).
+    expect(projectCacheSegment('/proj/My App!')).toBe(projectCacheSegment('/proj/My App!'));
+    // Slugified: lowercase, no spaces/punctuation.
+    expect(projectCacheSegment('/proj/My App!')).toMatch(/^my-app-[0-9a-f]{8}$/);
+    // A basename with no usable characters falls back to "project".
+    expect(projectCacheSegment('/')).toMatch(/^project-[0-9a-f]{8}$/);
+  });
+
+  it('keeps same-named services from different projects invisible to each other', async () => {
+    // Two orchestrators, one service name — the historical contamination case.
+    const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), 'lss-projects-'));
+    const managerA = new CacheManager('/repos/localstack-free');
+    const managerB = new CacheManager('/repos/self-hosted');
+    (managerA as any).cacheDir = path.join(tmpBase, 'projects', projectCacheSegment('/repos/localstack-free'));
+    (managerB as any).cacheDir = path.join(tmpBase, 'projects', projectCacheSegment('/repos/self-hosted'));
+    await managerA.init();
+    await managerB.init();
+
+    await managerA.saveTemplate('orders-service', { a: 1 }, { ...baseMeta, root: '/repos/localstack-free/orders' });
+    await managerB.saveTemplate('orders-service', { b: 2 }, { ...baseMeta, root: '/repos/self-hosted/orders', apiPort: 3632 });
+
+    // Neither overwrote the other, and each orchestrator only sees its own.
+    expect(await managerA.getTemplate('orders-service')).toEqual({ a: 1 });
+    expect(await managerB.getTemplate('orders-service')).toEqual({ b: 2 });
+    expect((await managerA.listServices()).map(s => s.root)).toEqual(['/repos/localstack-free/orders']);
+    expect((await managerB.listServices()).map(s => s.root)).toEqual(['/repos/self-hosted/orders']);
+
+    await fs.rm(tmpBase, { recursive: true, force: true });
+  });
+
+  it('does not see old flat-layout entries (pre-scoping cache root)', async () => {
+    const tmpBase = await fs.mkdtemp(path.join(os.tmpdir(), 'lss-legacy-'));
+    // A 0.x flat entry directly under the cache root.
+    await fs.mkdir(path.join(tmpBase, 'orders-service'), { recursive: true });
+    await fs.writeFile(
+      path.join(tmpBase, 'orders-service', 'metadata.json'),
+      JSON.stringify({ name: 'orders-service', ...baseMeta }),
+    );
+
+    const m = new CacheManager('/repos/localstack-free');
+    (m as any).cacheDir = path.join(tmpBase, 'projects', projectCacheSegment('/repos/localstack-free'));
+    await m.init();
+
+    expect(await m.listServices()).toEqual([]);
+    expect(await m.getMetadata('orders-service')).toBeNull();
+
+    await fs.rm(tmpBase, { recursive: true, force: true });
   });
 });

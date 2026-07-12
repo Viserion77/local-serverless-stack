@@ -5,7 +5,7 @@ frameworkVersion: '>=3'
 provider:
   name: aws
   runtime: nodejs20.x
-  region: us-east-1
+  region: sa-east-1
   stage: dev
   environment:
     USERS_TABLE: users-Users

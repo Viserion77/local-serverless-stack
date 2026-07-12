@@ -5,13 +5,15 @@ frameworkVersion: '>=3'
 provider:
   name: aws
   runtime: nodejs20.x
-  region: us-east-1
+  region: eu-west-1
   environment:
     USERS_TABLE: ${self:service}-Users
     SESSIONS_TABLE: ${self:service}-Sessions
     ORDERS_TABLE: ${self:service}-Orders
+    AUDIT_TABLE: ${self:service}-AuditTrail
     ORDER_QUEUE_URL: http://localhost:4571/000000000000/${self:service}-OrderProcessing
-    ORDER_EVENTS_TOPIC_ARN: arn:aws:sns:us-east-1:000000000000:${self:service}-OrderEvents
+    ORDER_EVENTS_TOPIC_ARN: arn:aws:sns:${self:provider.region}:${self:custom.accountId}:${self:service}-OrderEvents
+    ORDER_EVENTS_BUS: ultimate-order-events
     UPLOADS_BUCKET: localstack-ultimate-uploads
     AWS_ENDPOINT: http://localhost:4571
 
@@ -20,6 +22,7 @@ plugins:
   - serverless-offline
 
 custom:
+  accountId: '000000000000'
   orchestrator:
     enabled: true
     orchestratorUrl: http://localhost:3111
@@ -60,6 +63,10 @@ functions:
           method: post
           cors: true
 
+  # SQS consumer. ReportBatchItemFailures makes the redrive demo work: poison
+  # orders (total <= 0 / missing userId) are reported as batch item failures,
+  # SQS keeps re-delivering them and, after maxReceiveCount receives, moves
+  # them to the OrderProcessingDLQ (RedrivePolicy below).
   processOrderQueue:
     handler: src/handlers/processOrderQueue.handler
     events:
@@ -69,6 +76,7 @@ functions:
               - OrderProcessingQueue
               - Arn
           batchSize: 5
+          functionResponseType: ReportBatchItemFailures
 
   onOrderStream:
     handler: src/handlers/onOrderStream.handler
@@ -101,6 +109,41 @@ functions:
   # The bucket notification is wired via NotificationConfiguration below.
   onUpload:
     handler: src/handlers/onUpload.handler
+
+  # eventBridge trigger with pattern filtering against the custom bus declared
+  # in resources (referenced by ARN so Serverless does not create a second
+  # bus). processOrderQueue and purgeSessions publish onto the bus with plain
+  # SDK PutEvents calls; events from any other source are not delivered here.
+  # The handler receives the REAL EventBridge envelope (source, detail-type,
+  # detail) — no Records wrapper.
+  auditEvents:
+    handler: src/handlers/auditEvents.handler
+    events:
+      - eventBridge:
+          eventBus: arn:aws:events:${self:provider.region}:${self:custom.accountId}:event-bus/ultimate-order-events
+          pattern:
+            source:
+              - ultimate.orders
+              - ultimate.scheduler
+
+  # GET /audit — lists the AuditTrail entries written by auditEvents so the
+  # bus → rule → Lambda flow is observable over plain HTTP.
+  getAudit:
+    handler: src/handlers/getAudit.handler
+    events:
+      - http:
+          path: /audit
+          method: get
+          cors: true
+
+  # Scheduled function — compiled to an EventBridge rule on the default bus;
+  # LocalStack fires it every 2 minutes through the LSS proxy → Invoke API.
+  # Purges Sessions rows whose expiresAt (epoch seconds) is in the past and
+  # publishes a sessions.purged event onto the custom bus (→ audit trail).
+  purgeSessions:
+    handler: src/handlers/purgeSessions.handler
+    events:
+      - schedule: rate(2 minutes)
 
 resources:
   Resources:
@@ -160,17 +203,58 @@ resources:
         StreamSpecification:
           StreamViewType: NEW_AND_OLD_IMAGES
 
+    # AuditTrail — filled by the auditEvents eventBridge trigger; read back
+    # over GET /audit.
+    AuditTrailTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-AuditTrail
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: auditId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: auditId
+            KeyType: HASH
+
+    # VisibilityTimeout is deliberately short (10s) so the DLQ demo resolves in
+    # ~30s instead of minutes: a poison message is re-received every 10s and
+    # redriven to the DLQ after the 3rd receive. NOTE: LSS's CloudFormation
+    # parser does not carry RedrivePolicy yet, so `npm run offline` applies it
+    # to the live queue via scripts/wire-dlq.js right after registration.
     OrderProcessingQueue:
       Type: AWS::SQS::Queue
       Properties:
         QueueName: ${self:service}-OrderProcessing
-        VisibilityTimeout: 60
+        VisibilityTimeout: 10
+        MessageRetentionPeriod: 345600
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt:
+              - OrderProcessingDLQ
+              - Arn
+          maxReceiveCount: 3
+
+    # Dead-letter queue — poison orders land here; watch them accumulate in
+    # the dashboard's Queues tab.
+    OrderProcessingDLQ:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-OrderProcessingDLQ
         MessageRetentionPeriod: 345600
 
     OrderEventsTopic:
       Type: AWS::SNS::Topic
       Properties:
         TopicName: ${self:service}-OrderEvents
+
+    # Custom EventBridge bus — processOrderQueue (order.processed) and
+    # purgeSessions (sessions.purged) publish here; the auditEvents rule
+    # (pattern-filtered) consumes.
+    OrderEventsBus:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: ultimate-order-events
 
     # S3 bucket with a notification that fires the onUpload Lambda whenever a
     # new object is created under the "incoming/" prefix.

@@ -4,7 +4,7 @@
   "selfEngine": {
     "port": 14566
   },
-  "region": "us-east-1",
+  "region": "us-west-2",
   "persistence": true,
   "debug": false,
   "stateDir": ".lss",
