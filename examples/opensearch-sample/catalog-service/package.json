@@ -8,7 +8,7 @@
     "register": "serverless package"
   },
   "devDependencies": {
-    "serverless": "3.40.0",
+    "serverless": "4.39.0",
     "serverless-lss": "file:../../../packages/serverless-plugin"
   }
 }
