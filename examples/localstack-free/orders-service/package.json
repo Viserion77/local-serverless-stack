@@ -1,0 +1,23 @@
+{
+  "name": "orders-service-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "JavaScript REST API (payload v1) guarded by auth-service's authorizer (cross-service, by ARN), with an SQS consumer, a scheduled cleanup Lambda, a DynamoDB stream → SNS fan-out, and an S3 upload bucket with a notification-triggered Lambda. Port 3612 (invoke 13612).",
+  "scripts": {
+    "package": "serverless package",
+    "register": "serverless package"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/client-s3": "^3.0.0",
+    "@aws-sdk/client-sns": "^3.0.0",
+    "@aws-sdk/client-sqs": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0",
+    "@aws-sdk/util-dynamodb": "^3.0.0"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^7.4.4",
+    "osls": "4.0.0",
+    "serverless-lss": "file:../../../packages/serverless-plugin"
+  }
+}

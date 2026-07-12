@@ -1,0 +1,8 @@
+node_modules/
+.serverless/
+.lss/
+.dynamodb/
+.esbuild/
+*.log
+.env
+.env.local

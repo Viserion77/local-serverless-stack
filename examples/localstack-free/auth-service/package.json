@@ -1,0 +1,19 @@
+{
+  "name": "auth-service-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "JavaScript REST API (payload v1) with a local REQUEST authorizer, plus an eventBridge-triggered signup audit fed by users-service through the shared domain-events bus. Served by LSS on port 3611 (invoke 13611).",
+  "scripts": {
+    "package": "serverless package",
+    "register": "serverless package"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0"
+  },
+  "devDependencies": {
+    "dotenv-cli": "^7.4.4",
+    "osls": "4.0.0",
+    "serverless-lss": "file:../../../packages/serverless-plugin"
+  }
+}

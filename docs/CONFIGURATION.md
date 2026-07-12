@@ -139,7 +139,7 @@ Both files should contain valid JSON with the following optional properties:
   - Each `{tableName}.json` must contain a **JSON array of plain objects** (native
     JSON types, not DynamoDB-typed AttributeValues) — LSS marshalls them
     automatically. Example: `[{"userId": "u-1", "active": true}]`. See
-    [examples/sample-microservice/seeds/](../examples/sample-microservice/seeds/).
+    [examples/self-hosted/seeds/](../examples/self-hosted/seeds/).
   - Seeds are auto-applied when a table is created, and on demand via
     `lss seed [table]` / `lss seed:clear [table]` or the seed panel in the
     dashboard's DynamoDB tab (open a table → Seed).
@@ -276,6 +276,9 @@ Both files should contain valid JSON with the following optional properties:
       "themeColors": { "light": { "bg-primary": "#fdf6f0" } }
     }
     ```
+  - A working showcase (local logo file + per-theme color overrides) ships with
+    [examples/self-hosted](../examples/self-hosted/); every project under
+    [examples/](../examples/) carries its own branding block.
 
 > Note: configuration is read once when the orchestrator starts. After editing
 > `lss.config.json`, restart the orchestrator for changes to take effect.

@@ -1,0 +1,37 @@
+# Resources-only stack: no functions, no ports. It exists purely to own the
+# shared EventBridge bus — the piece that previously forced a real
+# `serverless deploy` (CloudFormation) before LSS could cover the rest.
+service: events-stack
+
+frameworkVersion: '>=3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: dev
+
+plugins:
+  - serverless-lss
+
+custom:
+  orchestrator:
+    enabled: true
+    orchestratorUrl: http://localhost:3120
+
+resources:
+  Resources:
+    DomainEventsBus:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: domain-events
+
+    # LSS accepts Archives but skips them with a registration warning:
+    # LocalStack mocks the API (CREATE_COMPLETE, yet ListArchives stays empty),
+    # so provisioning one locally would only fake success.
+    DomainEventsArchive:
+      Type: AWS::Events::Archive
+      Properties:
+        ArchiveName: domain-events-archive
+        SourceArn: !GetAtt DomainEventsBus.Arn
+        RetentionDays: 1

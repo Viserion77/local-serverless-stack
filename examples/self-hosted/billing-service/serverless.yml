@@ -1,0 +1,58 @@
+service: billing-service
+
+frameworkVersion: '>=3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: dev
+  httpApi:
+    cors: true
+  environment:
+    RECEIPTS_BUCKET: billing-receipts
+    BILLING_BUS: billing-events
+    AWS_ENDPOINT: http://localhost:14566
+
+plugins:
+  - serverless-lss
+
+custom:
+  accountId: '000000000000'
+  orchestrator:
+    enabled: true
+    orchestratorUrl: http://localhost:3140
+  lss:
+    apiPort: 3632
+    invokePort: 13632
+
+functions:
+  # SQS consumer on the queue OWNED BY orders-service (referenced by ARN —
+  # cross-service event source mapping). The self engine delivers batches
+  # in-process to this handler: no LocalStack, no proxy Lambdas.
+  processOrder:
+    handler: src/handlers/processOrder.handler
+    events:
+      - sqs:
+          arn: arn:aws:sqs:${self:provider.region}:${self:custom.accountId}:orders-to-process
+          batchSize: 5
+
+  # GET /receipts — lists the receipt objects written to S3.
+  listReceipts:
+    handler: src/handlers/listReceipts.handler
+    events:
+      - httpApi:
+          path: /receipts
+          method: get
+
+resources:
+  Resources:
+    ReceiptsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: billing-receipts
+
+    BillingBus:
+      Type: AWS::Events::EventBus
+      Properties:
+        Name: billing-events

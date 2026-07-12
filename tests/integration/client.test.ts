@@ -1,8 +1,9 @@
 // End-to-end validation of the programmatic client (LssClient), driven entirely
 // through the client itself — it boots its OWN isolated LSS + LocalStack via
 // `lifecycle.start()` (distinct ports/stateDir from features.test.ts), registers
-// examples/sample-microservice, and exercises every namespace against the live
-// stack, then tears down via `lifecycle.stop()`.
+// the fixture service (tests/integration/fixtures/sample-microservice), and
+// exercises every namespace against the live stack, then tears down via
+// `lifecycle.stop()`.
 //
 // IMPORTANT: this imports the BUILT library (dist/client), exactly as a consumer
 // would — so it validates the compiled output + public surface, not the TS source.
@@ -18,7 +19,7 @@ import { LssClient } from '../../dist/client';
 const execAsync = promisify(exec);
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const CONFIG = 'tests/integration/fixtures/lss.client.config.json';
-const SERVICE_PATH = path.join(REPO_ROOT, 'examples/sample-microservice');
+const SERVICE_PATH = path.join(REPO_ROOT, 'tests/integration/fixtures/sample-microservice');
 
 const QUEUE = 'sample-microservice-OrderProcessing';
 const BUCKET = 'sample-microservice-uploads';
@@ -43,7 +44,7 @@ suite('LssClient (integration, built lib)', () => {
     await lss.lifecycle.stop().catch(() => undefined);
     await lss.lifecycle.start();
     await lss.lifecycle.waitUntilReady({ timeoutMs: 150000, intervalMs: 2000 });
-    // Provision the example by registering it through the client.
+    // Provision the fixture service by registering it through the client.
     const reg = (await lss.services.register({ servicePath: SERVICE_PATH, invokePort: 3997 })) as {
       success?: boolean;
     };

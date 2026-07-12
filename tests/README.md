@@ -21,6 +21,7 @@ tests/
 │   ├── features.test.ts      # promised-features validation, via the HTTP API
 │   ├── client.test.ts        # programmatic client (LssClient) e2e — imports the BUILT lib (dist/client)
 │   └── fixtures/             # lss.integration.config.json (3399/4599) · lss.client.config.json (3398/4598)
+│       └── sample-microservice/  # fixture service both suites register (resource names are asserted)
 ├── fixtures/                 # committed CFN templates used by the parser tests
 ├── setup.matchers.ts         # shared custom matchers (+ jest type augmentation)
 ├── setup.unit.ts             # unit setup (matchers only)
@@ -58,19 +59,23 @@ npm run test:integration
 ```
 
 `features.test.ts` starts an isolated instance via `lss start --config tests/integration/fixtures/lss.integration.config.json`
-(own ports 3399/4599, own `stateDir`, managed mode), registers `examples/sample-microservice`, asserts the
-provisioned resources + queue `await-idle`/hold-capture-release + seeds + S3 round-trip via the HTTP API, then
-stops the instance and removes the scoped container/volume.
+(own ports 3399/4599, own `stateDir`, managed mode), registers the fixture service
+`tests/integration/fixtures/sample-microservice`, asserts the provisioned resources + queue
+`await-idle`/hold-capture-release + seeds + S3 round-trip via the HTTP API, then stops the instance and removes
+the scoped container/volume.
 
 `client.test.ts` validates the programmatic client (`LssClient`) the same way, but driven entirely through the
 client and **importing the built library** (`dist/client` — so `npm run build` must run first; CI does this before
 the integration job). It boots its own isolated instance via `lss.lifecycle.start()` (ports 3398/4598, own
-`stateDir`), registers the example through `lss.services.register()`, then exercises every namespace
+`stateDir`), registers the fixture service through `lss.services.register()`, then exercises every namespace
 (seeds/dynamo/queues/buckets/resources/config/health + `lifecycle.status`/`logs`/`waitUntilReady`) before
 `lss.lifecycle.stop()` and Docker cleanup.
 
 Both suites **skip automatically** when no `LOCALSTACK_AUTH_TOKEN` is present (community images >= 2026.5 require
 it), so a token-less run never fails — it reports the tests as *skipped*, not *failed*.
+
+The `examples/` folder was consolidated into 3 examples (localstack-free, localstack-ultimate, self-hosted); the
+tests do NOT use it — the service they register lives at `tests/integration/fixtures/sample-microservice`.
 
 ## CI
 

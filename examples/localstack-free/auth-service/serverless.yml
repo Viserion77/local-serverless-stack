@@ -1,0 +1,112 @@
+service: auth-service
+
+frameworkVersion: '>=3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: dev
+  environment:
+    SESSIONS_TABLE: auth-Sessions
+    SIGNUP_AUDIT_TABLE: auth-SignupAudit
+    AWS_ENDPOINT: http://localhost:4572
+
+plugins:
+  - serverless-lss
+
+custom:
+  accountId: '000000000000'
+  orchestrator:
+    enabled: true
+    orchestratorUrl: http://localhost:3120
+  lss:
+    apiPort: 3611
+    invokePort: 13611
+
+functions:
+  # POST /login — public route (no authorizer). password "lss-demo" mints a
+  # session code and stores it in DynamoDB.
+  login:
+    handler: src/handlers/login.handler
+    events:
+      - http:
+          path: /login
+          method: post
+          cors: true
+
+  # v1 REQUEST authorizer. No events on purpose: it is referenced inline by
+  # `whoami` below AND cross-service (by ARN) from orders-service.
+  sessionAuthorizer:
+    handler: src/handlers/session-authorizer.handler
+
+  # GET /whoami — protected by the local v1 REQUEST authorizer above.
+  whoami:
+    handler: src/handlers/whoami.handler
+    events:
+      - http:
+          path: /whoami
+          method: get
+          cors: true
+          authorizer:
+            name: sessionAuthorizer
+            type: request
+            identitySource: method.request.header.code
+            resultTtlInSeconds: 3600
+
+  # eventBridge trigger against the SHARED domain-events bus (owned by
+  # events-stack, referenced here by ARN so Serverless does not create a
+  # second bus). users-service publishes UserSignedUp with PutEvents;
+  # Serverless compiles this trigger to a native AWS::Events::Rule, LSS puts
+  # the rule on the bus in LocalStack and wires the target to this function
+  # through its proxy → Invoke API model. The handler receives the REAL
+  # EventBridge envelope (source, detail-type, detail) — no Records wrapper.
+  onUserSignedUp:
+    handler: src/handlers/onUserSignedUp.handler
+    events:
+      - eventBridge:
+          eventBus: arn:aws:events:${self:provider.region}:${self:custom.accountId}:event-bus/domain-events
+          pattern:
+            source:
+              - users
+            detail-type:
+              - UserSignedUp
+
+  # GET /signups — public; lists the audit rows written by onUserSignedUp so
+  # the cross-service EventBridge flow is observable over plain HTTP.
+  listSignups:
+    handler: src/handlers/listSignups.handler
+    events:
+      - http:
+          path: /signups
+          method: get
+          cors: true
+
+resources:
+  Resources:
+    SessionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: auth-Sessions
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: code
+            AttributeType: S
+        KeySchema:
+          - AttributeName: code
+            KeyType: HASH
+
+    SignupAuditTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: auth-SignupAudit
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: eventId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: eventId
+            KeyType: HASH
+
+package:
+  individually: false

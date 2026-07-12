@@ -6,7 +6,7 @@
 //
 // Fidelity anchors: resource-provisioner.ts (createEventBus/createEventRule/
 // deleteEventRule idempotency error names, hand-built rule ARNs) and the
-// eventbridge-sample (PutEvents per-entry results against a named bus).
+// self-hosted example (PutEvents per-entry results against a named bus).
 
 import { randomUUID } from 'crypto';
 import type {

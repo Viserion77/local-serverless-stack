@@ -1,0 +1,241 @@
+<!--
+  Validation console for the "self-hosted" example — open this file
+  directly (file://) or serve it with `npm run console` (port 8622).
+  Everything below the "Runtime (shared)" marker is byte-identical across the
+  three example consoles; only the header and the CONFIG object vary.
+-->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>self-hosted · validation console</title>
+<style>
+  :root {
+    --accent: #0d9488; --bg: #f8fafc; --panel: #ffffff; --text: #0f172a;
+    --muted: #64748b; --border: #e2e8f0; --ok: #16a34a; --err: #dc2626;
+    --code-bg: #f1f5f9;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --accent: #2dd4bf; --bg: #0b1220; --panel: #101a2e; --text: #e2e8f0;
+      --muted: #94a3b8; --border: #1e293b; --ok: #4ade80; --err: #f87171;
+      --code-bg: #0f172a;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); }
+  header { display: flex; align-items: center; gap: 14px; padding: 18px 24px; border-bottom: 1px solid var(--border); background: var(--panel); }
+  header .logo { width: 44px; height: 44px; border-radius: 10px; background: var(--accent); color: #fff; display: flex; align-items: center; justify-content: center; font-weight: 800; font-size: 18px; letter-spacing: .5px; flex: none; }
+  header h1 { margin: 0; font-size: 18px; }
+  header p { margin: 2px 0 0; color: var(--muted); font-size: 13px; }
+  header .links { margin-left: auto; display: flex; gap: 10px; }
+  header .links a { color: var(--accent); text-decoration: none; font-size: 13px; border: 1px solid var(--border); padding: 6px 10px; border-radius: 8px; }
+  main { max-width: 1080px; margin: 0 auto; padding: 24px; }
+  section { margin-bottom: 28px; }
+  h2 { font-size: 14px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); margin: 0 0 12px; }
+  .status-grid { display: flex; flex-wrap: wrap; gap: 10px; }
+  .status { display: flex; align-items: center; gap: 8px; background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 8px 12px; font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+  .dot.ok { background: var(--ok); } .dot.err { background: var(--err); }
+  .status small { color: var(--muted); }
+  button { font: inherit; cursor: pointer; border: none; border-radius: 8px; padding: 8px 14px; background: var(--accent); color: #fff; font-weight: 600; }
+  button.ghost { background: transparent; color: var(--accent); border: 1px solid var(--border); }
+  button:disabled { opacity: .5; cursor: wait; }
+  .flow { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 14px; }
+  .flow-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+  .flow-head h3 { margin: 0; font-size: 15px; }
+  .flow-head p { margin: 0; color: var(--muted); font-size: 13px; flex: 1 1 260px; }
+  .steps { margin-top: 10px; display: none; }
+  .flow.open .steps { display: block; }
+  .step { border-top: 1px dashed var(--border); padding: 10px 0; }
+  .step .sig { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  .step .sig .method { color: var(--accent); font-weight: 700; }
+  textarea { width: 100%; min-height: 64px; margin-top: 6px; font: 12.5px/1.45 ui-monospace, Menlo, Consolas, monospace; background: var(--code-bg); color: var(--text); border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+  .result { margin-top: 6px; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px; white-space: pre-wrap; word-break: break-word; max-height: 260px; overflow: auto; display: none; }
+  .result.show { display: block; }
+  .result .http-ok { color: var(--ok); font-weight: 700; }
+  .result .http-err { color: var(--err); font-weight: 700; }
+  footer { color: var(--muted); font-size: 12.5px; text-align: center; padding: 18px; }
+  #log { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; color: var(--muted); background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; max-height: 180px; overflow: auto; }
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">SH</div>
+  <div>
+    <h1>self-hosted</h1>
+    <p>Orders pipeline + product catalog on the LSS self engine — no Docker, no LocalStack, no token</p>
+  </div>
+  <div class="links" id="links"></div>
+</header>
+<main>
+  <section>
+    <h2>Status <button class="ghost" style="padding:2px 10px;font-size:12px" onclick="checkAll()">refresh</button></h2>
+    <div class="status-grid" id="statuses"></div>
+  </section>
+  <section>
+    <h2>Flows</h2>
+    <div id="flows"></div>
+  </section>
+  <section>
+    <h2>Request log</h2>
+    <div id="log">—</div>
+  </section>
+</main>
+<footer>Generated for the LSS example "self-hosted" — open this file directly or via <code>npm run console</code>.</footer>
+<script>
+// ---------------------------------------------------------------------------
+// CONFIG — the only JS block builders customize per example.
+// ---------------------------------------------------------------------------
+const CONFIG = {
+  // Links shown top-right: [label, url]
+  links: [
+    ['Dashboard', 'http://localhost:3140'],
+  ],
+  // Health checks: {label, url, note}  (any 2xx/3xx/4xx response counts as "up";
+  // only network failure marks it down — LocalStack/engine endpoints often 404.)
+  statuses: [
+    { label: 'LSS orchestrator', url: 'http://localhost:3140/api/health', note: ':3140' },
+    { label: 'orders-service', url: 'http://localhost:3631/orders', note: ':3631' },
+    { label: 'billing-service', url: 'http://localhost:3632/receipts', note: ':3632' },
+    { label: 'notifications-service', url: 'http://localhost:3633/notifications', note: ':3633' },
+    { label: 'catalog-service', url: 'http://localhost:3634/stats', note: ':3634' },
+    { label: 'self engine (AWS wire)', url: 'http://localhost:14566', note: ':14566', opaque: true },
+  ],
+  // Flows: {title, desc, steps: [{name, method, url, body?, headers?, extract?}]}
+  //  - body: object (editable in the UI as JSON) or undefined
+  //  - extract: {ctxKey: 'json.path.in.response'} — saved into ctx after the step
+  //  - url/body/header values support {{ctxKey}} substitution
+  flows: [
+    {
+      title: 'Order → billing → notification pipeline',
+      desc: 'POST an order (DynamoDB + SQS), let the self engine deliver it in-process to billing (S3 receipt + EventBridge PutEvents) and notifications (rule match → DynamoDB), then read all three stores.',
+      steps: [
+        { name: 'Create order', method: 'POST', url: 'http://localhost:3631/orders',
+          body: { customerId: 'u-ada', total: 42.5 },
+          extract: { orderId: 'id' }, pause: 1500 },
+        { name: 'List orders', method: 'GET', url: 'http://localhost:3631/orders' },
+        { name: 'List receipts (S3)', method: 'GET', url: 'http://localhost:3632/receipts' },
+        { name: 'List notifications (EventBridge)', method: 'GET', url: 'http://localhost:3633/notifications' },
+      ],
+    },
+    {
+      title: 'Catalog: index, get, search, aggregate, delete',
+      desc: 'CRUD + query DSL against the products-catalog OpenSearch Serverless collection served by the self engine: index a document, fetch it by id, run a filtered full-text search, aggregate by category, then delete it.',
+      steps: [
+        { name: 'Index product', method: 'POST', url: 'http://localhost:3634/products',
+          body: { name: 'Wireless Mouse', category: 'peripherals', price: 25, tags: ['usb', 'wireless'] },
+          extract: { productId: 'id' } },
+        { name: 'Get product by id', method: 'GET', url: 'http://localhost:3634/products/{{productId}}' },
+        { name: 'Search (full text + filters)', method: 'GET', url: 'http://localhost:3634/search?q=wireless&category=peripherals&maxPrice=50' },
+        { name: 'Category stats (aggregations)', method: 'GET', url: 'http://localhost:3634/stats' },
+        { name: 'Delete product', method: 'DELETE', url: 'http://localhost:3634/products/{{productId}}' },
+      ],
+    },
+  ],
+};
+// ---------------------------------------------------------------------------
+// Runtime (shared — do not customize below this line)
+// ---------------------------------------------------------------------------
+const ctx = {};
+const $ = (s, el) => (el || document).querySelector(s);
+const logEl = $('#log');
+function log(line) {
+  const t = new Date().toLocaleTimeString();
+  logEl.textContent = (logEl.textContent === '—' ? '' : logEl.textContent + '\n') + `[${t}] ${line}`;
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function subst(v) {
+  if (typeof v === 'string') return v.replace(/\{\{(\w+)\}\}/g, (_, k) => ctx[k] ?? '');
+  if (Array.isArray(v)) return v.map(subst);
+  if (v && typeof v === 'object') return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, subst(x)]));
+  return v;
+}
+function pluck(obj, path) { return path.split('.').reduce((o, k) => (o == null ? o : o[k]), obj); }
+
+for (const [label, url] of CONFIG.links) {
+  const a = document.createElement('a'); a.href = url; a.target = '_blank'; a.textContent = label;
+  $('#links').appendChild(a);
+}
+CONFIG.statuses.forEach((s, i) => {
+  const div = document.createElement('div');
+  div.className = 'status';
+  div.innerHTML = `<span class="dot" id="dot-${i}"></span> ${s.label} <small>${s.note || ''}</small>`;
+  $('#statuses').appendChild(div);
+});
+async function checkAll() {
+  await Promise.all(CONFIG.statuses.map(async (s, i) => {
+    const dot = $(`#dot-${i}`);
+    dot.className = 'dot';
+    try { await fetch(s.url, { mode: s.opaque ? 'no-cors' : 'cors' }); dot.className = 'dot ok'; }
+    catch { dot.className = 'dot err'; }
+  }));
+}
+CONFIG.flows.forEach((flow, fi) => {
+  const card = document.createElement('div');
+  card.className = 'flow';
+  const stepsHtml = flow.steps.map((st, si) => `
+    <div class="step">
+      <div class="sig"><span class="method">${st.method}</span> ${st.url}</div>
+      ${st.body !== undefined ? `<textarea id="body-${fi}-${si}" spellcheck="false">${JSON.stringify(st.body, null, 2)}</textarea>` : ''}
+      <div class="result" id="res-${fi}-${si}"></div>
+    </div>`).join('');
+  card.innerHTML = `
+    <div class="flow-head">
+      <h3>${flow.title}</h3><p>${flow.desc}</p>
+      <button class="ghost" onclick="this.closest('.flow').classList.toggle('open')">steps</button>
+      <button id="run-${fi}" onclick="runFlow(${fi})">Run</button>
+    </div>
+    <div class="steps">${stepsHtml}</div>`;
+  $('#flows').appendChild(card);
+});
+async function runFlow(fi) {
+  const flow = CONFIG.flows[fi];
+  const btn = $(`#run-${fi}`);
+  btn.disabled = true;
+  document.querySelectorAll(`[id^="res-${fi}-"]`).forEach(r => { r.className = 'result'; r.textContent = ''; });
+  $('#flows').children[fi].classList.add('open');
+  try {
+    for (let si = 0; si < flow.steps.length; si++) {
+      const st = flow.steps[si];
+      const res = $(`#res-${fi}-${si}`);
+      const url = subst(st.url);
+      const init = { method: st.method, headers: subst(st.headers || {}) };
+      const bodyEl = $(`#body-${fi}-${si}`);
+      if (bodyEl) {
+        init.headers['content-type'] = 'application/json';
+        init.body = JSON.stringify(subst(JSON.parse(bodyEl.value)));
+      }
+      log(`${st.method} ${url}`);
+      let httpRes, text;
+      try {
+        httpRes = await fetch(url, init);
+        text = await httpRes.text();
+      } catch (e) {
+        res.className = 'result show';
+        res.innerHTML = `<span class="http-err">NETWORK ERROR</span> ${e.message} — is the service up?`;
+        log(`  ✗ network error: ${e.message}`);
+        return;
+      }
+      let parsed; try { parsed = JSON.parse(text); } catch { parsed = text; }
+      const okClass = httpRes.ok ? 'http-ok' : 'http-err';
+      res.className = 'result show';
+      res.innerHTML = `<span class="${okClass}">HTTP ${httpRes.status}</span>\n` +
+        (typeof parsed === 'string' ? parsed : JSON.stringify(parsed, null, 2));
+      log(`  → ${httpRes.status}`);
+      if (st.pause) await new Promise(r => setTimeout(r, st.pause));
+      if (!httpRes.ok && !st.allowFail) return;
+      if (st.extract && typeof parsed === 'object') {
+        for (const [k, p] of Object.entries(st.extract)) {
+          ctx[k] = pluck(parsed, p);
+          log(`  ctx.${k} = ${JSON.stringify(ctx[k])}`);
+        }
+      }
+    }
+  } finally { btn.disabled = false; }
+}
+checkAll();
+</script>
+</body>
+</html>

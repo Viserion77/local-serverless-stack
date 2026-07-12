@@ -1,7 +1,8 @@
 // End-to-end validation of LSS's promised features (see docs/FEATURES.md).
 // Boots an ISOLATED LSS + LocalStack instance (own ports + stateDir, managed
-// mode, token from LOCALSTACK_AUTH_TOKEN), provisions examples/sample-microservice,
-// and asserts each capability against the live HTTP API.
+// mode, token from LOCALSTACK_AUTH_TOKEN), provisions the fixture service
+// (tests/integration/fixtures/sample-microservice), and asserts each capability
+// against the live HTTP API.
 //
 // Requires Docker + a LOCALSTACK_AUTH_TOKEN (community images >= 2026.5 need it).
 // The whole suite is skipped when no token is present, so it never fails a
@@ -15,7 +16,7 @@ const execAsync = promisify(exec);
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const CONFIG = 'tests/integration/fixtures/lss.integration.config.json';
 const BASE = 'http://localhost:3399';
-const SERVICE_PATH = path.join(REPO_ROOT, 'examples/sample-microservice');
+const SERVICE_PATH = path.join(REPO_ROOT, 'tests/integration/fixtures/sample-microservice');
 const STATE_PID = path.join(REPO_ROOT, 'tests/.lss-integration/orchestrator.pid');
 
 const QUEUE = 'sample-microservice-OrderProcessing';
@@ -63,7 +64,7 @@ suite('LSS promised features (integration)', () => {
       const j = await res.json();
       return j.localstack === true;
     }, 150000);
-    // Register the example — provisioning runs within the request.
+    // Register the fixture service — provisioning runs within the request.
     const reg = await api('POST', '/api/services/register', { servicePath: SERVICE_PATH, invokePort: 3998 });
     expect(reg.status).toBe(200);
   }, 240000);

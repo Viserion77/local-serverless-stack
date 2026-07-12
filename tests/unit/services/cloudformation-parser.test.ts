@@ -20,8 +20,8 @@ import {
 
 const FIXTURE = path.resolve(__dirname, '../../fixtures/sample-cloudformation.json');
 // A committed snapshot of the sample-microservice deploy template. We do NOT read
-// examples/sample-microservice/.serverless/ directly because that dir is gitignored
-// and absent on a fresh CI checkout.
+// tests/integration/fixtures/sample-microservice/.serverless/ directly because that
+// dir is gitignored and absent on a fresh CI checkout.
 const SAMPLE = path.resolve(__dirname, '../../fixtures/sample-microservice-template.json');
 
 let parser: CloudFormationParser;

@@ -1,0 +1,25 @@
+{
+  "serverPort": 3111,
+  "localstackPort": 4571,
+  "localstackEndpoint": "http://localhost:4571",
+  "mode": "managed",
+  "localstackEdition": "pro",
+  "region": "us-east-1",
+  "services": ["dynamodb", "sqs", "sns", "s3", "lambda"],
+  "persistence": true,
+  "seedsDir": "./seeds",
+  "autoPackage": true,
+  "packageCommand": "npx serverless package",
+  "packageTimeoutMs": 300000,
+  "branding": {
+    "title": "LocalStack Ultimate Lab",
+    "subtitle": "LSS + LocalStack Pro image — paid-tier features, serverless-offline path",
+    "logo": "./assets/logo.svg",
+    "favicon": "./assets/logo.svg",
+    "defaultTheme": "light",
+    "themeColors": {
+      "light": { "brand-primary": "#b45309", "brand-hover": "#92400e", "brand-soft": "#fef3c7" },
+      "dark": { "brand-primary": "#fbbf24", "brand-hover": "#fcd34d", "brand-soft": "#78350f", "brand-contrast": "#451a03" }
+    }
+  }
+}

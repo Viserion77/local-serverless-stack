@@ -13,7 +13,12 @@
     "node": ">=20.0.0"
   },
   "peerDependencies": {
-    "serverless": "3.40.0"
+    "serverless": ">=3.40.0"
+  },
+  "peerDependenciesMeta": {
+    "serverless": {
+      "optional": true
+    }
   },
   "dependencies": {
     "chalk": "^4.1.2"

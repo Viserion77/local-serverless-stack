@@ -1,5 +1,7 @@
 # Minimal serverless.yml template for a service running under LSS.
-# A complete, runnable version lives in examples/sample-microservice/.
+# Complete, runnable versions live under examples/ — e.g.
+# examples/localstack-ultimate/serverless.yml (single service) or any
+# examples/localstack-free/*-service/serverless.yml (multi-service).
 
 service: example-service
 

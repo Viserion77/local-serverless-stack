@@ -1,0 +1,32 @@
+{
+  "serverPort": 3120,
+  "localstackPort": 4572,
+  "localstackEndpoint": "http://localhost:4572",
+  "mode": "managed",
+  "localstackEdition": "community",
+  "localstackVersion": "4.0",
+  "region": "us-east-1",
+  "services": ["dynamodb", "sqs", "sns", "s3", "lambda", "events"],
+  "persistence": false,
+  "debug": false,
+  "seedsDir": "./seeds",
+  "stateDir": ".lss",
+  "autoPackage": true,
+  "lambdaRuntime": {
+    "enabled": true,
+    "execution": "source",
+    "watch": true
+  },
+  "branding": {
+    "title": "LocalStack Free Sandbox",
+    "subtitle": "LSS + LocalStack Community — full event-driven stack",
+    "logo": "./assets/logo.svg",
+    "favicon": "./assets/logo.svg",
+    "defaultTheme": "dark",
+    "colors": {
+      "brand-primary": "#7c3aed",
+      "brand-hover": "#6d28d9",
+      "brand-soft": "#ede9fe"
+    }
+  }
+}

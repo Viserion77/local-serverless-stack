@@ -1,0 +1,19 @@
+{
+  "name": "localstack-free",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The LocalStack community example: four services on LSS's API Gateway + Lambda emulation — authorizers (local and cross-service), TypeScript from source, SQS, a shared EventBridge bus, DynamoDB streams → SNS, and S3 notifications. No serverless-offline, no serverless deploy.",
+  "scripts": {
+    "lss:start": "node ../../bin/cli.js start",
+    "lss:stop": "node ../../bin/cli.js stop",
+    "lss:status": "node ../../bin/cli.js status",
+    "lss:seed": "node ../../bin/cli.js seed",
+    "register:events": "npm --prefix events-stack run package",
+    "register:auth": "npm --prefix auth-service run package",
+    "register:users": "npm --prefix users-service run package",
+    "register:orders": "npm --prefix orders-service run package",
+    "register:all": "npm run register:events && npm run register:auth && npm run register:users && npm run register:orders",
+    "setup": "npm --prefix events-stack install && npm --prefix auth-service install && npm --prefix users-service install && npm --prefix orders-service install",
+    "console": "npx -y http-server . -p 8620 -c-1"
+  }
+}

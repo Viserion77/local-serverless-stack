@@ -1,0 +1,18 @@
+{
+  "name": "self-hosted",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Four microservices (orders → billing → notifications pipeline + product catalog) running entirely on the LSS self engine: DynamoDB, SQS, S3, EventBridge and OpenSearch Serverless emulated in-process — no Docker, no LocalStack, no auth token.",
+  "scripts": {
+    "lss:start": "node ../../bin/cli.js start --self-engine",
+    "lss:stop": "node ../../bin/cli.js stop",
+    "lss:status": "node ../../bin/cli.js status",
+    "register:orders": "npm --prefix orders-service run package",
+    "register:billing": "npm --prefix billing-service run package",
+    "register:notifications": "npm --prefix notifications-service run package",
+    "register:catalog": "npm --prefix catalog-service run package",
+    "register:all": "npm run register:orders && npm run register:billing && npm run register:notifications && npm run register:catalog",
+    "setup": "npm --prefix orders-service install && npm --prefix billing-service install && npm --prefix notifications-service install && npm --prefix catalog-service install",
+    "console": "npx -y http-server . -p 8622 -c-1"
+  }
+}

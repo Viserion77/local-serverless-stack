@@ -1,0 +1,64 @@
+service: orders-service
+
+frameworkVersion: '>=3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: dev
+  httpApi:
+    cors: true
+  environment:
+    ORDERS_TABLE: orders-Orders
+    # Queue URL shape served by the self engine: <endpoint>/<account>/<queue>.
+    ORDERS_QUEUE_URL: http://localhost:14566/000000000000/orders-to-process
+    AWS_ENDPOINT: http://localhost:14566
+
+plugins:
+  - serverless-lss
+
+custom:
+  orchestrator:
+    enabled: true
+    orchestratorUrl: http://localhost:3140
+  lss:
+    apiPort: 3631
+    invokePort: 13631
+
+functions:
+  # POST /orders — stores the order in DynamoDB and enqueues it for billing.
+  createOrder:
+    handler: src/handlers/createOrder.handler
+    events:
+      - httpApi:
+          path: /orders
+          method: post
+
+  # GET /orders — lists stored orders so each pipeline stage is observable.
+  listOrders:
+    handler: src/handlers/listOrders.handler
+    events:
+      - httpApi:
+          path: /orders
+          method: get
+
+resources:
+  Resources:
+    OrdersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: orders-Orders
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+
+    OrdersToProcessQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: orders-to-process
+        VisibilityTimeout: 30

@@ -58,7 +58,7 @@ export class ResourceProvisioner {
   // CFN logical id → resource snapshot for the service currently being
   // provisioned. Lets resolveEventSourceArn map Fn::GetAtt references
   // (e.g. "OrderProcessingQueue") to the real resource name in LocalStack
-  // (e.g. "pro-sample-microservice-OrderProcessing") even when the user
+  // (e.g. "localstack-ultimate-OrderProcessing") even when the user
   // sets an explicit TableName/QueueName that doesn't match the logical id.
   private resourcesByLogicalId = new Map<string, Resource>();
 
@@ -534,7 +534,7 @@ export const handler = async (event, context) => {
   private async createEventSourceMapping(serviceName: string, mapping: EventSourceMapping, invokeUrl?: string): Promise<void> {
     try {
       // Use the fully-qualified Lambda name straight from the CFN template
-      // (e.g. "pro-sample-microservice-dev-processOrderQueue"). This is what
+      // (e.g. "localstack-ultimate-dev-processOrderQueue"). This is what
       // serverless-offline's invoke endpoint (lambdaPort) requires; shorter
       // forms return 404 "Function not found".
       const actualFunctionName = this.resolveLambdaName(serviceName, mapping.functionName);

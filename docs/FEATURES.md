@@ -103,7 +103,8 @@ EventBridge buses & rules and OpenSearch collections (UI is exercised manually, 
 Dashboard branding: an optional `branding` key in `lss.config.json` (title, subtitle, logo,
 favicon, defaultTheme, plus `colors`/`themeColors` as TreeUI token overrides) customizes the dashboard. Served
 at `GET /api/config/branding`; local logo/favicon files are exposed at `GET /api/config/branding/logo|favicon`.
-Asserted by: unit (`config-manager` "branding" block).
+A working showcase (logo file + per-theme colors) ships with `examples/self-hosted` — every project under
+`examples/` carries its own branding block. Asserted by: unit (`config-manager` "branding" block).
 
 ## 11. Programmatic client (`LssClient`)
 
@@ -175,6 +176,6 @@ the next milestone and rows below will gain integration assertions with it.
 `tests/integration/features.test.ts` uses an isolated config fixture
 (`tests/integration/fixtures/lss.integration.config.json`: distinct ports, its own `stateDir`, managed mode,
 `autoPackage`, token from `LOCALSTACK_AUTH_TOKEN`), runs `npx lss start --config <fixture>`, registers
-`examples/sample-microservice`, asserts the rows above via the HTTP API, then `npx lss stop --config <fixture>`
+the `tests/integration/fixtures/sample-microservice` rig, asserts the rows above via the HTTP API, then `npx lss stop --config <fixture>`
 and removes the scoped LocalStack container/volume. It runs locally and in a CI job gated on the
 `LOCALSTACK_AUTH_TOKEN` secret (community LocalStack images ≥ 2026.5 require a token).

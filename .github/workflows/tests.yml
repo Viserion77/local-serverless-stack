@@ -51,9 +51,9 @@ jobs:
         if: env.LOCALSTACK_AUTH_TOKEN != ''
         run: npm ci
 
-      - name: Install dependencies (sample-microservice)
+      - name: Install dependencies (sample-microservice fixture)
         if: env.LOCALSTACK_AUTH_TOKEN != ''
-        run: npm ci --prefix examples/sample-microservice
+        run: npm ci --prefix tests/integration/fixtures/sample-microservice
 
       - name: Build project
         if: env.LOCALSTACK_AUTH_TOKEN != ''

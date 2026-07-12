@@ -74,10 +74,11 @@ flowchart LR
     end
 ```
 
-Measured on [examples/self-engine-sample](examples/self-engine-sample/) (3 microservices:
-orders → billing → notifications): engine boot **~10 ms**; a full pipeline crossing
-DynamoDB + SQS + S3 + EventBridge across the three services completes in **~170 ms** —
-with the whole stack being the orchestrator process plus one small worker per service.
+Measured on [examples/self-hosted](examples/self-hosted/) (orders → billing →
+notifications pipeline; the example also carries an OpenSearch catalog service):
+engine boot **~10 ms**; a full pipeline crossing DynamoDB + SQS + S3 + EventBridge
+across the three pipeline services completes in **~170 ms** — with the whole stack
+being the orchestrator process plus one small worker per service.
 
 Migration is gradual: LocalStack mode remains the default and fully supported; a running
 instance picks one engine. Anything the self engine doesn't implement yet answers with an
@@ -85,11 +86,11 @@ explicit error naming the operation — or is forwarded verbatim to a LocalStack
 `selfEngine.fallbackEndpoint`. Coverage matrix and storage model:
 [docs/SELF_ENGINE.md](docs/SELF_ENGINE.md) · design/PRD:
 [docs/PRD_SELF_ENGINE.md](docs/PRD_SELF_ENGINE.md) · runnable demo:
-[examples/self-engine-sample](examples/self-engine-sample/).
+[examples/self-hosted](examples/self-hosted/).
 
 ## Quick Start
 
-Prerequisites: Node.js >= 20 · Serverless Framework 3.x · Docker (**only** for the LocalStack engine)
+Prerequisites: Node.js >= 20 · [osls](https://github.com/oss-serverless/serverless) 4.x (open-source Serverless Framework fork; provides the `serverless`/`sls` CLI) · Docker (**only** for the LocalStack engine)
 
 ```bash
 # 1. Install
@@ -126,16 +127,17 @@ open http://localhost:3100
 ```
 
 A minimal template lives at [docs/serverless.yml.example](docs/serverless.yml.example);
-complete runnable projects live in [examples/](examples/):
+complete runnable projects live in [examples/](examples/) — one per engine flavor:
 
 | Example | Shows |
 | --- | --- |
-| [sample-microservice](examples/sample-microservice/) | DynamoDB, SQS, SNS, S3 notifications, streams, seeds |
-| [multi-service-sample](examples/multi-service-sample/) | 3 services, cross-service events, schedules |
-| [eventbridge-sample](examples/eventbridge-sample/) | EventBridge buses, rules, producer/consumer |
-| [self-engine-sample](examples/self-engine-sample/) | The no-Docker engine end to end |
-| [opensearch-sample](examples/opensearch-sample/) | OpenSearch Serverless: full-text search, filters, aggregations |
-| [pro-sample-microservice](examples/pro-sample-microservice/) | LocalStack Pro edition + auth token |
+| [localstack-free](examples/localstack-free/) | LocalStack community 4.0 (Docker, no token): 3 services + a shared EventBridge bus — authorizers, SQS, schedules, DynamoDB stream → SNS, S3 notifications, seeds |
+| [localstack-ultimate](examples/localstack-ultimate/) | LocalStack Pro image (Ultimate plan, auth token) with the serverless-offline path preserved |
+| [self-hosted](examples/self-hosted/) | The no-Docker self engine end to end: orders → billing → notifications pipeline + an OpenSearch Serverless catalog |
+
+Each example ships an `index.html` validation console and its own dashboard
+branding — see [examples/README.md](examples/README.md) for the full port map and
+shared conventions.
 
 ## CLI
 
