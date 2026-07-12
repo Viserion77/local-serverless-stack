@@ -53,6 +53,25 @@ export interface ResolvedSelfEngineConfig {
   region: string;
 }
 
+// OpenSearch Serverless (aoss) sidecar: no LocalStack edition provides aoss,
+// so on LocalStack engines LSS serves the self-engine OpenSearch emulator
+// in-process on its own port. Never used in self mode (aoss is native there).
+export interface AossSidecarConfig {
+  // Default: enabled whenever the active engine is LocalStack.
+  enabled?: boolean;
+  // Sidecar port. Default 14567 — one above the self engine's 14566.
+  port?: number;
+}
+
+// AossSidecarConfig with every default applied plus the derived endpoint and
+// persistence root.
+export interface ResolvedAossSidecarConfig {
+  enabled: boolean;
+  port: number;
+  endpoint: string;
+  dataDir: string;
+}
+
 // Per-service packaging overrides. Keyed in `servicePackaging` by the service
 // directory name (basename) OR its path relative to the config file's directory.
 export interface ServicePackageConfig {
@@ -244,6 +263,10 @@ export interface LSSConfig {
 
   // Self-engine settings (only used when engine is "self").
   selfEngine?: SelfEngineConfig;
+
+  // OpenSearch Serverless sidecar settings (only used on LocalStack engines,
+  // which have no aoss provider).
+  aossSidecar?: AossSidecarConfig;
 
   // Dashboard branding (title, logo, theme colors). Cosmetic only.
   branding?: BrandingConfig;
@@ -602,6 +625,21 @@ export class ConfigManager {
       fallbackEndpoint: selfEngine.fallbackEndpoint ?? null,
       persistence: this.isPersistence(),
       region: this.getRegion(),
+    };
+  }
+
+  getAossSidecarConfig(): ResolvedAossSidecarConfig {
+    // The self engine serves aoss natively — the sidecar must never run there.
+    const enabled = !this.isSelfEngine() && this.config.aossSidecar?.enabled !== false;
+    const port = this.config.aossSidecar?.port ?? 14567;
+    const stateDir = this.getStateDir();
+    return {
+      enabled,
+      port,
+      endpoint: `http://localhost:${port}`,
+      // Mirrors the self-engine default so both persistence roots sit side by
+      // side (<stateDir>/aoss for test isolation, else ~/.lss/aoss).
+      dataDir: stateDir ? path.join(stateDir, 'aoss') : path.join(os.homedir(), '.lss', 'aoss'),
     };
   }
 

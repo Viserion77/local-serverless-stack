@@ -45,6 +45,18 @@ import type {
 } from './cloudformation-parser.js';
 import AdmZip from 'adm-zip';
 
+// Which base endpoint aoss clients (and the collection data-plane URLs LSS
+// logs) must target: the in-process sidecar when it is enabled — no LocalStack
+// edition provides aoss — else the active engine (the self engine serves aoss
+// natively). Exported so tests can pin the choice directly.
+export function aossEndpoint(
+  config: Pick<ConfigManager, 'getAossSidecarConfig'>,
+  engineEndpoint: string,
+): string {
+  const sidecar = config.getAossSidecarConfig();
+  return sidecar.enabled ? sidecar.endpoint : engineEndpoint;
+}
+
 export class ResourceProvisioner {
   private static instance: ResourceProvisioner;
   private dynamoClient!: DynamoDBClient;
@@ -87,7 +99,11 @@ export class ResourceProvisioner {
     this.s3Client = new S3Client({ ...config, forcePathStyle: true });
     this.lambdaClient = new LambdaClient(config);
     this.eventBridgeClient = new EventBridgeClient(config);
-    this.openSearchClient = new OpenSearchServerlessClient(config);
+    // aoss lives on the sidecar when enabled, not on the engine endpoint.
+    this.openSearchClient = new OpenSearchServerlessClient({
+      ...config,
+      endpoint: aossEndpoint(ConfigManager.getInstance(), baseConfig.endpoint),
+    });
   }
 
   getS3Client(): S3Client {
@@ -610,17 +626,22 @@ export const handler = async (event, context) => {
           description: resource.description,
         }),
       );
-      const endpoint = `${LocalStackManager.getInstance().getConfig().endpoint}/_aoss/${resource.name}`;
+      // The same base the client above targeted, so the logged data-plane URL
+      // is the one that actually answers.
+      const base = aossEndpoint(ConfigManager.getInstance(), LocalStackManager.getInstance().getConfig().endpoint);
+      const endpoint = `${base}/_aoss/${resource.name}`;
       console.log(`  ✓ Created OpenSearch collection: ${resource.name} (endpoint: ${endpoint})`);
     } catch (error: any) {
       if (error?.name === 'ConflictException' || error?.message?.includes('already exist')) {
         console.log(`  ⚠ OpenSearch collection already exists: ${resource.name}`);
       } else if (error?.message?.includes('not yet implemented') || error?.message?.includes('pro feature')) {
-        // The community LocalStack image has no aoss provider — say so instead
-        // of surfacing an opaque 501. Matched on the LocalStack message, not
-        // the error name, so genuine self-engine failures stay untouched.
+        // LocalStack has no aoss provider (someone disabled the sidecar) — say
+        // so instead of surfacing an opaque 501. Matched on the LocalStack
+        // message, not the error name, so genuine self-engine failures stay
+        // untouched.
         throw new Error(
-          `${error.message} — OpenSearch Serverless needs the self engine ("engine": "self") or a LocalStack edition that supports aoss`,
+          `${error.message} — OpenSearch Serverless needs the self engine ("engine": "self"), ` +
+            'the LSS aoss sidecar (aossSidecar.enabled), or an engine that supports aoss',
         );
       } else {
         throw error;
@@ -932,7 +953,10 @@ export const handler = async (event, context) => {
       ? new S3Client({ ...config, forcePathStyle: true })
       : this.s3Client;
     const aoss = region && region !== this.currentRegion
-      ? new OpenSearchServerlessClient(config)
+      ? new OpenSearchServerlessClient({
+          ...config,
+          endpoint: aossEndpoint(ConfigManager.getInstance(), baseConfig.endpoint),
+        })
       : this.openSearchClient;
 
     const [tables, queues, topics, buckets, collections] = await Promise.all([

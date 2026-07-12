@@ -62,7 +62,7 @@ import {
   DeleteCollectionCommand,
   ListCollectionsCommand,
 } from '@aws-sdk/client-opensearchserverless';
-import { ResourceProvisioner } from '../../../src/server/services/resource-provisioner';
+import { ResourceProvisioner, aossEndpoint } from '../../../src/server/services/resource-provisioner';
 import { ConfigManager } from '../../../src/server/services/config-manager';
 import type {
   DynamoDBResource,
@@ -1394,6 +1394,42 @@ describe('createEventBus (via provisionResources)', () => {
   });
 });
 
+describe('aoss endpoint selection (sidecar vs engine)', () => {
+  const sidecarConfig = (enabled: boolean) => ({
+    enabled,
+    port: 14567,
+    endpoint: 'http://localhost:14567',
+    dataDir: '/tmp/aoss',
+  });
+
+  it('aossEndpoint picks the sidecar endpoint when the sidecar is enabled', () => {
+    expect(aossEndpoint({ getAossSidecarConfig: () => sidecarConfig(true) }, 'http://localhost:4566'))
+      .toBe('http://localhost:14567');
+  });
+
+  it('aossEndpoint falls back to the engine endpoint when the sidecar is disabled', () => {
+    expect(aossEndpoint({ getAossSidecarConfig: () => sidecarConfig(false) }, 'http://localhost:4566'))
+      .toBe('http://localhost:4566');
+  });
+
+  it('the aoss client targets the sidecar under the LocalStack engine (enabled by default in tests)', async () => {
+    expect(ConfigManager.getInstance().getAossSidecarConfig().enabled).toBe(true);
+    (provisioner as any).initializeClients('us-east-1');
+    const endpoint = await (provisioner as any).openSearchClient.config.endpoint();
+    expect(endpoint.hostname).toBe('localhost');
+    expect(Number(endpoint.port)).toBe(14567);
+  });
+
+  it('the aoss client targets the engine endpoint when the sidecar is disabled', async () => {
+    jest.spyOn(ConfigManager.getInstance(), 'getAossSidecarConfig').mockReturnValue(sidecarConfig(false));
+    (provisioner as any).initializeClients('us-east-1');
+    const engineUrl = new URL(ConfigManager.getInstance().getEngineEndpoint());
+    const endpoint = await (provisioner as any).openSearchClient.config.endpoint();
+    expect(endpoint.hostname).toBe(engineUrl.hostname);
+    expect(Number(endpoint.port)).toBe(Number(engineUrl.port));
+  });
+});
+
 describe('createOpenSearchCollection (via provisionResources)', () => {
   it('creates the collection passing type and description through', async () => {
     openSearchMock.on(CreateCollectionCommand).resolves({});
@@ -1406,6 +1442,28 @@ describe('createOpenSearchCollection (via provisionResources)', () => {
       expect.stringContaining('✓ Created OpenSearch collection: products (endpoint: '),
     );
     expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('logs the sidecar data-plane endpoint — the base the client actually targeted', async () => {
+    openSearchMock.on(CreateCollectionCommand).resolves({});
+    await provisioner.provisionResources('svc', [opensearchResource()], {});
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('(endpoint: http://localhost:14567/_aoss/products)'),
+    );
+  });
+
+  it('logs the engine data-plane endpoint when the sidecar is disabled', async () => {
+    jest.spyOn(ConfigManager.getInstance(), 'getAossSidecarConfig').mockReturnValue({
+      enabled: false,
+      port: 14567,
+      endpoint: 'http://localhost:14567',
+      dataDir: '/tmp/aoss',
+    });
+    openSearchMock.on(CreateCollectionCommand).resolves({});
+    await provisioner.provisionResources('svc', [opensearchResource()], {});
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining(`(endpoint: ${ConfigManager.getInstance().getEngineEndpoint()}/_aoss/products)`),
+    );
   });
 
   it('swallows ConflictException on re-registration', async () => {

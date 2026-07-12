@@ -20,6 +20,7 @@ import { LambdaRuntimeManager } from './services/lambda-runtime-manager.js';
 import { GatewayManager } from './services/gateway-manager.js';
 import { SourceWatcher } from './services/source-watcher.js';
 import { startDynamoProxy } from './dev/dynamo-proxy.js';
+import type { AossSidecarHandle } from './engine/aoss-sidecar.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -28,6 +29,7 @@ const app = express();
 const configManager = ConfigManager.getInstance();
 const PORT = configManager.getDashboardPort();
 let dynamoProxyServer: http.Server | null = null;
+let aossSidecar: AossSidecarHandle | null = null;
 
 // Middleware
 app.use(cors());
@@ -58,6 +60,11 @@ app.get('/api/health', (_req, res) => {
       running: Boolean(dynamoProxyServer?.listening),
       port: configManager.getDynamoProxyPort(),
     },
+    aossSidecar: {
+      enabled: configManager.getAossSidecarConfig().enabled,
+      running: aossSidecar !== null,
+      port: configManager.getAossSidecarConfig().port,
+    },
   });
 });
 
@@ -77,6 +84,32 @@ async function start() {
     // Initialize the AWS engine (LocalStack container or in-process self engine)
     const engine = EngineManager.getInstance();
     await engine.start();
+
+    // OpenSearch Serverless (aoss) sidecar: no LocalStack edition provides
+    // aoss, so LSS serves the self-engine emulator in-process next to it.
+    // Dynamic import keeps the LocalStack-mode memory profile lean, matching
+    // how the self backend is loaded. Failure is non-fatal — everything but
+    // aoss still works.
+    const aossConfig = configManager.getAossSidecarConfig();
+    if (aossConfig.enabled) {
+      try {
+        const { startAossSidecar } = await import('./engine/aoss-sidecar.js');
+        aossSidecar = await startAossSidecar({
+          port: aossConfig.port,
+          dataDir: aossConfig.dataDir,
+          region: configManager.getRegion(),
+        });
+        console.log(
+          `🔎 OpenSearch Serverless (aoss) sidecar on ${aossSidecar.endpoint} — ` +
+            'LocalStack does not provide aoss; LSS serves it in-process',
+        );
+      } catch (error) {
+        console.warn(
+          '⚠️  Failed to start the aoss sidecar (OpenSearch Serverless will be unavailable):',
+          error instanceof Error ? error.message : error,
+        );
+      }
+    }
 
     app.listen(PORT, () => {
       console.log(`✅ Server running on http://localhost:${PORT}`);
@@ -119,6 +152,8 @@ async function shutdown() {
   await LambdaRuntimeManager.getInstance().stopAll();
   processManager.stopAll();
   await processManager.cleanup();
+  await aossSidecar?.close();
+  aossSidecar = null;
   await EngineManager.getInstance().stop();
   process.exit(0);
 }

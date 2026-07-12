@@ -256,6 +256,15 @@
       "problemMatcher": []
     },
     {
+      "label": "example localstack-ultimate: drive catalog (OpenSearch)",
+      "detail": "Indexa produtos e roda busca full-text, filtros e agregações — coleção aoss servida pelo sidecar do LSS (:14567)",
+      "type": "shell",
+      "command": "curl -s -X POST http://localhost:3002/dev/products -H 'content-type: application/json' -d '{\"name\":\"Wireless Mouse\",\"category\":\"peripherals\",\"price\":25,\"tags\":[\"usb\",\"wireless\"]}' && echo && curl -s -X POST http://localhost:3002/dev/products -H 'content-type: application/json' -d '{\"name\":\"Mechanical Keyboard\",\"category\":\"peripherals\",\"price\":90,\"tags\":[\"usb\"]}' && echo && curl -s -X POST http://localhost:3002/dev/products -H 'content-type: application/json' -d '{\"name\":\"USB Hub\",\"category\":\"accessories\",\"price\":15,\"tags\":[\"usb\"]}' && echo && echo '--- SEARCH q=wireless:' && curl -s 'http://localhost:3002/dev/search?q=wireless' && echo && echo '--- SEARCH category+maxPrice:' && curl -s 'http://localhost:3002/dev/search?category=peripherals&maxPrice=50' && echo && echo '--- STATS:' && curl -s http://localhost:3002/dev/stats && echo",
+      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
+      "icon": { "id": "search", "color": "terminal.ansiCyan" },
+      "problemMatcher": []
+    },
+    {
       "label": "example localstack-ultimate: stop",
       "type": "shell",
       "command": "npm run lss:stop",

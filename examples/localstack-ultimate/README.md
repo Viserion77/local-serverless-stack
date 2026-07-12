@@ -38,6 +38,10 @@ workflow you may already have.
   rule fired by LocalStack, purges expired sessions and leaves an audit entry.
 - **S3 + Lambda notification** — uploads under `incoming/` trigger `onUpload`, which
   reads the object back and indexes it in the Orders table.
+- **OpenSearch Serverless (LSS aoss sidecar)** — LocalStack has **no aoss support in
+  any edition**, so LSS serves the `ultimate-products` collection in-process on
+  `14567`; the catalog routes (`/products`, `/search`, `/stats`) cover indexing,
+  full-text search + filters and aggregations against it.
 - **Seeds & persistence** — tables pre-filled from `seeds/`; `persistence: true`
   keeps data across `lss:stop`/`lss:start` cycles.
 - **Dashboard branding** — per-theme brand tokens with a light default (see below).
@@ -70,6 +74,7 @@ $EDITOR .env   # set LOCALSTACK_AUTH_TOKEN=ls-xxxxxxxx
 | LocalStack (Pro image) | `4571` |
 | serverless-offline HTTP | `3002` |
 | serverless-offline Lambda invoke | `3003` |
+| LSS aoss sidecar (OpenSearch Serverless) | `14567` |
 | Validation console (`npm run console`) | `8621` |
 
 These are all different from [`localstack-free`](../localstack-free/) (which uses
@@ -132,6 +137,20 @@ curl -X POST http://localhost:3002/dev/uploads \
   -d '{"filename":"hello.txt","content":"hello from ultimate"}'
 
 curl http://localhost:3002/dev/uploads
+
+# Index a product into the ultimate-products collection — served by the LSS
+# aoss sidecar on :14567 (LocalStack has no OpenSearch Serverless)
+curl -X POST http://localhost:3002/dev/products \
+  -H 'Content-Type: application/json' \
+  -d '{"name":"Wireless Mouse","category":"peripherals","price":25,"tags":["usb","wireless"]}'
+
+# Fetch / delete it by the id returned above
+curl http://localhost:3002/dev/products/<id>
+curl -X DELETE http://localhost:3002/dev/products/<id>
+
+# Full-text search + filters, then aggregations (count + avg price per category)
+curl 'http://localhost:3002/dev/search?q=wireless&category=peripherals&maxPrice=50'
+curl http://localhost:3002/dev/stats
 ```
 
 ## Validation console
@@ -139,7 +158,8 @@ curl http://localhost:3002/dev/uploads
 `index.html` at the example root is a small browser console that pings every port and
 runs the flows above end to end (create user → list, enqueue → verify the SQS consumer
 wrote the order, order → audit trail via EventBridge, poison order → DLQ, schedule
-observation, upload → verify the S3 notification fired). Open it directly from the
+observation, upload → verify the S3 notification fired, catalog index → search →
+stats → delete against the aoss sidecar). Open it directly from the
 filesystem (`file://…/index.html`) or serve it:
 
 ```bash
@@ -188,6 +208,10 @@ removed automatically on stop).
 - Shape: this is a single service (one `serverless.yml`) owning its own EventBridge
   bus, while `localstack-free` is a four-service stack exercising authorizers and a
   **shared** bus across services.
+- **OpenSearch Serverless** — LocalStack has no aoss support in any edition (not even
+  paid ones), so LSS serves the `ultimate-products` collection **in-process** via its
+  aoss sidecar on `14567` (on by default for LocalStack engines; the port is pinned in
+  `lss.config.json`) while everything else lives in the Pro container.
 
 Run both side by side when you want to confirm a behavior is or isn't gated behind a
 paid plan.
@@ -196,13 +220,18 @@ paid plan.
 
 ```
 serverless.yml                 ← REST routes + SQS/DLQ + streams + EventBridge bus,
-                                  pattern rule, rate(2 minutes) schedule (eu-west-1)
+                                  pattern rule, rate(2 minutes) schedule, aoss
+                                  collection + policies (eu-west-1)
 lss.config.json                ← edition: pro, region eu-west-1, services incl.
-                                  "events", ports 3111/4571, branding block
+                                  "events", ports 3111/4571 (+ aoss sidecar 14567),
+                                  branding block
 .env / .env.example            ← LOCALSTACK_AUTH_TOKEN (gitignored)
 index.html                     ← validation console (file:// or npm run console)
 assets/logo.svg                ← dashboard logo/favicon
 scripts/wire-dlq.js            ← applies the RedrivePolicy to the live queue
 src/handlers/                  ← HTTP + event handlers, shared respond.js CORS helper
+src/handlers/opensearch.js     ← fetch-based OpenSearch helper (aoss sidecar :14567)
+src/handlers/createProduct.js  ← + getProduct/deleteProduct/searchProducts/
+                                  productStats — the OpenSearch catalog routes
 seeds/                         ← localstack-ultimate-Users / -Orders / -Sessions seeds
 ```

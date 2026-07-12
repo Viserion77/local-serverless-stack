@@ -74,6 +74,24 @@ Both files should contain valid JSON with the following optional properties:
     unimplemented AWS calls to a LocalStack instance during migration).
   - Full reference: [SELF_ENGINE.md](SELF_ENGINE.md).
 
+- **aossSidecar** (object, optional — only used on LocalStack engines)
+  - OpenSearch Serverless (aoss) sidecar. **No LocalStack edition provides
+    aoss**, so whenever the active engine is LocalStack, LSS serves the
+    self-engine OpenSearch emulator in-process on its own port — the aoss
+    control plane (CreateCollection, BatchGetCollection, ...) and the
+    OpenSearch data plane (`http://localhost:14567/_aoss/<collection>`) both
+    answer there. On the self engine the sidecar never runs: aoss is native.
+  - `enabled` (boolean, default `true` on LocalStack engines): set `false` to
+    opt out — aoss provisioning then fails with a hint pointing back here.
+  - `port` (number, default `14567` — one above the self engine's 14566): the
+    sidecar's endpoint is `http://localhost:<port>`.
+  - Data persists under `~/.lss/aoss` (or `<stateDir>/aoss` when `stateDir` is
+    set), independent of the LocalStack container's lifecycle.
+  - Example — move the sidecar off a busy port:
+    ```jsonc
+    "aossSidecar": { "port": 24567 }
+    ```
+
 - **localstackPort** (number, default: 4566)
   - Port where LocalStack container will expose its API
   - Example: `4566`

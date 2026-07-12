@@ -196,6 +196,22 @@ const CONFIG = {
         },
       ],
     },
+    {
+      title: 'Catalog: index, search, aggregate, delete (OpenSearch Serverless)',
+      desc: 'Indexes a product into the ultimate-products collection — LocalStack has no aoss in any edition, so the collection is served by the LSS aoss sidecar (:14567) — then fetches it by id, runs a filtered full-text search, reads the category aggregations and deletes it.',
+      steps: [
+        {
+          name: 'index product', method: 'POST', url: 'http://localhost:3002/dev/products',
+          body: { name: 'Wireless Mouse', category: 'peripherals', price: 25, tags: ['usb', 'wireless'] },
+          extract: { productId: 'id' },
+          pause: 1000,
+        },
+        { name: 'get product by id', method: 'GET', url: 'http://localhost:3002/dev/products/{{productId}}' },
+        { name: 'search (full-text + filters)', method: 'GET', url: 'http://localhost:3002/dev/search?q=wireless&category=peripherals&maxPrice=50' },
+        { name: 'category stats (aggregations)', method: 'GET', url: 'http://localhost:3002/dev/stats' },
+        { name: 'delete product', method: 'DELETE', url: 'http://localhost:3002/dev/products/{{productId}}' },
+      ],
+    },
   ],
 };
 // ---------------------------------------------------------------------------

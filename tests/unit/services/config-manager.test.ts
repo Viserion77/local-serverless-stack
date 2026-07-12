@@ -1002,6 +1002,48 @@ describe('engine selection (self engine)', () => {
   });
 });
 
+describe('getAossSidecarConfig', () => {
+  function cmWith(config: Record<string, unknown>): CM {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify(config));
+    return freshConfigManager();
+  }
+
+  it('defaults: enabled on the LocalStack engine, port 14567, dataDir under ~/.lss', () => {
+    const resolved = freshConfigManager().getAossSidecarConfig();
+    expect(resolved.enabled).toBe(true);
+    expect(resolved.port).toBe(14567);
+    expect(resolved.endpoint).toBe('http://localhost:14567');
+    expect(resolved.dataDir).toBe(path.join(require('os').homedir(), '.lss', 'aoss'));
+  });
+
+  it('defaults dataDir under stateDir when stateDir is set (test isolation)', () => {
+    const cm = cmWith({ stateDir: '/abs/state' });
+    expect(cm.getAossSidecarConfig().dataDir).toBe(path.join('/abs/state', 'aoss'));
+  });
+
+  it('aossSidecar.enabled false opts out', () => {
+    expect(cmWith({ aossSidecar: { enabled: false } }).getAossSidecarConfig().enabled).toBe(false);
+  });
+
+  it('an explicit enabled true stays on (LocalStack engine)', () => {
+    expect(cmWith({ aossSidecar: { enabled: true } }).getAossSidecarConfig().enabled).toBe(true);
+  });
+
+  it('a custom port flows into the endpoint', () => {
+    const resolved = cmWith({ aossSidecar: { port: 24567 } }).getAossSidecarConfig();
+    expect(resolved.port).toBe(24567);
+    expect(resolved.endpoint).toBe('http://localhost:24567');
+  });
+
+  it('the self engine forces enabled=false — it serves aoss natively', () => {
+    process.env.LSS_ENGINE = 'self';
+    const resolved = cmWith({ aossSidecar: { enabled: true } }).getAossSidecarConfig();
+    expect(resolved.enabled).toBe(false);
+  });
+});
+
 describe('getInvokeHost under the self engine', () => {
   it('defaults to 127.0.0.1 in self mode (nothing runs in Docker)', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');

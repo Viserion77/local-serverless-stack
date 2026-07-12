@@ -16,6 +16,11 @@ provider:
     ORDER_EVENTS_BUS: ultimate-order-events
     UPLOADS_BUCKET: localstack-ultimate-uploads
     AWS_ENDPOINT: http://localhost:4571
+    # Served by the LSS aoss sidecar (LocalStack has no OpenSearch Serverless
+    # in any edition): <sidecar>/_aoss/<collection-name>. On real AWS you would
+    # read it from GetAtt ProductsCollection.CollectionEndpoint.
+    OPENSEARCH_ENDPOINT: http://localhost:14567/_aoss/ultimate-products
+    PRODUCTS_INDEX: products
 
 plugins:
   - serverless-lss
@@ -144,6 +149,52 @@ functions:
     handler: src/handlers/purgeSessions.handler
     events:
       - schedule: rate(2 minutes)
+
+  # OpenSearch Serverless product catalog. LocalStack has NO aoss support in
+  # any edition, so these handlers talk straight to the LSS aoss sidecar
+  # (OPENSEARCH_ENDPOINT above) — the ultimate-products collection declared in
+  # resources is provisioned there on registration.
+  createProduct:
+    handler: src/handlers/createProduct.handler
+    events:
+      - http:
+          path: /products
+          method: post
+          cors: true
+
+  getProduct:
+    handler: src/handlers/getProduct.handler
+    events:
+      - http:
+          path: /products/{id}
+          method: get
+          cors: true
+
+  deleteProduct:
+    handler: src/handlers/deleteProduct.handler
+    events:
+      - http:
+          path: /products/{id}
+          method: delete
+          cors: true
+
+  # GET /search?q=&category=&maxPrice= — full-text search + filters.
+  searchProducts:
+    handler: src/handlers/searchProducts.handler
+    events:
+      - http:
+          path: /search
+          method: get
+          cors: true
+
+  # GET /stats — terms + avg aggregations over the whole catalog.
+  productStats:
+    handler: src/handlers/productStats.handler
+    events:
+      - http:
+          path: /stats
+          method: get
+          cors: true
 
 resources:
   Resources:
@@ -274,6 +325,34 @@ resources:
                   Rules:
                     - Name: prefix
                       Value: incoming/
+
+    # OpenSearch Serverless collection — LocalStack cannot provision this
+    # (no aoss in any edition), so LSS serves it in-process via the aoss
+    # sidecar on 14567; the data plane is <sidecar>/_aoss/ultimate-products.
+    ProductsCollection:
+      Type: AWS::OpenSearchServerless::Collection
+      Properties:
+        Name: ultimate-products
+        Type: SEARCH
+        Description: Ultimate product catalog full-text search
+
+    # On AWS a collection cannot be created without an encryption policy and is
+    # unreachable without a data-access policy. LSS accepts and skips both with
+    # a registration warning — nothing enforces them locally — so the template
+    # stays deployable as-is to the real cloud.
+    ProductsEncryptionPolicy:
+      Type: AWS::OpenSearchServerless::SecurityPolicy
+      Properties:
+        Name: ultimate-products-encryption
+        Type: encryption
+        Policy: '{"Rules":[{"ResourceType":"collection","Resource":["collection/ultimate-products"]}],"AWSOwnedKey":true}'
+
+    ProductsAccessPolicy:
+      Type: AWS::OpenSearchServerless::AccessPolicy
+      Properties:
+        Name: ultimate-products-access
+        Type: data
+        Policy: '[{"Rules":[{"ResourceType":"index","Resource":["index/ultimate-products/*"],"Permission":["aoss:*"]}],"Principal":["arn:aws:iam::000000000000:role/local-dev"]}]'
 
 package:
   individually: false
