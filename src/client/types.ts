@@ -213,6 +213,8 @@ export interface ResourceOwners {
   queues: Array<{ name: string; service: string }>;
   topics: Array<{ name: string; service: string }>;
   buckets: Array<{ name: string; service: string }>;
+  // Absent on orchestrators older than 0.9.0.
+  collections?: Array<{ name: string; service: string }>;
 }
 
 // ── Services ──────────────────────────────────────────────────────────────────

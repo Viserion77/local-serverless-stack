@@ -5,8 +5,8 @@ A shared **EventBridge bus** covered 100% by LSS — including the piece that us
 | Service | Role | API port | Invoke port |
 |---|---|---|---|
 | `events-stack` | **resources-only** — owns the `domain-events` bus (+ an Archive, which LSS skips with a warning). No functions, no ports. | — | — |
-| `producer-service` | `POST /signups` publishes `UserSignedUp` to the bus with a plain SDK `PutEvents`. | `3021` | `13021` |
-| `consumer-service` | `eventBridge`-triggered Lambda (pattern `source: producer`, `detail-type: UserSignedUp`) stores each event in DynamoDB; `GET /events` lists them. | `3022` | `13022` |
+| `producer-service` | `POST /signups` publishes `UserSignedUp` to the bus with a plain SDK `PutEvents`. | `3621` | `13621` |
+| `consumer-service` | `eventBridge`-triggered Lambda (pattern `source: producer`, `detail-type: UserSignedUp`) stores each event in DynamoDB; `GET /events` lists them. | `3622` | `13622` |
 
 What this exercises, end to end:
 
@@ -16,7 +16,7 @@ What this exercises, end to end:
 - **Real event shape** — the consumer handler receives the event exactly as AWS delivers it (`source`, `detail-type`, `detail`), *not* wrapped in `Records`.
 - **Pattern filtering** — events with a non-matching `source`/`detail-type` are not delivered.
 
-> **Ports** — LSS server `3130`, LocalStack `14566`, service APIs `3021`–`3022`, invoke `13021`–`13022`. LocalStack deliberately sits **outside the standard 4566–4599 range**: a real LocalStack (e.g. from another project's docker-compose) usually publishes that whole range, and on Docker Desktop/WSL2 setups `localhost` connections can silently land on it instead of this example's container.
+> **Ports** — LSS server `3130`, LocalStack `14566`, service APIs `3621`–`3622`, invoke `13621`–`13622`. LocalStack deliberately sits **outside the standard 4566–4599 range**: a real LocalStack (e.g. from another project's docker-compose) usually publishes that whole range, and on Docker Desktop/WSL2 setups `localhost` connections can silently land on it instead of this example's container.
 
 ## Prerequisites
 
@@ -43,14 +43,14 @@ npm run lss:start
 npm run register:all
 
 # 3. Publish a signup through the producer
-curl -s -X POST http://localhost:3021/signups \
+curl -s -X POST http://localhost:3621/signups \
   -H 'content-type: application/json' \
   -d '{"userId":"u-100","email":"ana@example.com"}'
 # → {"published":true,"eventId":"..."}
 
 # 4. Watch it arrive at the consumer (first delivery cold-starts the proxy
 #    Lambda in LocalStack — give it ~10s)
-curl -s http://localhost:3022/events
+curl -s http://localhost:3622/events
 # → {"count":1,"events":[{"detailType":"UserSignedUp","detail":{"userId":"u-100",...}}]}
 
 # Done?
@@ -60,11 +60,11 @@ npm run lss:stop
 ## How the delivery works
 
 ```
-POST /signups (3021)                                # LSS API gateway → producer worker
+POST /signups (3621)                                # LSS API gateway → producer worker
   └─ PutEvents → domain-events bus                  # LocalStack EventBridge
        └─ rule consumer-service-dev-onUserSignedUp-rule-1 (pattern match)
             └─ target: proxy Lambda in LocalStack
-                 └─ POST host.docker.internal:13022 # LSS Invoke API
+                 └─ POST host.docker.internal:13622 # LSS Invoke API
                       └─ onUserSignedUp handler (consumer worker) → DynamoDB
 ```
 

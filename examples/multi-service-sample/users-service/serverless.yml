@@ -31,8 +31,8 @@ custom:
     enabled: true
     orchestratorUrl: http://localhost:3120
   lss:
-    apiPort: 3010
-    invokePort: 13010
+    apiPort: 3610
+    invokePort: 13610
 
 functions:
   # v2 "simple response" authorizer ({isAuthorized, context}) — no events; it

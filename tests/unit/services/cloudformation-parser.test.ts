@@ -766,6 +766,18 @@ describe('parseOpenSearchCollection', () => {
     expect(resources[0].name).toBe('search');
   });
 
+  it('bends fallback names into the AOSS naming rule (charset, leading letter, length)', () => {
+    const parse = (logicalId: string) =>
+      (parser.parse({
+        Resources: { [logicalId]: { Type: 'AWS::OpenSearchServerless::Collection', Properties: {} } },
+      } as never) as OpenSearchCollectionResource[])[0].name;
+
+    expect(parse('My_Search_Index')).toBe('my-search-index'); // underscores → hyphens
+    expect(parse('2FastCollection')).toBe('fastcollection'); // leading digits stripped
+    expect(parse('DB')).toBe('col-db'); // too short → prefixed
+    expect(parse('A'.repeat(40))).toHaveLength(32); // capped at 32
+  });
+
   it('skips SecurityPolicy/AccessPolicy/VpcEndpoint with a warning (nothing enforces them locally)', () => {
     const warnings: string[] = [];
     const resources = parser.parse({

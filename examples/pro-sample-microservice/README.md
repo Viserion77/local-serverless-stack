@@ -28,8 +28,8 @@ $EDITOR .env   # set LOCALSTACK_AUTH_TOKEN=ls-xxxxxxxx
 |---|---|
 | LSS dashboard / API | `3111` |
 | LocalStack | `4571` |
-| serverless-offline HTTP | `3010` |
-| serverless-offline Lambda invoke | `3011` |
+| serverless-offline HTTP | `3002` |
+| serverless-offline Lambda invoke | `3003` |
 
 These are all different from `sample-microservice` (which uses `3110 / 4570 / 3000 / 3001`) **and** from a default external LocalStack on `4566`, so you can run any combination at the same time without conflict — unless your external LocalStack publishes the whole `4566–4599` range (a common install default), in which case `4571` sits inside it and will collide.
 
@@ -49,27 +49,27 @@ Dashboard: <http://localhost:3111>.
 
 ## Try the HTTP routes
 
-The offline server binds to **port 3010** here (not 3000):
+The offline server binds to **port 3002** here (not 3000):
 
 ```bash
-curl http://localhost:3010/dev/health
+curl http://localhost:3002/dev/health
 
 # Create a user
-curl -X POST http://localhost:3010/dev/users \
+curl -X POST http://localhost:3002/dev/users \
   -H 'Content-Type: application/json' \
   -d '{"name":"Dora","email":"dora@example.com"}'
 
 # Enqueue an order
-curl -X POST http://localhost:3010/dev/orders \
+curl -X POST http://localhost:3002/dev/orders \
   -H 'Content-Type: application/json' \
   -d '{"userId":"u-alice","items":[{"sku":"BOOK-02","price":42,"qty":1}]}'
 
 # Upload to S3 -> triggers the onUpload Lambda via bucket notification
-curl -X POST http://localhost:3010/dev/uploads \
+curl -X POST http://localhost:3002/dev/uploads \
   -H 'Content-Type: application/json' \
   -d '{"filename":"hello.txt","content":"hello from pro"}'
 
-curl http://localhost:3010/dev/uploads
+curl http://localhost:3002/dev/uploads
 ```
 
 ## Reset

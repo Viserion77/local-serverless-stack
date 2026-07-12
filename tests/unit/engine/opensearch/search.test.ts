@@ -83,6 +83,10 @@ describe('matchesQuery operators', () => {
     expect(matchesQuery({ range: { releasedAt: { gte: '2026-01-01', lte: '2026-03-31' } } }, MOUSE)).toBe(true);
     expect(matchesQuery({ range: { releasedAt: { gt: '2026-02-01' } } }, MOUSE)).toBe(false);
     expect(matchesQuery({ range: { discontinued: { gte: 1 } } }, HUB)).toBe(false); // null never matches
+    // Null bounds are ignored (not coerced to 0); empty strings never compare
+    // numerically ('' would coerce to 0 and match everything positive).
+    expect(matchesQuery({ range: { price: { lte: null, gte: 20 } } }, MOUSE)).toBe(true);
+    expect(matchesQuery({ range: { name: { gt: '' } } }, MOUSE)).toBe(true); // lexicographic, not 0
     expect(() => matchesQuery({ range: { price: { between: [1, 2] } } }, MOUSE)).toThrow(/between/);
     expect(() => matchesQuery({ range: { price: 5 } }, MOUSE)).toThrow(/bounds/);
   });
@@ -174,6 +178,20 @@ describe('normalizeSort + sortHits', () => {
     expect(sortHits(docs, normalizeSort(['_score', { _id: 'asc' }])).map(d => d.id)).toEqual(['1', '2', '3']);
     expect(sortHits(docs, []).map(d => d.id)).toEqual(['2', '3', '1']);
   });
+
+  test('mixed number/string values stay transitive and fall through to tiebreakers', () => {
+    // Numbers rank before strings; each class keeps its own order — so pure
+    // numbers can never come back misordered because strings sat in between.
+    const mixed = [100, '2', 3, 10, '20', 1].map((price, i) => doc(String(i), { price }));
+    const sorted = sortHits(mixed, normalizeSort([{ price: 'asc' }])).map(d => (d.source as any).price);
+    expect(sorted).toEqual([1, 3, 10, 100, '2', '20']);
+
+    // Equal values fall through to the explicit tiebreaker, whatever the
+    // input order was.
+    const tie = [doc('a', { price: 'same' }), doc('b', { price: 'same' })];
+    expect(sortHits(tie, normalizeSort([{ price: 'asc' }, { _id: 'desc' }])).map(d => d.id)).toEqual(['b', 'a']);
+    expect(sortHits([tie[1], tie[0]], normalizeSort([{ price: 'asc' }, { _id: 'desc' }])).map(d => d.id)).toEqual(['b', 'a']);
+  });
 });
 
 describe('filterSource', () => {
@@ -216,6 +234,22 @@ describe('computeAggregations', () => {
     ]);
     const nulls = computeAggregations({ d: { terms: { field: 'discontinued' } } }, docs) as any;
     expect(nulls.d.buckets).toEqual([]);
+  });
+
+  test('numeric fields keep numeric bucket keys and sum_other_doc_count sums documents', () => {
+    const priced = computeAggregations({ p: { terms: { field: 'price' } } }, docs) as any;
+    expect(priced.p.buckets).toEqual([
+      { key: 15, doc_count: 1 },
+      { key: 25, doc_count: 1 },
+      { key: 90, doc_count: 1 },
+    ]);
+
+    // 2 docs share 'peripherals'; size:1 keeps it and the OTHER bucket's
+    // documents (1 accessory) are summed — not the count of excluded terms.
+    const many = [...docs, doc('4', { category: 'accessories' }), doc('5', { category: 'accessories' })];
+    const sized = computeAggregations({ c: { terms: { field: 'category', size: 1 } } }, many) as any;
+    expect(sized.c.buckets).toEqual([{ key: 'accessories', doc_count: 3 }]);
+    expect(sized.c.sum_other_doc_count).toBe(2);
   });
 
   test('metric aggregations: avg/sum/min/max/value_count and empty-set null', () => {

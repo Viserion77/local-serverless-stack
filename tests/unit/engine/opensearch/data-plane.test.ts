@@ -152,6 +152,10 @@ describe('OpenSearchEmulator data plane', () => {
       expect(json(missing).error.type).toBe('index_not_found_exception');
       const getMissing = await rest('GET', '/_aoss/products/items');
       expect(getMissing.status).toBe(404);
+      // The documents were destroyed with the index — recreating the same
+      // index must NOT resurrect them from a leftover table file.
+      await rest('PUT', '/_aoss/products/items');
+      expect(json(await rest('GET', '/_aoss/products/items/_doc/1'))).toMatchObject({ found: false });
     });
 
     test('_mapping GET returns and PUT merges properties', async () => {
@@ -206,12 +210,15 @@ describe('OpenSearchEmulator data plane', () => {
       expect((await rest('HEAD', '/_aoss/products/fresh')).status).toBe(200);
     });
 
-    test('malformed and non-object bodies are mapper_parsing_exception', async () => {
+    test('malformed, non-object and empty bodies are mapper_parsing_exception', async () => {
       const bad = await rest('PUT', '/_aoss/products/items/_doc/1', '{nope');
       expect(bad.status).toBe(400);
       expect(json(bad).error.type).toBe('mapper_parsing_exception');
       const array = await rest('PUT', '/_aoss/products/items/_doc/1', '[1]');
       expect(array.status).toBe(400);
+      const empty = await rest('PUT', '/_aoss/products/items/_doc/1');
+      expect(empty.status).toBe(400);
+      expect(json(empty).error.reason).toContain('request body is required');
     });
 
     test('GET/HEAD/DELETE distinguish missing docs from missing indexes', async () => {
@@ -301,12 +308,27 @@ describe('OpenSearchEmulator data plane', () => {
         { delete: { _index: 'items', _id: 'ghost' } },
       ));
       const body = json(response);
-      expect(body.errors).toBe(true); // the delete of "ghost" is a 404 item
+      // A delete of a missing doc reports 404 in its slot but is NOT an error.
+      expect(body.errors).toBe(false);
       expect(body.items).toHaveLength(4);
       expect(body.items[0].index).toMatchObject({ _id: '1', status: 201, result: 'created' });
       expect(body.items[1].create).toMatchObject({ _id: '2', status: 201 });
       expect(body.items[2].update).toMatchObject({ _id: 'existing', status: 200, result: 'updated' });
-      expect(body.items[3].delete).toMatchObject({ _id: 'ghost', status: 404 });
+      expect(body.items[3].delete).toMatchObject({ _id: 'ghost', status: 404, result: 'not_found' });
+    });
+
+    test('numeric _ids are coerced to strings; update/delete without _id are rejected', async () => {
+      const body = json(await rest('POST', '/_aoss/products/items/_bulk', ndjson(
+        { index: { _id: 123 } }, { name: 'mouse' },
+      )));
+      expect(body.items[0].index).toMatchObject({ _id: '123', status: 201 });
+      expect(json(await rest('GET', '/_aoss/products/items/_doc/123'))).toMatchObject({ found: true });
+
+      const noIdUpdate = await rest('POST', '/_aoss/products/items/_bulk', ndjson({ update: {} }, { doc: {} }));
+      expect(noIdUpdate.status).toBe(400);
+      expect(json(noIdUpdate).error.reason).toContain('requires an _id');
+      const noIdDelete = await rest('POST', '/_aoss/products/items/_bulk', ndjson({ delete: {} }));
+      expect(noIdDelete.status).toBe(400);
     });
 
     test('the index-scoped _bulk uses the path index as the default and errors flag stays false on success', async () => {
@@ -418,6 +440,31 @@ describe('OpenSearchEmulator data plane', () => {
       const response = await rest('GET', '/_aoss/products/ghost/_search');
       expect(response.status).toBe(404);
       expect(json(response).error.type).toBe('index_not_found_exception');
+    });
+
+    test('"?" in index expressions is a literal, never a regex quantifier', async () => {
+      // A leading '?' with a wildcard must not crash regex compilation.
+      const leading = json(await rest('GET', `/_aoss/products/${encodeURIComponent('?*')}/_search`));
+      expect(leading.hits.total.value).toBe(0);
+      // An embedded '?' does not act as an optional quantifier ("it?ems*"
+      // would otherwise match "items").
+      const embedded = json(await rest('GET', `/_aoss/products/${encodeURIComponent('it?ems')}*/_search`));
+      expect(embedded.hits.total.value).toBe(0);
+    });
+
+    test('scroll and PIT requests are rejected loudly instead of silently truncating', async () => {
+      const byParam = await rest('POST', '/_aoss/products/items/_search', {}, { scroll: '1m' });
+      expect(byParam.status).toBe(400);
+      expect(json(byParam).error.reason).toContain('scroll');
+      const byBody = await rest('POST', '/_aoss/products/items/_search', { pit: { id: 'x' } });
+      expect(byBody.status).toBe(400);
+    });
+
+    test('null range bounds are ignored, not coerced to 0', async () => {
+      const body = json(await rest('POST', '/_aoss/products/items/_search', {
+        query: { range: { price: { lte: null, gte: 20 } } },
+      }));
+      expect(body.hits.total.value).toBe(2); // 25 and 90 — lte:null ignored
     });
 
     test('?q= supports bare text and field:value; combining q with a body query is rejected', async () => {

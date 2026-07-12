@@ -1424,26 +1424,10 @@ describe('createOpenSearchCollection (via provisionResources)', () => {
     expect(console.error).not.toHaveBeenCalled();
   });
 
-  it('points at the self engine when the backing engine has no aoss provider (InternalFailure)', async () => {
+  it('genuine engine failures (e.g. a self-engine InternalFailure) surface untouched', async () => {
     openSearchMock.on(CreateCollectionCommand).rejects(namedError('InternalFailure', 'boom'));
     await provisioner.provisionResources('svc', [opensearchResource()], {});
-    expect(console.error).toHaveBeenCalledWith(
-      'Failed to provision opensearch:products:',
-      expect.stringContaining('needs the self engine'),
-    );
-  });
-
-  it('stringifies message-less engine errors instead of printing "undefined"', async () => {
-    openSearchMock.on(CreateCollectionCommand).rejects({ name: 'InternalFailure' } as never);
-    await provisioner.provisionResources('svc', [opensearchResource()], {});
-    expect(console.error).toHaveBeenCalledWith(
-      'Failed to provision opensearch:products:',
-      expect.not.stringContaining('undefined —'),
-    );
-    expect(console.error).toHaveBeenCalledWith(
-      'Failed to provision opensearch:products:',
-      expect.stringContaining('needs the self engine'),
-    );
+    expect(console.error).toHaveBeenCalledWith('Failed to provision opensearch:products:', 'boom');
   });
 
   it('points at the self engine on LocalStack "not yet implemented" messages', async () => {
@@ -1452,6 +1436,27 @@ describe('createOpenSearchCollection (via provisionResources)', () => {
     );
     await provisioner.provisionResources('svc', [opensearchResource()], {});
     expect(console.error).toHaveBeenCalledWith(
+      'Failed to provision opensearch:products:',
+      expect.stringContaining('needs the self engine'),
+    );
+  });
+
+  it('points at the self engine on LocalStack "pro feature" messages', async () => {
+    openSearchMock.on(CreateCollectionCommand).rejects(
+      namedError('NotImplementedError', "API for service 'opensearchserverless' is a pro feature"),
+    );
+    await provisioner.provisionResources('svc', [opensearchResource()], {});
+    expect(console.error).toHaveBeenCalledWith(
+      'Failed to provision opensearch:products:',
+      expect.stringContaining('needs the self engine'),
+    );
+  });
+
+  it('message-less errors rethrow raw instead of matching the LocalStack hints', async () => {
+    openSearchMock.on(CreateCollectionCommand).rejects({ name: 'WeirdFailure' } as never);
+    await provisioner.provisionResources('svc', [opensearchResource()], {});
+    expect(console.error).toHaveBeenCalledWith('Failed to provision opensearch:products:', expect.anything());
+    expect(console.error).not.toHaveBeenCalledWith(
       'Failed to provision opensearch:products:',
       expect.stringContaining('needs the self engine'),
     );

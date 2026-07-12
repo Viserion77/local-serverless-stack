@@ -2,7 +2,7 @@
   "name": "auth-service-example",
   "version": "0.0.0",
   "private": true,
-  "description": "JavaScript REST API (payload v1) with a local REQUEST authorizer, served by LSS on port 3011 (invoke 13011).",
+  "description": "JavaScript REST API (payload v1) with a local REQUEST authorizer, served by LSS on port 3611 (invoke 13611).",
   "scripts": {
     "package": "serverless package",
     "register": "serverless package"

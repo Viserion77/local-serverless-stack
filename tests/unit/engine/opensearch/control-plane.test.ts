@@ -93,9 +93,19 @@ describe('OpenSearchEmulator control plane', () => {
     expect(detail.id).toMatch(/^[0-9a-f]{20}$/);
     expect(detail.arn).toBe(`arn:aws:aoss:${REGION}:${ACCOUNT}:collection/${detail.id}`);
 
-    // Deterministic: a second emulator over the same config derives the same id.
-    const again = parseBody(await call('BatchGetCollection', { names: ['products'] }));
-    expect(again.collectionDetails[0].id).toBe(detail.id);
+    // Deterministic: a completely fresh engine (new store, new data dir)
+    // derives the same id for the same account/region/name.
+    const other = makeCtx();
+    try {
+      const fresh = new OpenSearchEmulator(other.ctx);
+      const recreated = parseBody(
+        await fresh.handle(controlReq('CreateCollection', { name: 'products', type: 'SEARCH' })),
+      );
+      expect(recreated.createCollectionDetail.id).toBe(detail.id);
+    } finally {
+      other.ctx.store.stopSweeper();
+      fs.rmSync(other.dir, { recursive: true, force: true });
+    }
   });
 
   test('CreateCollection defaults the type to TIMESERIES', async () => {
@@ -182,26 +192,28 @@ describe('OpenSearchEmulator control plane', () => {
   });
 
   test('DeleteCollection drops the collection indices and their documents', async () => {
+    const dataPlane = (method: string, rawPath: string, body = ''): Promise<AwsResponse> =>
+      emulator.handle({
+        ...controlReq('ignored', {}),
+        headers: {},
+        method,
+        rawPath,
+        body: Buffer.from(body, 'utf8'),
+      });
+
     await call('CreateCollection', { name: 'products' });
-    const put = await emulator.handle({
-      ...controlReq('ignored', {}),
-      headers: {},
-      method: 'PUT',
-      rawPath: '/_aoss/products/items/_doc/1',
-      body: Buffer.from('{"a":1}', 'utf8'),
-    });
-    expect(put.status).toBe(201);
+    expect((await dataPlane('PUT', '/_aoss/products/items/_doc/1', '{"a":1}')).status).toBe(201);
 
     await call('DeleteCollection', { id: 'products' });
     await call('CreateCollection', { name: 'products' });
-    const search = await emulator.handle({
-      ...controlReq('ignored', {}),
-      headers: {},
-      method: 'GET',
-      rawPath: '/_aoss/products/_search',
-      body: Buffer.alloc(0),
-    });
+    const search = await dataPlane('GET', '/_aoss/products/_search');
     expect(JSON.parse(String(search.body)).hits.total.value).toBe(0);
+    // Recreating the SAME index must not resurrect the old documents from a
+    // leftover table file — this is what proves the destroy actually ran.
+    await dataPlane('PUT', '/_aoss/products/items');
+    const doc = await dataPlane('GET', '/_aoss/products/items/_doc/1');
+    expect(doc.status).toBe(404);
+    expect(JSON.parse(String(doc.body))).toMatchObject({ found: false });
   });
 
   test('unknown control-plane operations fail loudly with NotImplemented', async () => {

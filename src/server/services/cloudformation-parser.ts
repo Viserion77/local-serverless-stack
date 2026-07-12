@@ -324,10 +324,19 @@ export class CloudFormationParser {
     return {
       type: 'opensearch',
       logicalId: key,
-      name: (props.Name as string) || key.toLowerCase(),
+      // An explicit Name is passed through untouched (CreateCollection
+      // validates it); the logical-id fallback is bent into the AOSS naming
+      // rule (3-32 chars, ^[a-z][a-z0-9-]*$) so it can actually provision.
+      name: (props.Name as string) || this.collectionNameFromLogicalId(key),
       collectionType: props.Type as string | undefined,
       description: props.Description as string | undefined,
     };
+  }
+
+  private collectionNameFromLogicalId(key: string): string {
+    let name = key.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^[^a-z]+/, '').slice(0, 32);
+    if (name.length < 3) name = `col-${name}`.slice(0, 32);
+    return name;
   }
 
   private parseEventBus(key: string, resource: CloudFormationResource): EventBusResource {

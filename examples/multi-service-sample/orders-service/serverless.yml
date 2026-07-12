@@ -21,8 +21,8 @@ custom:
     enabled: true
     orchestratorUrl: http://localhost:3120
   lss:
-    apiPort: 3012
-    invokePort: 13012
+    apiPort: 3612
+    invokePort: 13612
 
 functions:
   # POST /orders — protected by a CROSS-SERVICE authorizer: the Lambda behind
@@ -67,7 +67,7 @@ functions:
           batchSize: 5
 
   # Schedule trigger emulation is a documented TODO — LSS still registers the
-  # function, so it is invocable through the Lambda Invoke API on port 13012.
+  # function, so it is invocable through the Lambda Invoke API on port 13612.
   cleanupExpiredOrders:
     handler: src/handlers/cleanupExpiredOrders.handler
     events:

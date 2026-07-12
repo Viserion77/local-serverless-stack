@@ -21,8 +21,8 @@ custom:
     enabled: true
     orchestratorUrl: http://localhost:3150
   lss:
-    apiPort: 3041
-    invokePort: 13041
+    apiPort: 3641
+    invokePort: 13641
 
 functions:
   # POST /products — indexes a product document into OpenSearch.

@@ -10,6 +10,10 @@ exports.handler = async () => {
     },
   });
 
+  // No index yet (nothing was ever created) → empty stats, not an error.
+  if (status === 404) {
+    return { statusCode: 200, body: JSON.stringify({ total: 0, averagePrice: null, categories: [] }) };
+  }
   if (status >= 400) {
     return { statusCode: 502, body: JSON.stringify({ error: 'aggregation failed', detail: json }) };
   }

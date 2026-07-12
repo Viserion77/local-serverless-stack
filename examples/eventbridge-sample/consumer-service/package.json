@@ -2,7 +2,7 @@
   "name": "consumer-service-example",
   "version": "0.0.0",
   "private": true,
-  "description": "Consumes UserSignedUp from the shared domain-events bus via an eventBridge trigger and stores each event in DynamoDB. Port 3022 (invoke 13022).",
+  "description": "Consumes UserSignedUp from the shared domain-events bus via an eventBridge trigger and stores each event in DynamoDB. Port 3622 (invoke 13622).",
   "scripts": {
     "package": "serverless package",
     "register": "serverless package"

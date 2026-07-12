@@ -25,6 +25,11 @@ exports.handler = async (event) => {
     size: 20,
   });
 
+  // The index only exists after the first product is created — an empty
+  // catalog is an empty result, not an error.
+  if (status === 404) {
+    return { statusCode: 200, body: JSON.stringify({ total: 0, products: [] }) };
+  }
   if (status >= 400) {
     return { statusCode: 502, body: JSON.stringify({ error: 'search failed', detail: json }) };
   }

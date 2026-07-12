@@ -116,5 +116,7 @@ run `lss seed`. Worst case, delete `dataDir` and start clean.
   tokenize-and-compare with no analyzers or relevance ranking (`_score` is a
   constant 1 — filtering is exact, ordering needs an explicit `sort`), and
   encryption/network/data-access policies are not enforced (the CFN resources
-  are skipped with a registration warning).
+  are skipped with a registration warning). Unsigned data-plane requests
+  (plain `curl`) resolve to the engine's default region — SigV4-signed clients
+  carry their own region, like every other service.
 - LocalStack volume data does not migrate; re-register + `lss seed`.

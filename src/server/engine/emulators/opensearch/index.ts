@@ -547,6 +547,9 @@ export class OpenSearchEmulator implements RestEmulator {
     createOnly: boolean,
   ): Promise<AwsResponse> {
     this.assertIndexName(index);
+    if (req.body.length === 0) {
+      throw new OsError(400, 'mapper_parsing_exception', 'request body is required for indexing a document');
+    }
     const source = parseBodyJson(req, 'mapper_parsing_exception');
     const indices = await this.indices(region);
     // Indexing into an absent index creates it, like OpenSearch's default
@@ -673,7 +676,14 @@ export class OpenSearchEmulator implements RestEmulator {
       }
       const meta = (rawMeta ?? {}) as Record<string, unknown>;
       const index = typeof meta._index === 'string' ? meta._index : defaultIndex;
-      const id = typeof meta._id === 'string' ? meta._id : randomUUID();
+      // Clients send numeric _ids too; OpenSearch coerces them to strings.
+      // Auto-generation only applies to index/create — update/delete against
+      // a random id would silently target nothing.
+      const givenId = typeof meta._id === 'string' || typeof meta._id === 'number' ? String(meta._id) : undefined;
+      if (givenId === undefined && (op === 'update' || op === 'delete')) {
+        throw new OsError(400, 'illegal_argument_exception', `Bulk action "${op}" at line ${cursor} requires an _id`);
+      }
+      const id = givenId ?? randomUUID();
 
       let payload: Buffer = Buffer.alloc(0);
       if (op !== 'delete') {
@@ -697,7 +707,9 @@ export class OpenSearchEmulator implements RestEmulator {
           : op === 'update' ? await this.updateDoc(subReq, region, collection, index, id)
           : await this.indexDoc(subReq, region, collection, index, id, op === 'create');
         const body = JSON.parse(String(response.body)) as Record<string, unknown>;
-        if (response.status >= 400) errors = true;
+        // A delete of a missing document reports status 404 in its slot but is
+        // not an error, matching OpenSearch — the flag tracks failed writes.
+        if (response.status >= 400 && body.result !== 'not_found') errors = true;
         items.push({ [op]: { ...body, status: response.status } });
       } catch (err) {
         if (!(err instanceof OsError)) throw err;
@@ -718,6 +730,15 @@ export class OpenSearchEmulator implements RestEmulator {
 
   private async search(req: AwsRequest, region: string, collection: string, indexNames: string[]): Promise<AwsResponse> {
     const body = parseBodyJson(req, 'x_content_parse_exception');
+    // Answering a scroll/PIT request without a _scroll_id would silently
+    // truncate the client's pagination loop — fail loudly instead.
+    if (req.query.scroll !== undefined || body.scroll !== undefined || body.pit !== undefined) {
+      throw new OsError(
+        400,
+        'illegal_argument_exception',
+        'scroll and point-in-time pagination are not supported by the LSS self engine — page with from/size',
+      );
+    }
     const query = this.effectiveQuery(req, body);
 
     let hits: SearchHitDoc[];
@@ -861,7 +882,9 @@ export class OpenSearchEmulator implements RestEmulator {
       if (pattern === '_all' || pattern === '*') {
         known.forEach(name => resolved.add(name));
       } else if (pattern.includes('*')) {
-        const regex = new RegExp(`^${pattern.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
+        // Everything except '*' is literal — '?' included, so a stray '?'
+        // can't become a regex quantifier (or crash compilation).
+        const regex = new RegExp(`^${pattern.replace(/[.+?^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*')}$`);
         known.filter(name => regex.test(name)).forEach(name => resolved.add(name));
       } else {
         if (!known.includes(pattern)) throw this.indexNotFound(pattern);

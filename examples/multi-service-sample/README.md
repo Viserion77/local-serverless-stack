@@ -4,9 +4,9 @@ Three microservices that exercise **LSS's API + Lambda emulation** end to end �
 
 | Service | Language | API flavor | Authorizer | API port | Invoke port |
 |---|---|---|---|---|---|
-| `users-service` | TypeScript | HTTP API (payload **v2**) | local v2 **simple response** | `3010` | `13010` |
-| `auth-service` | JavaScript | REST API (payload **v1**) | local v1 **REQUEST** (IAM policy) | `3011` | `13011` |
-| `orders-service` | JavaScript | REST API (payload **v1**) | **cross-service** by ARN → auth-service | `3012` | `13012` |
+| `users-service` | TypeScript | HTTP API (payload **v2**) | local v2 **simple response** | `3610` | `13610` |
+| `auth-service` | JavaScript | REST API (payload **v1**) | local v1 **REQUEST** (IAM policy) | `3611` | `13611` |
+| `orders-service` | JavaScript | REST API (payload **v1**) | **cross-service** by ARN → auth-service | `3612` | `13612` |
 
 Other moving parts:
 
@@ -16,7 +16,7 @@ Other moving parts:
 - **TypeScript from source** — `users-service` handlers are `.ts` files run through `esbuild-register` (`lambdaRuntime.execution: "source"`), no build script
 - **Hot reload** — `lambdaRuntime.watch: true`; edit a handler and re-curl
 
-> **Ports used by this example** — LSS server `3120`, LocalStack `4572`, service APIs `3010`–`3012`, Lambda invoke `13010`–`13012`. The non-default LocalStack port keeps this example out of the way of an external LocalStack you might have on `4566`, and clear of the other examples in this repo. (Caveat: a real LocalStack install commonly publishes the whole `4566–4599` range — in that case `4572` will still conflict.)
+> **Ports used by this example** — LSS server `3120`, LocalStack `4572`, service APIs `3610`–`3612`, Lambda invoke `13610`–`13612`. The non-default LocalStack port keeps this example out of the way of an external LocalStack you might have on `4566`, and clear of the other examples in this repo. (Caveat: a real LocalStack install commonly publishes the whole `4566–4599` range — in that case `4572` will still conflict.)
 
 ## Prerequisites
 
@@ -52,7 +52,7 @@ Open the dashboard at <http://localhost:3120> — **Services** lists all three, 
 **1. Log in against auth-service** (public route) — password is `lss-demo`:
 
 ```bash
-curl -X POST http://localhost:3011/login \
+curl -X POST http://localhost:3611/login \
   -H 'Content-Type: application/json' \
   -d '{"user":"jane","password":"lss-demo"}'
 # → 201 {"code":"code-jane"}
@@ -63,33 +63,33 @@ Or skip this step: the seed in `seeds/auth-Sessions.json` ships a ready-made ses
 **2. Call a v1-protected route** — the local REQUEST authorizer looks the `code` header up in DynamoDB and allows/denies with an IAM policy:
 
 ```bash
-curl http://localhost:3011/whoami -H 'code: code-admin'
+curl http://localhost:3611/whoami -H 'code: code-admin'
 # → 200 {"user":"admin"}
 
-curl http://localhost:3011/whoami -H 'code: nope'
+curl http://localhost:3611/whoami -H 'code: nope'
 # → 403 (Deny policy)
 ```
 
 **3. Call the TypeScript HTTP API (payload v2)** — the v2 authorizer uses *simple responses* (`{isAuthorized, context}`), and `listUsers` returns a bare object that v2 infers into a 200 JSON response:
 
 ```bash
-curl http://localhost:3010/users -H 'Authorization: Bearer lss-secret'
+curl http://localhost:3610/users -H 'Authorization: Bearer lss-secret'
 # → 200 {"items":[...]}   (two seeded users)
 
-curl -X POST http://localhost:3010/users \
+curl -X POST http://localhost:3610/users \
   -H 'Authorization: Bearer lss-secret' \
   -H 'Content-Type: application/json' \
   -d '{"name":"Dora","email":"dora@example.com"}'
 # → 201 {"id":"...","name":"Dora",...}
 
-curl http://localhost:3010/users/u-ada -H 'Authorization: Bearer lss-secret'
+curl http://localhost:3610/users/u-ada -H 'Authorization: Bearer lss-secret'
 # → 200 (path parameters, v2)
 ```
 
 **4. Cross-service authorizer + SQS** — `orders-service` declares its authorizer by **ARN**; the Lambda behind it lives in `auth-service`. LSS resolves the ARN against its global function registry, so the same session code works here:
 
 ```bash
-curl -X POST http://localhost:3012/orders \
+curl -X POST http://localhost:3612/orders \
   -H 'Content-Type: application/json' \
   -H 'code: code-admin' \
   -d '{"item":"coffee"}'
@@ -99,7 +99,7 @@ curl -X POST http://localhost:3012/orders \
 The order flows through SQS → `processOrderQueue` → DynamoDB. A moment later:
 
 ```bash
-curl http://localhost:3012/orders -H 'code: code-admin'
+curl http://localhost:3612/orders -H 'code: code-admin'
 # → 200 {"count":1,"items":[{"id":"...","item":"coffee","user":"admin","status":"processed",...}]}
 ```
 
@@ -107,7 +107,7 @@ curl http://localhost:3012/orders -H 'code: code-admin'
 
 ```bash
 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test aws lambda invoke \
-  --endpoint-url http://localhost:13012 \
+  --endpoint-url http://localhost:13612 \
   --region us-east-1 \
   --function-name orders-service-dev-cleanupExpiredOrders \
   --cli-binary-format raw-in-base64-out \
@@ -136,7 +136,7 @@ lss.config.json                  ← LSS config: managed community LocalStack on
 seeds/
   auth-Sessions.json             ← seeded session code-admin (name must match table)
   users-Users.json               ← two seeded users
-auth-service/                    ← JS, REST v1, ports 3011/13011
+auth-service/                    ← JS, REST v1, ports 3611/13611
   serverless.yml
   src/handlers/
     aws.js                       ← shared AWS SDK clients (point at LocalStack)
@@ -144,7 +144,7 @@ auth-service/                    ← JS, REST v1, ports 3011/13011
     session-authorizer.js        ← v1 REQUEST authorizer (IAM policy), no events;
                                     used locally by whoami and by ARN from orders
     whoami.js                    ← GET /whoami (protected)
-users-service/                   ← TS, HTTP API v2, ports 3010/13010
+users-service/                   ← TS, HTTP API v2, ports 3610/13610
   serverless.yml                 ← provider.httpApi.authorizers (simple responses)
   tsconfig.json                  ← noEmit; LSS runs .ts from source
   src/handlers/
@@ -153,12 +153,12 @@ users-service/                   ← TS, HTTP API v2, ports 3010/13010
     listUsers.ts                 ← bare-object return (v2 inferred response)
     createUser.ts                ← explicit {statusCode: 201, body}
     getUser.ts                   ← path parameters
-orders-service/                  ← JS, REST v1, ports 3012/13012
+orders-service/                  ← JS, REST v1, ports 3612/13612
   serverless.yml                 ← cross-service authorizer by ARN + SQS + schedule
   src/handlers/
     aws.js
     createOrder.js               ← POST /orders → SQS
     listOrders.js                ← GET /orders
     processOrderQueue.js         ← SQS consumer → DynamoDB (status: processed)
-    cleanupExpiredOrders.js      ← schedule rate(1 hour); invoke on 13012
+    cleanupExpiredOrders.js      ← schedule rate(1 hour); invoke on 13612
 ```

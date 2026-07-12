@@ -21,8 +21,8 @@ custom:
     enabled: true
     orchestratorUrl: http://localhost:3140
   lss:
-    apiPort: 3032
-    invokePort: 13032
+    apiPort: 3632
+    invokePort: 13632
 
 functions:
   # SQS consumer on the queue OWNED BY orders-service (referenced by ARN —

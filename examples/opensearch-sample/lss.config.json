@@ -13,5 +13,20 @@
     "enabled": true,
     "execution": "source",
     "watch": true
+  },
+  "branding": {
+    "themeColors": {
+      "light": {
+        "brand-primary": "#15803d",
+        "brand-hover": "#166534",
+        "brand-soft": "#dcfce7"
+      },
+      "dark": {
+        "brand-primary": "#4ade80",
+        "brand-hover": "#86efac",
+        "brand-soft": "#14532d",
+        "brand-contrast": "#052e16"
+      }
+    }
   }
 }

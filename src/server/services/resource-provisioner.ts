@@ -615,11 +615,12 @@ export const handler = async (event, context) => {
     } catch (error: any) {
       if (error?.name === 'ConflictException' || error?.message?.includes('already exist')) {
         console.log(`  ⚠ OpenSearch collection already exists: ${resource.name}`);
-      } else if (error?.name === 'InternalFailure' || error?.message?.includes('not yet implemented')) {
+      } else if (error?.message?.includes('not yet implemented') || error?.message?.includes('pro feature')) {
         // The community LocalStack image has no aoss provider — say so instead
-        // of surfacing an opaque 501.
+        // of surfacing an opaque 501. Matched on the LocalStack message, not
+        // the error name, so genuine self-engine failures stay untouched.
         throw new Error(
-          `${error?.message || error} — OpenSearch Serverless needs the self engine ("engine": "self") or a LocalStack edition that supports aoss`,
+          `${error.message} — OpenSearch Serverless needs the self engine ("engine": "self") or a LocalStack edition that supports aoss`,
         );
       } else {
         throw error;

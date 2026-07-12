@@ -7,18 +7,18 @@ services below use plain `@aws-sdk` v3 clients pointed at `http://localhost:1456
 
 | Service | Role | API port | Invoke port |
 |---|---|---|---|
-| `orders-service` | `POST /orders` stores the order in DynamoDB and enqueues it on SQS; `GET /orders` lists them. Owns the `orders-Orders` table and the `orders-to-process` queue. | `3031` | `13031` |
-| `billing-service` | SQS consumer (cross-service ESM **by ARN**) writes a receipt to S3 and publishes `OrderBilled` to the `billing-events` bus; `GET /receipts` lists receipts. Owns the bucket and the bus. | `3032` | `13032` |
-| `notifications-service` | EventBridge rule (`source: billing`, `detail-type: OrderBilled`) stores a notification in DynamoDB; `GET /notifications` lists them. | `3033` | `13033` |
+| `orders-service` | `POST /orders` stores the order in DynamoDB and enqueues it on SQS; `GET /orders` lists them. Owns the `orders-Orders` table and the `orders-to-process` queue. | `3631` | `13631` |
+| `billing-service` | SQS consumer (cross-service ESM **by ARN**) writes a receipt to S3 and publishes `OrderBilled` to the `billing-events` bus; `GET /receipts` lists receipts. Owns the bucket and the bus. | `3632` | `13632` |
+| `notifications-service` | EventBridge rule (`source: billing`, `detail-type: OrderBilled`) stores a notification in DynamoDB; `GET /notifications` lists them. | `3633` | `13633` |
 
 The pipeline, end to end:
 
 ```
-POST /orders (3031)
+POST /orders (3631)
   → DynamoDB orders-Orders + SQS orders-to-process        [orders-service]
   → in-process ESM delivery → S3 receipt + PutEvents      [billing-service]
   → rule match on billing-events → DynamoDB notification  [notifications-service]
-  → GET /notifications (3033) shows the result
+  → GET /notifications (3633) shows the result
 ```
 
 What this exercises on the self engine:
@@ -39,8 +39,8 @@ What this exercises on the self engine:
 - **Persistence** — engine state lives in `.lss/engine/` (JSONL snapshot + WAL); tables
   and queues survive an orchestrator restart. Delete the folder for a clean slate.
 
-> **Ports** — LSS server `3140`, self engine `14566`, service APIs `3031`–`3033`, invoke
-> `13031`–`13033`. The engine's default port sits **outside 4566–4599** on purpose: a real
+> **Ports** — LSS server `3140`, self engine `14566`, service APIs `3631`–`3633`, invoke
+> `13631`–`13633`. The engine's default port sits **outside 4566–4599** on purpose: a real
 > LocalStack install intercepts that whole range on some hosts.
 
 ## Prerequisites
@@ -62,14 +62,14 @@ npm run lss:start
 npm run register:all
 
 # 3. Drive the pipeline
-curl -X POST http://localhost:3031/orders \
+curl -X POST http://localhost:3631/orders \
   -H 'content-type: application/json' \
   -d '{"customerId":"u-ada","total":42.5}'
 
 # 4. Watch it flow through the three services
-curl http://localhost:3031/orders          # order stored (plus the seeded one)
-curl http://localhost:3032/receipts        # receipt written to S3 by billing
-curl http://localhost:3033/notifications   # notification created via EventBridge
+curl http://localhost:3631/orders          # order stored (plus the seeded one)
+curl http://localhost:3632/receipts        # receipt written to S3 by billing
+curl http://localhost:3633/notifications   # notification created via EventBridge
 
 # 5. Dashboard: http://localhost:3140 (services, queues, tables, lambdas, APIs)
 

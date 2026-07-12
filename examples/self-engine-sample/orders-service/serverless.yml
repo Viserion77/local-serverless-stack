@@ -21,8 +21,8 @@ custom:
     enabled: true
     orchestratorUrl: http://localhost:3140
   lss:
-    apiPort: 3031
-    invokePort: 13031
+    apiPort: 3631
+    invokePort: 13631
 
 functions:
   # POST /orders — stores the order in DynamoDB and enqueues it for billing.

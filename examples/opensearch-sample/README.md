@@ -9,7 +9,7 @@ dependencies.
 
 | Service | Role | API port | Invoke port |
 |---|---|---|---|
-| `catalog-service` | `POST /products` indexes documents; `GET /products/{id}` / `DELETE /products/{id}` read and remove them; `GET /search` runs full-text + filtered queries; `GET /stats` aggregates by category. Owns the `products-catalog` collection. | `3041` | `13041` |
+| `catalog-service` | `POST /products` indexes documents; `GET /products/{id}` / `DELETE /products/{id}` read and remove them; `GET /search` runs full-text + filtered queries; `GET /stats` aggregates by category. Owns the `products-catalog` collection. | `3641` | `13641` |
 
 What this exercises on the self engine:
 
@@ -27,9 +27,13 @@ What this exercises on the self engine:
   JSONL table per index under `.lss/engine/` (hydrated lazily, unloaded when idle) and
   survive an orchestrator restart.
 
-> **Ports** — LSS server `3150`, self engine `14566`, service API `3041`, invoke `13041`.
+> **Ports** — LSS server `3150`, self engine `14566`, service API `3641`, invoke `13641`.
 > The collection endpoint is `http://localhost:14566/_aoss/products-catalog` — the same
 > URL `BatchGetCollection` reports as `collectionEndpoint`.
+
+The example also showcases [dashboard branding](../../docs/CONFIGURATION.md#configuration-properties):
+`lss.config.json` overrides the TreeUI brand tokens (`brand-primary`/`brand-hover`/`brand-soft`)
+per theme with green tones, so the dashboard at `http://localhost:3150` opens with a green accent.
 
 ## Prerequisites
 
@@ -57,18 +61,18 @@ open http://localhost:3150
 
 ```bash
 # Index a few products
-curl -s -X POST localhost:3041/products -d '{"name":"Wireless Mouse","category":"peripherals","price":25,"tags":["usb","wireless"]}'
-curl -s -X POST localhost:3041/products -d '{"name":"Mechanical Keyboard","category":"peripherals","price":90,"tags":["usb"]}'
-curl -s -X POST localhost:3041/products -d '{"name":"USB Hub","category":"accessories","price":15,"tags":["usb"]}'
+curl -s -X POST localhost:3641/products -d '{"name":"Wireless Mouse","category":"peripherals","price":25,"tags":["usb","wireless"]}'
+curl -s -X POST localhost:3641/products -d '{"name":"Mechanical Keyboard","category":"peripherals","price":90,"tags":["usb"]}'
+curl -s -X POST localhost:3641/products -d '{"name":"USB Hub","category":"accessories","price":15,"tags":["usb"]}'
 
 # Full-text search
-curl -s 'localhost:3041/search?q=wireless'
+curl -s 'localhost:3641/search?q=wireless'
 
 # Filters compose with the text query
-curl -s 'localhost:3041/search?category=peripherals&maxPrice=50'
+curl -s 'localhost:3641/search?category=peripherals&maxPrice=50'
 
 # Aggregations: products and average price per category
-curl -s localhost:3041/stats
+curl -s localhost:3641/stats
 ```
 
 The engine also answers the OpenSearch REST API directly — handy for debugging:

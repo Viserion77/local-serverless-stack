@@ -2,7 +2,7 @@
   "name": "orders-service-example",
   "version": "0.0.0",
   "private": true,
-  "description": "JavaScript REST API (payload v1) guarded by auth-service's authorizer (cross-service, by ARN), with an SQS consumer and a scheduled cleanup Lambda. Port 3012 (invoke 13012).",
+  "description": "JavaScript REST API (payload v1) guarded by auth-service's authorizer (cross-service, by ARN), with an SQS consumer and a scheduled cleanup Lambda. Port 3612 (invoke 13612).",
   "scripts": {
     "package": "serverless package",
     "register": "serverless package"

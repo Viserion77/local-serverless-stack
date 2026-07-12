@@ -19,8 +19,8 @@ custom:
     enabled: true
     orchestratorUrl: http://localhost:3120
   lss:
-    apiPort: 3011
-    invokePort: 13011
+    apiPort: 3611
+    invokePort: 13611
 
 functions:
   # POST /login — public route (no authorizer). password "lss-demo" mints a

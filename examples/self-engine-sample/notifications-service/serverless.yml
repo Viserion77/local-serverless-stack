@@ -20,8 +20,8 @@ custom:
     enabled: true
     orchestratorUrl: http://localhost:3140
   lss:
-    apiPort: 3033
-    invokePort: 13033
+    apiPort: 3633
+    invokePort: 13633
 
 functions:
   # EventBridge rule on the bus OWNED BY billing-service (referenced by ARN).

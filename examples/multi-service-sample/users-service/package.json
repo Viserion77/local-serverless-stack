@@ -2,7 +2,7 @@
   "name": "users-service-example",
   "version": "0.0.0",
   "private": true,
-  "description": "TypeScript HTTP API (payload v2) with a local simple-response authorizer. LSS runs the .ts handlers straight from source via esbuild-register — no build step. Port 3010 (invoke 13010).",
+  "description": "TypeScript HTTP API (payload v2) with a local simple-response authorizer. LSS runs the .ts handlers straight from source via esbuild-register — no build step. Port 3610 (invoke 13610).",
   "scripts": {
     "package": "serverless package",
     "register": "serverless package"

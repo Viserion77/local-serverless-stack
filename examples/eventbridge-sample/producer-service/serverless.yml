@@ -19,8 +19,8 @@ custom:
     enabled: true
     orchestratorUrl: http://localhost:3130
   lss:
-    apiPort: 3021
-    invokePort: 13021
+    apiPort: 3621
+    invokePort: 13621
 
 functions:
   # POST /signups — publishes UserSignedUp to the shared bus via plain SDK

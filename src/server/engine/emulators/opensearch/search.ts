@@ -168,10 +168,17 @@ function evalTerms(clause: unknown, doc: SearchHitDoc): boolean {
   return expected.some(candidate => values.some(value => termEquals(value, candidate)));
 }
 
+function asRangeNumber(raw: unknown): number | undefined {
+  if (typeof raw === 'number') return raw;
+  // Only non-empty numeric strings compare numerically — '' would coerce to 0.
+  if (typeof raw === 'string' && raw.trim() !== '' && !Number.isNaN(Number(raw))) return Number(raw);
+  return undefined;
+}
+
 function compareForRange(value: unknown, bound: unknown): number | undefined {
-  const numericValue = typeof value === 'number' ? value : Number(value);
-  const numericBound = typeof bound === 'number' ? bound : Number(bound);
-  if (!Number.isNaN(numericValue) && !Number.isNaN(numericBound)) {
+  const numericValue = asRangeNumber(value);
+  const numericBound = asRangeNumber(bound);
+  if (numericValue !== undefined && numericBound !== undefined) {
     return numericValue - numericBound;
   }
   const left = String(value);
@@ -192,10 +199,11 @@ function evalRange(clause: unknown, doc: SearchHitDoc): boolean {
   }
   return resolveField(doc.source, field).some(value => {
     if (value === null || value === undefined) return false;
-    if (bounds.gt !== undefined && (compareForRange(value, bounds.gt) ?? 0) <= 0) return false;
-    if (bounds.gte !== undefined && (compareForRange(value, bounds.gte) ?? 0) < 0) return false;
-    if (bounds.lt !== undefined && (compareForRange(value, bounds.lt) ?? 0) >= 0) return false;
-    if (bounds.lte !== undefined && (compareForRange(value, bounds.lte) ?? 0) > 0) return false;
+    // Null bounds are ignored, like OpenSearch — not coerced to 0.
+    if (bounds.gt !== undefined && bounds.gt !== null && (compareForRange(value, bounds.gt) ?? 0) <= 0) return false;
+    if (bounds.gte !== undefined && bounds.gte !== null && (compareForRange(value, bounds.gte) ?? 0) < 0) return false;
+    if (bounds.lt !== undefined && bounds.lt !== null && (compareForRange(value, bounds.lt) ?? 0) >= 0) return false;
+    if (bounds.lte !== undefined && bounds.lte !== null && (compareForRange(value, bounds.lte) ?? 0) > 0) return false;
     return true;
   });
 }
@@ -322,12 +330,20 @@ export function sortHits(hits: SearchHitDoc[], keys: SortKey[]): SearchHitDoc[] 
       // default missing:_last.
       if (left === undefined || left === null) return 1;
       if (right === undefined || right === null) return -1;
-      const comparison =
-        typeof left === 'number' && typeof right === 'number'
-          ? left - right
+      // Total order so the comparator stays transitive on mixed types:
+      // numbers rank before everything else, then each class compares within
+      // itself (numeric / lexicographic).
+      const leftIsNumber = typeof left === 'number';
+      const rightIsNumber = typeof right === 'number';
+      const comparison = leftIsNumber && rightIsNumber
+        ? (left as number) - (right as number)
+        : leftIsNumber !== rightIsNumber
+          ? (leftIsNumber ? -1 : 1)
           : String(left) < String(right)
             ? -1
-            : 1;
+            : String(left) > String(right)
+              ? 1
+              : 0;
       if (comparison !== 0) return key.order === 'asc' ? comparison : -comparison;
     }
     return 0;
@@ -395,18 +411,22 @@ function computeOneAggregation(name: string, definition: unknown, hits: SearchHi
   if (type === 'terms') {
     const size = options.size !== undefined ? Number(options.size) : 10;
     const counts = new Map<string, number>();
+    // Numeric field values keep numeric bucket keys, like OpenSearch.
+    const rawKeys = new Map<string, string | number>();
     for (const hit of hits) {
       for (const value of resolveField(hit.source, field)) {
         if (value === null || value === undefined) continue;
-        const key = typeof value === 'number' || typeof value === 'boolean' ? String(value) : String(value);
+        const key = String(value);
         counts.set(key, (counts.get(key) ?? 0) + 1);
+        if (!rawKeys.has(key)) rawKeys.set(key, typeof value === 'number' ? value : key);
       }
     }
-    const buckets = [...counts.entries()]
-      .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+    const sorted = [...counts.entries()].sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1));
+    const buckets = sorted
       .slice(0, size)
-      .map(([key, count]) => ({ key, doc_count: count }));
-    return { doc_count_error_upper_bound: 0, sum_other_doc_count: Math.max(0, counts.size - buckets.length), buckets };
+      .map(([key, count]) => ({ key: rawKeys.get(key) as string | number, doc_count: count }));
+    const otherDocs = sorted.slice(buckets.length).reduce((acc, [, count]) => acc + count, 0);
+    return { doc_count_error_upper_bound: 0, sum_other_doc_count: otherDocs, buckets };
   }
 
   if (['avg', 'sum', 'min', 'max', 'value_count'].includes(type)) {
