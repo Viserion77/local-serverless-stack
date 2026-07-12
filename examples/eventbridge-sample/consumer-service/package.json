@@ -1,0 +1,18 @@
+{
+  "name": "consumer-service-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Consumes UserSignedUp from the shared domain-events bus via an eventBridge trigger and stores each event in DynamoDB. Port 3622 (invoke 13622).",
+  "scripts": {
+    "package": "serverless package",
+    "register": "serverless package"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.0.0",
+    "@aws-sdk/lib-dynamodb": "^3.0.0"
+  },
+  "devDependencies": {
+    "serverless": "3.40.0",
+    "serverless-lss": "file:../../../packages/serverless-plugin"
+  }
+}

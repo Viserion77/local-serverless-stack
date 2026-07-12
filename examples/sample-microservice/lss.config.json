@@ -1,0 +1,14 @@
+{
+  "serverPort": 3110,
+  "localstackPort": 4570,
+  "localstackEndpoint": "http://localhost:4570",
+  "mode": "managed",
+  "localstackEdition": "community",
+  "region": "us-east-1",
+  "services": ["dynamodb", "sqs", "sns", "s3", "lambda"],
+  "persistence": true,
+  "seedsDir": "./seeds",
+  "autoPackage": true,
+  "packageCommand": "npx serverless package",
+  "packageTimeoutMs": 300000
+}

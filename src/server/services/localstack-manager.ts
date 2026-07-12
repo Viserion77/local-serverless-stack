@@ -1,21 +1,13 @@
-import { spawn, ChildProcess, exec } from 'child_process';
-import { promisify } from 'util';
-import { ConfigManager } from './config-manager.js';
+// Deprecated facade kept so the ~10 existing call sites (provisioner,
+// explorers, seeds, dynamo-proxy, routes) stay untouched: they keep importing
+// LocalStackManager, but the active provider may be the LocalStack container
+// OR the in-process self engine — EngineManager decides from the config.
+// New code should use EngineManager directly.
 
-const execAsync = promisify(exec);
+import { EngineManager } from '../engine/engine-manager.js';
 
 export class LocalStackManager {
   private static instance: LocalStackManager;
-  private process: ChildProcess | null = null;
-  private _isRunning = false;
-  private endpoint: string;
-  private readonly containerName = 'lss-localstack';
-  private readonly configManager: ConfigManager;
-
-  private constructor() {
-    this.configManager = ConfigManager.getInstance();
-    this.endpoint = this.configManager.getLocalStackEndpoint();
-  }
 
   static getInstance(): LocalStackManager {
     if (!LocalStackManager.instance) {
@@ -25,143 +17,22 @@ export class LocalStackManager {
   }
 
   async start(): Promise<void> {
-    if (this._isRunning) {
-      console.log('⚠️  LocalStack already running');
-      return;
-    }
-
-    try {
-      // Check if docker is available
-      await execAsync('docker ps -q', { timeout: 5000 });
-    } catch {
-      throw new Error('Docker is not available or not running. Please start Docker first.');
-    }
-
-    return new Promise((resolve, reject) => {
-      console.log('🔄 Starting LocalStack...');
-
-      const port = this.configManager.getLocalStackPort();
-      const services = this.configManager.getServices().join(',');
-      const persistence = this.configManager.isPersistence() ? '1' : '0';
-      const debug = this.configManager.isDebug() ? '1' : '0';
-
-      // Start LocalStack via Docker
-      this.process = spawn('docker', [
-        'run',
-        '--rm',
-        '-p',
-        `${port}:4566`,
-        '-p',
-        '4571:4571',
-        '-v',
-        'lss-localstack-data:/var/lib/localstack',
-        '-v',
-        '/var/run/docker.sock:/var/run/docker.sock',
-        '--name',
-        this.containerName,
-        '-e',
-        `SERVICES=${services}`,
-        '-e',
-        'LAMBDA_EXECUTOR=local',
-        '-e',
-        `PERSISTENCE=${persistence}`,
-        '-e',
-        `DEBUG=${debug}`,
-        'localstack/localstack:latest',
-      ]);
-
-      let stderr = '';
-      let stdout = '';
-      this.process.stderr?.on('data', data => {
-        stderr += data.toString();
-        console.log(`[LocalStack stderr] ${data.toString().trim()}`);
-      });
-      this.process.stdout?.on('data', data => {
-        stdout += data.toString();
-        console.log(`[LocalStack stdout] ${data.toString().trim()}`);
-      });
-
-      this.process.on('error', error => {
-        console.error('❌ Failed to start LocalStack process:', error);
-        reject(error);
-      });
-
-      this.process.on('close', code => {
-        if (code !== 0) {
-          console.error(`Container exited with code ${code}`);
-          console.error('stderr:', stderr);
-          console.error('stdout:', stdout);
-        }
-      });
-
-      // Wait for LocalStack to be ready
-      this.waitForReady()
-        .then(() => {
-          this._isRunning = true;
-          console.log('✅ LocalStack ready');
-          resolve();
-        })
-        .catch(err => {
-          console.error('LocalStack startup error:', err.message);
-          this.process?.kill();
-          reject(err);
-        });
-    });
+    return EngineManager.getInstance().start();
   }
 
   async stop(): Promise<void> {
-    if (!this._isRunning) {
-      return;
-    }
-
-    console.log('🛑 Stopping LocalStack...');
-
-    try {
-      await execAsync(`docker stop ${this.containerName}`, { timeout: 10000 });
-      this._isRunning = false;
-      this.process = null;
-      console.log('✅ LocalStack stopped');
-    } catch (error) {
-      console.error('⚠️  Error stopping LocalStack:', error instanceof Error ? error.message : 'Unknown error');
-      this._isRunning = false;
-    }
-  }
-
-  private async waitForReady(maxAttempts = 120): Promise<void> {
-    for (let i = 0; i < maxAttempts; i++) {
-      try {
-        const response = await fetch(`${this.endpoint}/_localstack/health`);
-        if (response.ok) {
-          console.log(`✓ LocalStack is responsive (attempt ${i + 1}/${maxAttempts})`);
-          return;
-        }
-      } catch {
-        // Ignore fetch errors during startup
-        if (i % 20 === 0) {
-          console.log(`⏳ Waiting for LocalStack... (attempt ${i + 1}/${maxAttempts})`);
-        }
-      }
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    throw new Error('LocalStack failed to start in time (120s timeout). Check Docker and container logs.');
+    return EngineManager.getInstance().stop();
   }
 
   isRunning(): boolean {
-    return this._isRunning;
+    return EngineManager.getInstance().isRunning();
   }
 
   getEndpoint(): string {
-    return this.endpoint;
+    return EngineManager.getInstance().getEndpoint();
   }
 
-  getConfig() {
-    return {
-      endpoint: this.endpoint,
-      region: this.configManager.getRegion(),
-      credentials: {
-        accessKeyId: process.env.LOCALSTACK_ACCESS_KEY_ID || 'test',
-        secretAccessKey: process.env.LOCALSTACK_SECRET_ACCESS_KEY || 'test',
-      },
-    };
+  getConfig(): { endpoint: string; region: string; credentials: { accessKeyId: string; secretAccessKey: string } } {
+    return EngineManager.getInstance().getConfig();
   }
 }

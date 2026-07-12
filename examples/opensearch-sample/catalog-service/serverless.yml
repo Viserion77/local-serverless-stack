@@ -1,0 +1,93 @@
+service: catalog-service
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: dev
+  environment:
+    # The collection endpoint the LSS self engine serves: <engine>/_aoss/<collection>.
+    # On real AWS you would read it from GetAtt ProductsCollection.CollectionEndpoint.
+    OPENSEARCH_ENDPOINT: http://localhost:14566/_aoss/products-catalog
+    PRODUCTS_INDEX: products
+
+plugins:
+  - serverless-lss
+
+custom:
+  orchestrator:
+    enabled: true
+    orchestratorUrl: http://localhost:3150
+  lss:
+    apiPort: 3641
+    invokePort: 13641
+
+functions:
+  # POST /products — indexes a product document into OpenSearch.
+  createProduct:
+    handler: src/handlers/createProduct.handler
+    events:
+      - httpApi:
+          path: /products
+          method: post
+
+  # GET /products/{id} — fetches one document by id.
+  getProduct:
+    handler: src/handlers/getProduct.handler
+    events:
+      - httpApi:
+          path: /products/{id}
+          method: get
+
+  # DELETE /products/{id} — removes the document.
+  deleteProduct:
+    handler: src/handlers/deleteProduct.handler
+    events:
+      - httpApi:
+          path: /products/{id}
+          method: delete
+
+  # GET /search?q=&category=&maxPrice= — full-text search + filters.
+  searchProducts:
+    handler: src/handlers/searchProducts.handler
+    events:
+      - httpApi:
+          path: /search
+          method: get
+
+  # GET /stats — terms + avg aggregations over the whole catalog.
+  categoryStats:
+    handler: src/handlers/categoryStats.handler
+    events:
+      - httpApi:
+          path: /stats
+          method: get
+
+resources:
+  Resources:
+    ProductsCollection:
+      Type: AWS::OpenSearchServerless::Collection
+      Properties:
+        Name: products-catalog
+        Type: SEARCH
+        Description: Product catalog full-text search
+
+    # On AWS a collection cannot be created without an encryption policy and is
+    # unreachable without a data-access policy. LSS accepts and skips both with
+    # a registration warning — nothing enforces them locally — so the template
+    # stays deployable as-is to the real cloud.
+    ProductsEncryptionPolicy:
+      Type: AWS::OpenSearchServerless::SecurityPolicy
+      Properties:
+        Name: products-encryption
+        Type: encryption
+        Policy: '{"Rules":[{"ResourceType":"collection","Resource":["collection/products-catalog"]}],"AWSOwnedKey":true}'
+
+    ProductsAccessPolicy:
+      Type: AWS::OpenSearchServerless::AccessPolicy
+      Properties:
+        Name: products-access
+        Type: data
+        Policy: '[{"Rules":[{"ResourceType":"index","Resource":["index/products-catalog/*"],"Permission":["aoss:*"]}],"Principal":["arn:aws:iam::000000000000:role/local-dev"]}]'

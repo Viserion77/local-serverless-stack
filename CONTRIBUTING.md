@@ -16,7 +16,7 @@ Before creating a bug report, check the issue list to avoid duplicates. When fil
 - **Reproduction steps** - Step-by-step instructions
 - **Expected behavior** - What you expected to happen
 - **Actual behavior** - What actually happened
-- **Environment** - Node version, OS, LocalStack version
+- **Environment** - Node version, OS, LSS version, engine (`localstack` or `self`); include the Docker and LocalStack versions when using the `localstack` engine
 - **Additional context** - Any relevant configuration or logs
 
 ### Suggesting Enhancements
@@ -48,15 +48,19 @@ Enhancement suggestions are tracked as GitHub issues. When submitting an enhance
 ## Development Setup
 
 ```bash
-# Clone the repository
-git clone https://github.com/yourusername/local-serverless-stack.git
+# Clone your fork
+git clone https://github.com/<your-username>/local-serverless-stack.git  # your fork
 cd local-serverless-stack
 
-# Install dependencies
-npm install
+# Install dependencies (root + UI)
+npm run setup
 
-# Start development
-npm run orchestrator:dev
+# Start development (server + UI in watch mode)
+npm run dev
+
+# Or run them individually
+npm run server:dev   # Express server only
+npm run ui:dev       # Vue UI only
 
 # Build all packages
 npm run build
@@ -65,20 +69,26 @@ npm run build
 ## Project Structure
 
 ```
+bin/
+└── cli.js                 # CLI entry point (lss start/stop/status/logs)
+
+src/
+├── server/                # Express API server
+│   ├── index.ts           # Entry point
+│   ├── services/          # Core services (provisioning, LocalStack, etc)
+│   ├── routes/            # API routes
+│   ├── engine/            # Self engine (in-process AWS emulation, no Docker)
+│   ├── runtime/           # Lambda runtime execution
+│   └── dev/               # Development-only modules
+├── client/                # Programmatic client (LssClient)
+└── ui/                    # Vue 3 dashboard (@treeui/vue), separate workspace
+
 packages/
-├── orchestrator/          # Main Express server and orchestration logic
-│   ├── server/
-│   │   ├── index.ts       # Entry point
-│   │   ├── dev/           # Development-only modules (temporary)
-│   │   ├── services/      # Core services (provisioning, LocalStack, etc)
-│   │   ├── routes/        # API routes
-│   │   └── ui/            # Vue3 frontend
-│   └── package.json
-│
-└── serverless-plugin/     # Serverless Framework plugin
-    ├── src/
-    │   └── index.ts       # Plugin entry point
-    └── package.json
+└── serverless-plugin/     # Serverless Framework plugin (serverless-lss)
+
+tests/
+├── unit/                  # Unit tests
+└── integration/           # LocalStack integration tests
 ```
 
 ## Code Style
@@ -92,11 +102,20 @@ packages/
 ## Testing
 
 ```bash
-# Run tests (when available)
-npm test
+# Run unit tests
+npm test               # same as npm run test:unit
 
-# Run with coverage
+# Watch mode
+npm run test:watch
+
+# Coverage (CI enforces a coverage gate)
 npm run test:coverage
+
+# Integration tests (require Docker + LocalStack)
+npm run test:integration
+
+# Lint
+npm run lint
 ```
 
 ## Documentation
@@ -130,7 +149,7 @@ footer
 
 **Example:**
 ```
-feat(orchestrator): add DynamoDB proxy for legacy compatibility
+feat(server): add DynamoDB proxy for legacy compatibility
 
 Implemented temporary HTTP reverse proxy forwarding to LocalStack
 for DynamoDB access on port 8000. Feature is gated by ENABLE_DYNAMO_PROXY
@@ -141,16 +160,17 @@ Closes #42
 
 ## Release Process
 
-1. Update version in package.json files
+1. Bump the version with `npm version <patch|minor|major> --no-git-tag-version` (root and/or `packages/serverless-plugin`)
 2. Update CHANGELOG.md
-3. Create a release tag
-4. GitHub Actions will publish to npm
+3. Once the version bump lands on `main`, GitHub Actions detects the change and publishes to npm — no git tags involved
+
+See [docs/RELEASE.md](./docs/RELEASE.md) for details.
 
 ## Questions?
 
 - Check the [README.md](./README.md) documentation
-- Review existing [GitHub Issues](https://github.com/local-serverless-stack/lss/issues)
-- Open a [Discussion](https://github.com/local-serverless-stack/lss/discussions) for questions
+- Review existing [GitHub Issues](https://github.com/viserion77/local-serverless-stack/issues)
+- Open a [Discussion](https://github.com/viserion77/local-serverless-stack/discussions) for questions
 
 ## License
 

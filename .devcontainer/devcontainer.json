@@ -9,11 +9,62 @@
 	},
 	"runArgs": [
 		"--net=host"
-	]
-	// Features to add to the dev container. More info: https://containers.dev/features.
-	// "features": {},
-	// Use 'forwardPorts' to make a list of ports inside the container available locally.
-	// "forwardPorts": [],
+	],
+	// REGRA: com --net=host todos os devcontainers da máquina compartilham a rede
+	// do host — porta nova aqui deve evitar faixas já usadas por outros containers.
+	// Convenção DESTE repo: gateways dos exemplos 36xx (invoke = apiPort + 10000
+	// → 136xx), serverless-offline 3000-3003, dashboards dos exemplos 31xx,
+	// LocalStack 4567/4570-4572, self engine 14566. Os defaults de produto
+	// (3100/4566/8000) continuam no código, mas o dev neste container usa os
+	// overrides do lss.config.json da raiz (3101/4567/8001) — por isso os
+	// defaults não são forwardados aqui.
+	"forwardPorts": [
+		// Core (dev deste repo)
+		3101, // Dashboard/API (lss.config.json raiz) e UI Vite dev
+		14566, // Self engine (AWS wire)
+		4567, // LocalStack (lss.config.json raiz)
+		8001, // Proxy DynamoDB (lss.config.json raiz, opt-in)
+		// serverless-offline (samples)
+		3000, 3001, // sample-microservice
+		3002, 3003, // pro-sample-microservice
+		// Lambda API por serviço (exemplos)
+		3610, 3611, 3612, // multi-service-sample
+		3621, 3622, // eventbridge-sample
+		3631, 3632, 3633, // self-engine-sample
+		3641, // opensearch-sample
+		// Lambda Invoke por serviço (apiPort + 10000)
+		13610, 13611, 13612, // multi-service-sample
+		13621, 13622, // eventbridge-sample
+		13631, 13632, 13633, // self-engine-sample
+		13641, // opensearch-sample
+		// Dashboards dos exemplos (serverPort de cada lss.config.json)
+		3110, 3111, 3120, 3130, 3140, 3150,
+		// LocalStack dos exemplos
+		4570, 4571, 4572
+	],
+	"portsAttributes": {
+		"3101": { "label": "LSS Dashboard/API (dev) / UI Vite" },
+		"14566": { "label": "Self Engine (AWS wire)" },
+		"4567": { "label": "LocalStack (config raiz)" },
+		"8001": { "label": "DynamoDB Proxy (config raiz)" },
+		"3000-3001": { "label": "serverless-offline (sample-microservice)" },
+		"3002-3003": { "label": "serverless-offline (pro-sample-microservice)" },
+		"3610-3612": { "label": "Lambda API (multi-service-sample)" },
+		"3621-3622": { "label": "Lambda API (eventbridge-sample)" },
+		"3631-3633": { "label": "Lambda API (self-engine-sample)" },
+		"3641": { "label": "Lambda API (opensearch-sample)" },
+		"13610-13612": { "label": "Lambda Invoke (multi-service-sample)" },
+		"13621-13622": { "label": "Lambda Invoke (eventbridge-sample)" },
+		"13631-13633": { "label": "Lambda Invoke (self-engine-sample)" },
+		"13641": { "label": "Lambda Invoke (opensearch-sample)" },
+		"3110": { "label": "LSS Dashboard (sample-microservice)" },
+		"3111": { "label": "LSS Dashboard (pro-sample-microservice)" },
+		"3120": { "label": "LSS Dashboard (multi-service-sample)" },
+		"3130": { "label": "LSS Dashboard (eventbridge-sample)" },
+		"3140": { "label": "LSS Dashboard (self-engine-sample)" },
+		"3150": { "label": "LSS Dashboard (opensearch-sample)" },
+		"4570-4572": { "label": "LocalStack (exemplos)" }
+	}
 	// Use 'postCreateCommand' to run commands after the container is created.
 	// "postCreateCommand": "yarn install",
 	// Configure tool-specific properties.

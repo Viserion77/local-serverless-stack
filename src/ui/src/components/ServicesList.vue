@@ -1,16 +1,24 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue';
-import { api } from '../services/api';
+import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
+import { RouterLink } from 'vue-router';
+import {
+  TCard, TButton, TInput, TFormField, TBadge, TTable, TEmptyState,
+  TStack, TModal, TConfirmDialog, TSpinner, TTag, useToast,
+} from '@treeui/vue';
+import type { TreeBadgeTone } from '@treeui/vue';
 
-interface Service {
-  name: string;
-  status: 'registered' | 'running' | 'stopped';
-  root: string;
-  lastUpdated: number;
-  resourcesCount?: number;
+interface TableColumn {
+  key: string;
+  label: string;
+  sortable?: boolean;
+  align?: 'left' | 'center' | 'right';
+  width?: string;
 }
+import { api } from '../services/api';
+import type { ServiceSummary } from '../services/api';
 
-const services = ref<Service[]>([]);
+const toast = useToast();
+const services = ref<ServiceSummary[]>([]);
 const loading = ref(true);
 const registering = ref(false);
 const newServicePath = ref('');
@@ -20,6 +28,26 @@ const logsStatus = ref<'running' | 'stopped' | 'failed'>('stopped');
 const logTimer = ref<number | null>(null);
 const starting = ref<Record<string, boolean>>({});
 const stopping = ref<Record<string, boolean>>({});
+const deleteTarget = ref<string | null>(null);
+const deleteDialogOpen = ref(false);
+let refreshTimer: number | null = null;
+
+const columns: TableColumn[] = [
+  { key: 'name', label: 'Name' },
+  { key: 'status', label: 'Status' },
+  { key: 'root', label: 'Path' },
+  { key: 'resourceBreakdown', label: 'Resources' },
+  { key: 'lastUpdated', label: 'Last updated' },
+  { key: 'actions', label: 'Actions', align: 'right' },
+];
+
+const rows = computed(() => services.value.map(s => ({ ...s })));
+const logsModalOpen = computed({
+  get: () => logsService.value !== null,
+  set: (value: boolean) => {
+    if (!value) closeLogs();
+  },
+});
 
 async function loadServices() {
   try {
@@ -36,9 +64,10 @@ async function startService(name: string) {
   starting.value = { ...starting.value, [name]: true };
   try {
     await api.startService(name);
+    toast.add({ title: 'Service started', description: name, variant: 'success' });
     await loadServices();
   } catch (error: any) {
-    alert(`Failed to start service: ${error.message}`);
+    toast.add({ title: 'Failed to start service', description: error.message, variant: 'danger' });
   } finally {
     starting.value = { ...starting.value, [name]: false };
   }
@@ -49,9 +78,10 @@ async function stopService(name: string) {
   stopping.value = { ...stopping.value, [name]: true };
   try {
     await api.stopService(name);
+    toast.add({ title: 'Service stopped', description: name, variant: 'info' });
     await loadServices();
   } catch (error: any) {
-    alert(`Failed to stop service: ${error.message}`);
+    toast.add({ title: 'Failed to stop service', description: error.message, variant: 'danger' });
   } finally {
     stopping.value = { ...stopping.value, [name]: false };
   }
@@ -87,23 +117,33 @@ async function registerService() {
   registering.value = true;
   try {
     await api.registerService(newServicePath.value);
+    toast.add({ title: 'Service registered', description: newServicePath.value, variant: 'success' });
     newServicePath.value = '';
     await loadServices();
   } catch (error: any) {
-    alert(`Failed to register service: ${error.message}`);
+    toast.add({ title: 'Failed to register service', description: error.message, variant: 'danger' });
   } finally {
     registering.value = false;
   }
 }
 
-async function deleteService(name: string) {
-  if (!confirm(`Delete service "${name}"?`)) return;
+function requestDelete(name: string) {
+  deleteTarget.value = name;
+  deleteDialogOpen.value = true;
+}
 
+async function confirmDelete() {
+  if (!deleteTarget.value) return;
+  const name = deleteTarget.value;
   try {
     await api.deleteService(name);
+    toast.add({ title: 'Service deleted', description: name, variant: 'info' });
     await loadServices();
   } catch (error: any) {
-    alert(`Failed to delete service: ${error.message}`);
+    toast.add({ title: 'Failed to delete service', description: error.message, variant: 'danger' });
+  } finally {
+    deleteTarget.value = null;
+    deleteDialogOpen.value = false;
   }
 }
 
@@ -111,204 +151,207 @@ function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
 }
 
-function getStatusBadgeClass(status: string): string {
+function statusTone(status: string): TreeBadgeTone {
   switch (status) {
-    case 'running':
-      return 'badge-success';
-    case 'registered':
-      return 'badge-warning';
-    default:
-      return 'badge-danger';
+    case 'running': return 'success';
+    case 'registered': return 'warning';
+    case 'stopped': return 'neutral';
+    default: return 'danger';
   }
 }
 
 onMounted(() => {
   loadServices();
-  setInterval(loadServices, 10000);
+  refreshTimer = window.setInterval(loadServices, 10000);
+});
+
+onBeforeUnmount(() => {
+  if (refreshTimer) window.clearInterval(refreshTimer);
+  if (logTimer.value) window.clearInterval(logTimer.value);
 });
 </script>
 
 <template>
-  <div class="card">
-    <div class="card-header">
-      <h2 class="card-title">
-        Microservices
-      </h2>
-      <div style="display: flex; gap: 0.5rem; align-items: center">
-        <input
-          v-model="newServicePath"
-          type="text"
-          placeholder="/path/to/microservice"
-          style="
-            padding: 0.5rem;
-            background: var(--bg);
-            border: 1px solid var(--border);
-            border-radius: 0.375rem;
-            color: var(--text);
-            width: 300px;
-          "
-          @keyup.enter="registerService"
-        >
-        <button
-          class="btn btn-primary"
-          :disabled="registering || !newServicePath.trim()"
-          @click="registerService"
-        >
-          {{ registering ? 'Registering...' : 'Register' }}
-        </button>
-      </div>
-    </div>
-
-    <div
-      v-if="loading"
-      class="loading"
-    >
-      Loading services...
-    </div>
-
-    <div
-      v-else-if="services.length === 0"
-      class="empty-state"
-    >
-      No services registered yet. Register your first microservice above.
-    </div>
-
-    <table
-      v-else
-      class="table"
-    >
-      <thead>
-        <tr>
-          <th>Name</th>
-          <th>Status</th>
-          <th>Path</th>
-          <th>Resources</th>
-          <th>Last Updated</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody>
-        <tr
-          v-for="service in services"
-          :key="service.name"
-        >
-          <td>
-            <strong>{{ service.name }}</strong>
-          </td>
-          <td>
-            <span
-              class="badge"
-              :class="getStatusBadgeClass(service.status)"
-            >
-              {{ service.status }}
-            </span>
-          </td>
-          <td style="font-family: monospace; font-size: 0.875rem">
-            {{ service.root }}
-          </td>
-          <td>{{ service.resourcesCount || 0 }}</td>
-          <td>{{ formatDate(service.lastUpdated) }}</td>
-          <td>
-            <div class="actions">
-              <button
-                class="btn btn-sm"
-                :disabled="service.status === 'running' || starting[service.name]"
-                @click="startService(service.name)"
-              >
-                {{ starting[service.name] ? 'Starting...' : 'Start' }}
-              </button>
-              <button
-                class="btn btn-sm btn-secondary"
-                :disabled="service.status !== 'running' || stopping[service.name]"
-                @click="stopService(service.name)"
-              >
-                {{ stopping[service.name] ? 'Stopping...' : 'Stop' }}
-              </button>
-              <button
-                class="btn btn-sm"
-                @click="openLogs(service.name)"
-              >
-                Logs
-              </button>
-              <button
-                class="btn btn-sm btn-danger"
-                @click="deleteService(service.name)"
-              >
-                Delete
-              </button>
-            </div>
-          </td>
-        </tr>
-      </tbody>
-    </table>
-
-    <div
-      v-if="logsService"
-      class="modal"
-    >
-      <div class="modal-content">
-        <div class="modal-header">
-          <h3>Logs — {{ logsService }} ({{ logsStatus }})</h3>
-          <button
-            class="btn btn-sm"
-            @click="closeLogs"
+  <TCard variant="outline">
+    <template #header>
+      <TStack direction="horizontal" gap="0.75rem" align="center" justify="space-between">
+        <strong>Microservices</strong>
+        <TStack direction="horizontal" gap="0.5rem" align="center">
+          <TFormField hint="Absolute path to a Serverless project" :htmlFor="'register-path'">
+            <TInput
+              v-model="newServicePath"
+              placeholder="/path/to/microservice"
+              :disabled="registering"
+              @keyup.enter="registerService"
+            />
+          </TFormField>
+          <TButton
+            variant="solid"
+            :loading="registering"
+            :disabled="!newServicePath.trim()"
+            @click="registerService"
           >
-            Close
-          </button>
-        </div>
-        <pre class="logs">{{ logs.join('\n') }}
-        </pre>
-      </div>
+            Register
+          </TButton>
+        </TStack>
+      </TStack>
+    </template>
+
+    <div v-if="loading" style="display: flex; justify-content: center; padding: 2rem;">
+      <TSpinner label="Loading services..." />
     </div>
-  </div>
+
+    <TEmptyState
+      v-else-if="!services.length"
+      title="No services registered"
+      description="Register your first microservice using the form above."
+    />
+
+    <TTable v-else :columns="columns" :rows="rows">
+      <template #cell-name="{ row }">
+        <RouterLink
+          :to="`/services/${encodeURIComponent(String(row.name))}`"
+          style="color: inherit; text-decoration: none;"
+        >
+          <strong style="text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;">
+            {{ row.name }}
+          </strong>
+        </RouterLink>
+      </template>
+
+      <template #cell-status="{ row }">
+        <TBadge :tone="statusTone(String(row.status))" variant="soft">
+          {{ row.status }}
+        </TBadge>
+      </template>
+
+      <template #cell-root="{ row }">
+        <span class="mono">{{ row.root }}</span>
+      </template>
+
+      <template #cell-resourceBreakdown="{ row }">
+        <TStack direction="horizontal" gap="0.25rem" wrap>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.lambdas"
+            size="sm"
+            variant="soft"
+          >
+            λ {{ (row.resourceBreakdown as any).lambdas }}
+          </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.tables"
+            size="sm"
+            variant="soft"
+          >
+            🗄 {{ (row.resourceBreakdown as any).tables }}
+          </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.queues"
+            size="sm"
+            variant="soft"
+          >
+            📨 {{ (row.resourceBreakdown as any).queues }}
+          </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.topics"
+            size="sm"
+            variant="soft"
+          >
+            📣 {{ (row.resourceBreakdown as any).topics }}
+          </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.buckets"
+            size="sm"
+            variant="soft"
+          >
+            🪣 {{ (row.resourceBreakdown as any).buckets }}
+          </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.buses"
+            size="sm"
+            variant="soft"
+          >
+            🔀 {{ (row.resourceBreakdown as any).buses }}
+          </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.eventRules"
+            size="sm"
+            variant="soft"
+          >
+            🎯 {{ (row.resourceBreakdown as any).eventRules }}
+          </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.collections"
+            size="sm"
+            variant="soft"
+          >
+            🔍 {{ (row.resourceBreakdown as any).collections }}
+          </TTag>
+          <span
+            v-if="!row.resourcesCount"
+            class="muted"
+            style="font-size: 0.75rem;"
+          >
+            none
+          </span>
+        </TStack>
+      </template>
+
+      <template #cell-lastUpdated="{ row }">
+        {{ formatDate(Number(row.lastUpdated)) }}
+      </template>
+
+      <template #cell-actions="{ row }">
+        <TStack direction="horizontal" gap="0.375rem" justify="flex-end" wrap>
+          <TButton
+            size="sm"
+            variant="soft"
+            :disabled="row.status === 'running' || starting[String(row.name)]"
+            :loading="starting[String(row.name)]"
+            @click="startService(String(row.name))"
+          >
+            Start
+          </TButton>
+          <TButton
+            size="sm"
+            variant="soft"
+            :disabled="row.status !== 'running' || stopping[String(row.name)]"
+            :loading="stopping[String(row.name)]"
+            @click="stopService(String(row.name))"
+          >
+            Stop
+          </TButton>
+          <TButton size="sm" variant="ghost" @click="openLogs(String(row.name))">
+            Logs
+          </TButton>
+          <TButton
+            size="sm"
+            variant="danger"
+            @click="requestDelete(String(row.name))"
+          >
+            Delete
+          </TButton>
+        </TStack>
+      </template>
+    </TTable>
+
+    <TModal
+      v-model:open="logsModalOpen"
+      :title="logsService ? `Logs — ${logsService}` : 'Logs'"
+      :description="logsService ? `Status: ${logsStatus}` : ''"
+      size="lg"
+    >
+      <pre class="logs-pre">{{ logs.join('\n') || '— no output yet —' }}</pre>
+    </TModal>
+
+    <TConfirmDialog
+      v-model:open="deleteDialogOpen"
+      :title="`Delete service${deleteTarget ? ` “${deleteTarget}”` : ''}?`"
+      description="This removes the service from the cache and cleans up its provisioned resources in LocalStack."
+      confirm-label="Delete"
+      cancel-label="Cancel"
+      confirm-variant="danger"
+      @confirm="confirmDelete"
+    />
+  </TCard>
 </template>
-
-<style scoped>
-.modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(0, 0, 0, 0.55);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 50;
-}
-
-.modal-content {
-  background: var(--card);
-  border: 1px solid var(--border);
-  border-radius: 0.5rem;
-  width: 720px;
-  max-height: 80vh;
-  display: flex;
-  flex-direction: column;
-  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
-}
-
-.modal-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 0.75rem 1rem;
-  border-bottom: 1px solid var(--border);
-}
-
-.logs {
-  flex: 1;
-  padding: 1rem;
-  margin: 0;
-  background: #0b0c10;
-  color: #d1d5db;
-  font-family: Menlo, Consolas, Monaco, monospace;
-  font-size: 0.85rem;
-  overflow: auto;
-  min-height: 300px;
-  white-space: pre-wrap;
-}
-
-.actions {
-  display: flex;
-  gap: 0.5rem;
-  flex-wrap: wrap;
-}
-</style>

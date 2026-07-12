@@ -1,0 +1,69 @@
+service: auth-service
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: dev
+  environment:
+    SESSIONS_TABLE: auth-Sessions
+    AWS_ENDPOINT: http://localhost:4572
+
+plugins:
+  - serverless-lss
+
+custom:
+  orchestrator:
+    enabled: true
+    orchestratorUrl: http://localhost:3120
+  lss:
+    apiPort: 3611
+    invokePort: 13611
+
+functions:
+  # POST /login — public route (no authorizer). password "lss-demo" mints a
+  # session code and stores it in DynamoDB.
+  login:
+    handler: src/handlers/login.handler
+    events:
+      - http:
+          path: /login
+          method: post
+          cors: true
+
+  # v1 REQUEST authorizer. No events on purpose: it is referenced inline by
+  # `whoami` below AND cross-service (by ARN) from orders-service.
+  sessionAuthorizer:
+    handler: src/handlers/session-authorizer.handler
+
+  # GET /whoami — protected by the local v1 REQUEST authorizer above.
+  whoami:
+    handler: src/handlers/whoami.handler
+    events:
+      - http:
+          path: /whoami
+          method: get
+          authorizer:
+            name: sessionAuthorizer
+            type: request
+            identitySource: method.request.header.code
+            resultTtlInSeconds: 3600
+
+resources:
+  Resources:
+    SessionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: auth-Sessions
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: code
+            AttributeType: S
+        KeySchema:
+          - AttributeName: code
+            KeyType: HASH
+
+package:
+  individually: false

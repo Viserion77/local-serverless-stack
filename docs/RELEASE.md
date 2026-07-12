@@ -1,56 +1,56 @@
 # Release Process
 
-This document describes the automated release and publishing process for Local Serverless Stack (LSS).
+This document describes the release and publishing process for Local Serverless Stack (LSS).
 
 ## Overview
 
-LSS uses GitHub Actions to automatically publish packages to NPM when version numbers are updated in `package.json` files.
-
-## Current Versions
-
-- **Root Package** (`local-serverless-stack`): `0.0.1`
-- **Plugin** (`lss-serverless-plugin`): `0.0.1`
-- **Orchestrator** (`lss-orchestrator`): `0.0.1` (private, not published)
+LSS uses GitHub Actions to automatically publish packages to NPM when a version number changes in a `package.json` on `main`. Current versions live in `package.json` (root and `packages/serverless-plugin`) and on npm — this document does not track them.
 
 ## Quick Release
 
-### Root Package (CLI + Orchestrator)
+### Root Package (`local-serverless-stack`)
 
 ```bash
-# Bump version
-npm version patch  # 0.0.1 -> 0.0.2
+# Bump version without committing or tagging
+npm version patch --no-git-tag-version
+
+# Stage and review the change
+git add package.json package-lock.json
+git diff --staged
 
 # Commit and push
-git add package.json
-git commit -m "chore: release v0.0.2"
+git commit -m "chore: release v0.8.1"
 git push origin main
 ```
 
-### Plugin Package
+### Plugin Package (`serverless-lss`)
 
 ```bash
-# Navigate and bump
+# Navigate and bump (no commit, no tag)
 cd packages/serverless-plugin
-npm version patch
-
-# Return to root
+npm version patch --no-git-tag-version
 cd ../..
 
-# Commit and push
-git add packages/serverless-plugin/package.json
-git commit -m "chore(plugin): release v0.0.2"
+# Stage, review, commit, push
+git add packages/serverless-plugin/package.json package-lock.json
+git commit -m "chore(plugin): release v0.2.1"
 git push origin main
 ```
+
+> Note: plain `npm version patch` would create a commit and a git tag by itself. Always use `--no-git-tag-version` so the bump can be reviewed before committing.
 
 ## What Happens Automatically
 
-When you push a version change to `main`:
+When a version change lands on `main`, `.github/workflows/publish.yml` runs:
 
-1. **Version Detection**: GitHub Actions compares the version in `package.json` with the previous commit
-2. **Testing**: Full test suite runs (34 integration tests)
-3. **Build**: Project is built (`npm run build`)
-4. **Publish**: Package is published to NPM with `--access public`
-5. **Tagging**: Git tag is created automatically (e.g., `v0.0.2` or `plugin-v0.0.2`)
+1. **Version Detection**: the `check-version` job compares each `package.json` version against the previous commit (`HEAD~1`)
+2. **Build**: the changed package is built (`npm run build`, or `npm run build -w packages/serverless-plugin` for the plugin)
+3. **Publish**: the changed package is published to NPM with `--access public`
+
+Important:
+
+- The publish workflow runs **no tests**. Testing happens in the separate CI workflow (`.github/workflows/tests.yml`): unit tests with a coverage gate run on every push/PR, and LocalStack integration tests run when the `LOCALSTACK_AUTH_TOKEN` secret is available.
+- The publish workflow creates **no git tags**. Tagging is manual and optional (e.g. `git tag v0.8.1 && git push origin v0.8.1`).
 
 ## Workflow File
 
@@ -58,9 +58,7 @@ Location: `.github/workflows/publish.yml`
 
 Key features:
 - Detects version changes in both root and plugin packages
-- Runs tests before publishing
 - Publishes only changed packages
-- Creates separate tags for root and plugin releases
 - Uses `NPM_TOKEN` secret for authentication
 
 ## NPM Token Setup
@@ -77,22 +75,23 @@ Required for automatic publishing:
 
 We follow [Semantic Versioning](https://semver.org/):
 
-- **PATCH** (`0.0.1` → `0.0.2`): Bug fixes, small improvements
-- **MINOR** (`0.0.2` → `0.1.0`): New features, backwards compatible
-- **MAJOR** (`0.1.0` → `1.0.0`): Breaking changes
+- **PATCH**: Bug fixes, small improvements
+- **MINOR**: New features, backwards compatible
+- **MAJOR**: Breaking changes
 
 Use npm commands:
 ```bash
-npm version patch  # Bug fixes
-npm version minor  # New features
-npm version major  # Breaking changes
+npm version patch --no-git-tag-version  # Bug fixes
+npm version minor --no-git-tag-version  # New features
+npm version major --no-git-tag-version  # Breaking changes
 ```
 
 ## Pre-release Checklist
 
 Before bumping version:
 
-- [ ] All tests passing locally (`npm test`)
+- [ ] Unit tests passing locally (`npm test`)
+- [ ] Integration tests passing if Docker/LocalStack is available (`npm run test:integration`)
 - [ ] Code built successfully (`npm run build`)
 - [ ] CHANGELOG.md updated with changes
 - [ ] README.md updated if needed
@@ -115,66 +114,33 @@ After successful publish:
 Check:
 - NPM_TOKEN is valid and has publish permissions
 - Version is unique (not already published)
-- Tests are passing
 - Build is successful
-
-### Tag Already Exists
-
-If a tag exists:
-```bash
-git tag -d v0.0.2
-git push origin :refs/tags/v0.0.2
-```
 
 ### Manual Publish
 
 If automation fails:
 ```bash
 npm run build
-npm publish --access public
-git tag v0.0.2
-git push origin v0.0.2
+npm publish --access public                                # root package
+npm publish -w packages/serverless-plugin --access public  # plugin
 ```
 
 ## GitHub Actions Logs
 
 Monitor releases at:
 - Actions tab in GitHub repository
-- Look for "Publish to NPM" workflow
+- "Publish to NPM" workflow for publishing; "CI" workflow for tests
 - Check individual job logs for errors
 
 ## Package Scopes
 
 - **Root package**: `local-serverless-stack` (unscoped)
-- **Plugin**: `lss-serverless-plugin` (unscoped)
+- **Plugin**: `serverless-lss` (unscoped)
 
 Both use `--access public` flag for publishing.
 
 ## Release Cadence
 
 - **Patch releases**: As needed for bug fixes
-- **Minor releases**: Monthly or when significant features are ready
+- **Minor releases**: When significant features are ready
 - **Major releases**: When breaking changes are necessary
-
-## First Release (0.0.1)
-
-The initial release `0.0.1` marks the first stable version ready for public use. It includes:
-
-- ✅ Full CLI implementation (start/stop/status/logs)
-- ✅ Orchestrator with API and UI
-- ✅ Serverless plugin for auto-registration
-- ✅ LocalStack integration
-- ✅ Lambda proxy generation
-- ✅ Event source mappings
-- ✅ 100% test coverage (34/34 tests passing)
-- ✅ Complete documentation
-- ✅ CI/CD pipeline
-
-## Future Releases
-
-Planned for upcoming versions:
-
-- `0.0.2`: Bug fixes and documentation improvements
-- `0.1.0`: Additional AWS service support (S3, EventBridge)
-- `0.2.0`: Enhanced UI with real-time updates
-- `1.0.0`: Production-ready stable release

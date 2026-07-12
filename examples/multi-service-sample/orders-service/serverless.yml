@@ -1,0 +1,98 @@
+service: orders-service
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: dev
+  environment:
+    ORDERS_TABLE: orders-Orders
+    ORDER_QUEUE_URL: http://localhost:4572/000000000000/orders-OrderQueue
+    AWS_ENDPOINT: http://localhost:4572
+
+plugins:
+  - serverless-lss
+
+custom:
+  accountId: '000000000000'
+  orchestrator:
+    enabled: true
+    orchestratorUrl: http://localhost:3120
+  lss:
+    apiPort: 3612
+    invokePort: 13612
+
+functions:
+  # POST /orders — protected by a CROSS-SERVICE authorizer: the Lambda behind
+  # the ARN lives in auth-service. LSS resolves the ARN against its global
+  # function registry, so one authorizer can guard many services.
+  createOrder:
+    handler: src/handlers/createOrder.handler
+    events:
+      - http:
+          path: /orders
+          method: post
+          authorizer:
+            name: sessionAuthorizer
+            arn: arn:aws:lambda:${self:provider.region}:${self:custom.accountId}:function:auth-service-${self:provider.stage}-sessionAuthorizer
+            type: request
+            identitySource: method.request.header.code
+            resultTtlInSeconds: 3600
+
+  listOrders:
+    handler: src/handlers/listOrders.handler
+    events:
+      - http:
+          path: /orders
+          method: get
+          authorizer:
+            name: sessionAuthorizer
+            arn: arn:aws:lambda:${self:provider.region}:${self:custom.accountId}:function:auth-service-${self:provider.stage}-sessionAuthorizer
+            type: request
+            identitySource: method.request.header.code
+            resultTtlInSeconds: 3600
+
+  # SQS consumer — LSS provisions the queue in LocalStack and pipes messages to
+  # the runtime worker, no serverless-offline involved.
+  processOrderQueue:
+    handler: src/handlers/processOrderQueue.handler
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - OrderQueue
+              - Arn
+          batchSize: 5
+
+  # Schedule trigger emulation is a documented TODO — LSS still registers the
+  # function, so it is invocable through the Lambda Invoke API on port 13612.
+  cleanupExpiredOrders:
+    handler: src/handlers/cleanupExpiredOrders.handler
+    events:
+      - schedule: rate(1 hour)
+
+resources:
+  Resources:
+    OrdersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: orders-Orders
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH
+
+    OrderQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: orders-OrderQueue
+        VisibilityTimeout: 60
+        MessageRetentionPeriod: 345600
+
+package:
+  individually: false

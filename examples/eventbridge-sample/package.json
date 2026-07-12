@@ -1,0 +1,16 @@
+{
+  "name": "eventbridge-sample",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Shared EventBridge bus provisioned by a resources-only stack, a producer that PutEvents to it, and a consumer whose eventBridge-triggered Lambda runs in LSS — no serverless deploy, no serverless-offline.",
+  "scripts": {
+    "lss:start": "node ../../bin/cli.js start",
+    "lss:stop": "node ../../bin/cli.js stop",
+    "lss:status": "node ../../bin/cli.js status",
+    "register:events": "npm --prefix events-stack run package",
+    "register:producer": "npm --prefix producer-service run package",
+    "register:consumer": "npm --prefix consumer-service run package",
+    "register:all": "npm run register:events && npm run register:producer && npm run register:consumer",
+    "setup": "npm --prefix events-stack install && npm --prefix producer-service install && npm --prefix consumer-service install"
+  }
+}

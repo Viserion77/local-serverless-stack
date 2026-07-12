@@ -1,13 +1,13 @@
 # Serverless Orchestrator Plugin
 
-[![npm version](https://img.shields.io/npm/v/lss-serverless-plugin.svg)](https://www.npmjs.com/package/lss-serverless-plugin)
+[![npm version](https://img.shields.io/npm/v/serverless-lss.svg)](https://www.npmjs.com/package/serverless-lss)
 
 Automatically register your Serverless microservices with the Local Serverless Stack Local Orchestrator.
 
 ## Installation
 
 ```bash
-npm install --save-dev lss-serverless-plugin
+npm install --save-dev serverless-lss
 ```
 
 ## Usage
@@ -16,7 +16,7 @@ Add the plugin to your `serverless.yml`:
 
 ```yaml
 plugins:
-  - lss-serverless-plugin
+  - serverless-lss
 
 custom:
   orchestrator:
@@ -28,20 +28,38 @@ custom:
 
 After running `sls package` or `sls deploy`:
 
-1. The plugin reads your CloudFormation template from `.serverless/`
-2. Sends a registration request to the Orchestrator
-3. The Orchestrator provisions resources (DynamoDB, SQS, SNS) to LocalStack
+1. The plugin sends a registration request to the Orchestrator (service path, ports, region)
+2. The Orchestrator reads the `sls package` artifacts from `.serverless/` (CloudFormation template + `serverless-state.json`)
+3. It provisions resources (DynamoDB, SQS, SNS, S3) to LocalStack
+4. It registers the service's Lambda functions, HTTP routes and authorizers, starts a runtime worker, and binds the service's API port (30xx) and Lambda-invoke port (130xx) — replacing `serverless-offline`
 
 ## Configuration Options
 
 - `enabled` (boolean, default: `true`): Enable/disable the plugin
 - `orchestratorUrl` (string, default: `http://localhost:3100`): Orchestrator API endpoint
 
+### Service ports
+
+The plugin reports which ports LSS should serve the service on:
+
+```yaml
+custom:
+  lss:                    # preferred — explicit LSS ports
+    apiPort: 3010         # API Gateway emulator (HTTP routes)
+    invokePort: 13010     # AWS Lambda Invoke API
+  serverless-offline:     # fallback — drop-in for services already using offline
+    httpPort: 3010
+    lambdaPort: 13010
+```
+
+If only `apiPort` is known, the orchestrator derives `invokePort = apiPort + 10000`
+(configurable via `lambdaRuntime.invokePortOffset`).
+
 ### Example with custom config:
 
 ```yaml
 plugins:
-  - lss-serverless-plugin
+  - serverless-lss
 
 custom:
   orchestrator:

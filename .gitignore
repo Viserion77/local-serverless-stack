@@ -2,6 +2,7 @@
 dist/
 node_modules/
 *.tsbuildinfo
+*.tgz
 
 # Logs
 logs/
@@ -12,8 +13,9 @@ npm-debug.log*
 .DS_Store
 Thumbs.db
 
-# IDE
-.vscode/
+# IDE (shared task definitions stay versioned)
+.vscode/*
+!.vscode/tasks.json
 .idea/
 *.swp
 *.swo
@@ -25,6 +27,8 @@ Thumbs.db
 # Testing
 coverage/
 .nyc_output/
+tests/.lss-integration/
+tests/.lss-client-integration/
 
 # Cache
 .cache/

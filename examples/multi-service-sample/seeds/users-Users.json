@@ -1,0 +1,14 @@
+[
+  {
+    "id": "u-ada",
+    "name": "Ada Lovelace",
+    "email": "ada@example.com",
+    "createdAt": "2026-01-01T10:00:00.000Z"
+  },
+  {
+    "id": "u-grace",
+    "name": "Grace Hopper",
+    "email": "grace@example.com",
+    "createdAt": "2026-01-02T11:30:00.000Z"
+  }
+]

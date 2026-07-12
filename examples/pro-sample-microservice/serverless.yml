@@ -1,0 +1,189 @@
+service: pro-sample-microservice
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  environment:
+    USERS_TABLE: ${self:service}-Users
+    SESSIONS_TABLE: ${self:service}-Sessions
+    ORDERS_TABLE: ${self:service}-Orders
+    ORDER_QUEUE_URL: http://localhost:4571/000000000000/${self:service}-OrderProcessing
+    ORDER_EVENTS_TOPIC_ARN: arn:aws:sns:us-east-1:000000000000:${self:service}-OrderEvents
+    UPLOADS_BUCKET: pro-sample-microservice-uploads
+    AWS_ENDPOINT: http://localhost:4571
+
+plugins:
+  - serverless-lss
+  - serverless-offline
+
+custom:
+  orchestrator:
+    enabled: true
+    orchestratorUrl: http://localhost:3111
+  serverless-offline:
+    httpPort: 3002
+    lambdaPort: 3003
+
+functions:
+  health:
+    handler: src/handlers/health.handler
+    events:
+      - http:
+          path: /health
+          method: get
+
+  createUser:
+    handler: src/handlers/createUser.handler
+    events:
+      - http:
+          path: /users
+          method: post
+
+  listUsers:
+    handler: src/handlers/listUsers.handler
+    events:
+      - http:
+          path: /users
+          method: get
+
+  enqueueOrder:
+    handler: src/handlers/enqueueOrder.handler
+    events:
+      - http:
+          path: /orders
+          method: post
+
+  processOrderQueue:
+    handler: src/handlers/processOrderQueue.handler
+    events:
+      - sqs:
+          arn:
+            Fn::GetAtt:
+              - OrderProcessingQueue
+              - Arn
+          batchSize: 5
+
+  onOrderStream:
+    handler: src/handlers/onOrderStream.handler
+    events:
+      - stream:
+          type: dynamodb
+          arn:
+            Fn::GetAtt:
+              - OrdersTable
+              - StreamArn
+          batchSize: 10
+
+  uploadFile:
+    handler: src/handlers/uploadFile.handler
+    events:
+      - http:
+          path: /uploads
+          method: post
+
+  listUploads:
+    handler: src/handlers/listUploads.handler
+    events:
+      - http:
+          path: /uploads
+          method: get
+
+  # Triggered when an object is created in the uploads bucket.
+  # The bucket notification is wired via NotificationConfiguration below.
+  onUpload:
+    handler: src/handlers/onUpload.handler
+
+resources:
+  Resources:
+    # Users — PK only, NO TTL configured (will surface a warning in the UI).
+    UsersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-Users
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+
+    # Sessions — PK only, intended for TTL (you can enable it from the Settings tab in the UI).
+    SessionsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-Sessions
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: sessionId
+            AttributeType: S
+        KeySchema:
+          - AttributeName: sessionId
+            KeyType: HASH
+
+    # Orders — composite key + GSI on status + DynamoDB stream.
+    OrdersTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ${self:service}-Orders
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: userId
+            AttributeType: S
+          - AttributeName: orderId
+            AttributeType: S
+          - AttributeName: status
+            AttributeType: S
+        KeySchema:
+          - AttributeName: userId
+            KeyType: HASH
+          - AttributeName: orderId
+            KeyType: RANGE
+        GlobalSecondaryIndexes:
+          - IndexName: ByStatus
+            KeySchema:
+              - AttributeName: status
+                KeyType: HASH
+              - AttributeName: orderId
+                KeyType: RANGE
+            Projection:
+              ProjectionType: ALL
+        StreamSpecification:
+          StreamViewType: NEW_AND_OLD_IMAGES
+
+    OrderProcessingQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: ${self:service}-OrderProcessing
+        VisibilityTimeout: 60
+        MessageRetentionPeriod: 345600
+
+    OrderEventsTopic:
+      Type: AWS::SNS::Topic
+      Properties:
+        TopicName: ${self:service}-OrderEvents
+
+    # S3 bucket with a notification that fires the onUpload Lambda whenever a
+    # new object is created under the "incoming/" prefix.
+    UploadsBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        BucketName: pro-sample-microservice-uploads
+        NotificationConfiguration:
+          LambdaConfigurations:
+            - Event: s3:ObjectCreated:*
+              Function:
+                Fn::GetAtt:
+                  - OnUploadLambdaFunction
+                  - Arn
+              Filter:
+                S3Key:
+                  Rules:
+                    - Name: prefix
+                      Value: incoming/
+
+package:
+  individually: false

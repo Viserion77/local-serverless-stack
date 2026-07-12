@@ -1,0 +1,53 @@
+# Minimal serverless.yml template for a service running under LSS.
+# A complete, runnable version lives in examples/sample-microservice/.
+
+service: example-service
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+
+functions:
+  hello:
+    handler: src/handlers/hello.handler
+    events:
+      - http:
+          path: hello
+          method: get
+
+plugins:
+  - serverless-lss      # auto-registers this service with the LSS orchestrator
+  - serverless-offline  # optional: only if you also run functions via offline
+
+custom:
+  # serverless-lss plugin — where the orchestrator is listening.
+  # Must match `serverPort` in lss.config.json (default 3100).
+  orchestrator:
+    enabled: true
+    orchestratorUrl: http://localhost:3100
+
+  # Ports LSS uses for this service. `custom.lss` wins; if you already have a
+  # serverless-offline block, its httpPort/lambdaPort are picked up as a
+  # drop-in fallback (httpPort → apiPort, lambdaPort → invokePort).
+  lss:
+    apiPort: 3000     # HTTP API (API Gateway emulation)
+    invokePort: 3001  # direct Lambda invocations
+
+# Infrastructure resources are provisioned on registration. Supported types:
+# DynamoDB tables, SQS queues, SNS topics, S3 buckets (incl. notifications),
+# EventBridge buses/rules, Lambda event source mappings and OpenSearch
+# Serverless collections. Example:
+#
+# resources:
+#   Resources:
+#     SearchCollection:
+#       Type: AWS::OpenSearchServerless::Collection
+#       Properties:
+#         Name: example-search        # served at <engine>/_aoss/example-search
+#         Type: SEARCH
+
+package:
+  individually: false

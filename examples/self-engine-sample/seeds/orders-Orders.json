@@ -1,0 +1,9 @@
+[
+  {
+    "id": "seed-order-1",
+    "customerId": "u-ada",
+    "total": 99.9,
+    "status": "SEEDED",
+    "createdAt": "2026-07-01T09:00:00.000Z"
+  }
+]

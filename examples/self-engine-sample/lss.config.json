@@ -1,0 +1,18 @@
+{
+  "serverPort": 3140,
+  "engine": "self",
+  "selfEngine": {
+    "port": 14566
+  },
+  "region": "us-east-1",
+  "persistence": true,
+  "debug": false,
+  "stateDir": ".lss",
+  "seedsDir": "./seeds",
+  "autoPackage": true,
+  "lambdaRuntime": {
+    "enabled": true,
+    "execution": "source",
+    "watch": true
+  }
+}

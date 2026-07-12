@@ -1,6 +1,6 @@
 {
-  "name": "lss-serverless-plugin",
-  "version": "0.0.2",
+  "name": "serverless-lss",
+  "version": "0.2.0",
   "description": "Serverless plugin to auto-register services with Local Serverless Stack (LSS) Orchestrator",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
@@ -10,10 +10,10 @@
     "prepublishOnly": "npm run build"
   },
   "engines": {
-    "node": ">=18.0.0"
+    "node": ">=20.0.0"
   },
   "peerDependencies": {
-    "serverless": ">=3.0.0"
+    "serverless": "3.40.0"
   },
   "dependencies": {
     "chalk": "^4.1.2"

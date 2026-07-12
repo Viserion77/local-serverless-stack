@@ -1,0 +1,65 @@
+service: consumer-service
+
+frameworkVersion: '3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: us-east-1
+  stage: dev
+  environment:
+    EVENTS_TABLE: consumer-Events
+    AWS_ENDPOINT: http://localhost:14566
+
+plugins:
+  - serverless-lss
+
+custom:
+  accountId: '000000000000'
+  orchestrator:
+    enabled: true
+    orchestratorUrl: http://localhost:3130
+  lss:
+    apiPort: 3622
+    invokePort: 13622
+
+functions:
+  # eventBridge trigger against the SHARED bus (referenced by ARN so Serverless
+  # does not create a second bus in this stack). Serverless compiles this to a
+  # native AWS::Events::Rule; LSS puts the rule on the bus in LocalStack and
+  # wires the target to this function through its proxy → Invoke API model.
+  # The handler receives the REAL EventBridge event shape (source, detail-type,
+  # detail) — no Records wrapper — exactly like in AWS.
+  onUserSignedUp:
+    handler: src/handlers/onUserSignedUp.handler
+    events:
+      - eventBridge:
+          eventBus: arn:aws:events:${self:provider.region}:${self:custom.accountId}:event-bus/domain-events
+          pattern:
+            source:
+              - producer
+            detail-type:
+              - UserSignedUp
+
+  # GET /events — lists what the consumer stored, so the end-to-end flow is
+  # observable over plain HTTP.
+  listEvents:
+    handler: src/handlers/listEvents.handler
+    events:
+      - httpApi:
+          path: /events
+          method: get
+
+resources:
+  Resources:
+    EventsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: consumer-Events
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: id
+            AttributeType: S
+        KeySchema:
+          - AttributeName: id
+            KeyType: HASH

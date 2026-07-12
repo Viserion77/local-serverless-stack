@@ -1,0 +1,75 @@
+import { Router, Request, Response } from 'express';
+import { SeedManager } from '../services/seed-manager.js';
+import { ConfigManager } from '../services/config-manager.js';
+
+const router = Router();
+const seeds = SeedManager.getInstance();
+
+function isValidTableName(name: unknown): name is string {
+  return (
+    typeof name === 'string' &&
+    name.length > 0 &&
+    !name.includes('/') &&
+    !name.includes('..') &&
+    !name.includes('\\')
+  );
+}
+
+function getRegion(req: Request): string | undefined {
+  const r = req.query.region;
+  return typeof r === 'string' && r ? r : undefined;
+}
+
+router.get('/', async (req: Request, res: Response) => {
+  try {
+    const region = getRegion(req);
+    const [entries, liveTables] = await Promise.all([
+      seeds.list(region),
+      seeds.listLiveTables(region),
+    ]);
+    res.json({
+      seedsDir: ConfigManager.getInstance().getSeedsDir(),
+      entries,
+      liveTables,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to list seeds';
+    res.status(500).json({ error: message });
+  }
+});
+
+router.post('/run', async (req: Request, res: Response) => {
+  try {
+    const { tableName } = req.body ?? {};
+    if (tableName !== undefined && !isValidTableName(tableName)) {
+      return res.status(400).json({ error: 'Invalid tableName' });
+    }
+    const region = getRegion(req);
+    const result = tableName
+      ? [await seeds.seedTable(tableName, region)]
+      : await seeds.seedAll(region);
+    return res.json({ results: result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to run seeds';
+    return res.status(500).json({ error: message });
+  }
+});
+
+router.post('/clear', async (req: Request, res: Response) => {
+  try {
+    const { tableName } = req.body ?? {};
+    if (tableName !== undefined && !isValidTableName(tableName)) {
+      return res.status(400).json({ error: 'Invalid tableName' });
+    }
+    const region = getRegion(req);
+    const result = tableName
+      ? [await seeds.clearTable(tableName, region)]
+      : await seeds.clearAllSeeded(region);
+    return res.json({ results: result });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'Failed to clear seeds';
+    return res.status(500).json({ error: message });
+  }
+});
+
+export { router as seedsRouter };
