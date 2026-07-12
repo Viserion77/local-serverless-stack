@@ -23,10 +23,11 @@ import { EventsEmulator } from '../emulators/events/index.js';
 import { SnsEmulator } from '../emulators/sns/index.js';
 import { StsEmulator } from '../emulators/sts.js';
 import { LambdaCtlEmulator } from '../emulators/lambda-ctl/index.js';
+import { OpenSearchEmulator } from '../emulators/opensearch/index.js';
 import { EngineDispatcher } from '../dispatch/dispatcher.js';
 import { EngineScheduler } from '../dispatch/scheduler.js';
 
-const SERVICES = ['dynamodb', 'sqs', 'sns', 's3', 'events', 'lambda', 'sts'] as const;
+const SERVICES = ['dynamodb', 'sqs', 'sns', 's3', 'events', 'lambda', 'sts', 'aoss'] as const;
 const SQS_SNAPSHOT_FILE = 'sqs-messages.snapshot.json';
 
 export class SelfEngineBackend implements EngineBackend {
@@ -79,6 +80,7 @@ export class SelfEngineBackend implements EngineBackend {
     const sns = new SnsEmulator(ctx);
     const sts = new StsEmulator(ctx);
     const lambdaCtl = new LambdaCtlEmulator(ctx);
+    const opensearch = new OpenSearchEmulator(ctx);
     this.sqs = sqs;
 
     const dispatcher = new EngineDispatcher({ ctx, sqs, dynamo, s3, events, lambdaCtl });
@@ -103,7 +105,7 @@ export class SelfEngineBackend implements EngineBackend {
 
     const handler = createEngineRequestHandler({
       ctx,
-      emulators: [dynamo, sqs, s3, events, sns, sts, lambdaCtl],
+      emulators: [dynamo, sqs, s3, events, sns, sts, lambdaCtl, opensearch],
     });
     const server = http.createServer(handler);
     server.on('connection', socket => {

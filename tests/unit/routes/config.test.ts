@@ -1,5 +1,8 @@
 // Unit test for the /api/config route. Mounts the router on a throwaway Express
 // app and drives it with supertest; the ConfigManager singleton is stubbed.
+import fs from 'fs';
+import os from 'os';
+import path from 'path';
 import express from 'express';
 import request from 'supertest';
 import { configRouter } from '../../../src/server/routes/config';
@@ -58,5 +61,36 @@ describe('GET /api/config', () => {
     stub(undefined);
     const res = await request(appWith()).get('/api/config');
     expect(res.body.localstack.hasAuthToken).toBe(false);
+  });
+});
+
+describe('GET /api/config/branding', () => {
+  afterEach(() => jest.restoreAllMocks());
+
+  it('returns the branding block on its own', async () => {
+    jest.spyOn(ConfigManager.getInstance(), 'getBranding').mockReturnValue({ title: 'Acme Cloud' } as never);
+    const res = await request(appWith()).get('/api/config/branding');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ title: 'Acme Cloud' });
+  });
+
+  it('serves the configured local logo file', async () => {
+    // .txt so supertest buffers the body as text — the route serves any file
+    // getBrandingAssetFile resolves, the extension is irrelevant to it.
+    const file = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'lss-branding-')), 'logo.txt');
+    fs.writeFileSync(file, 'logo-bytes');
+    const spy = jest.spyOn(ConfigManager.getInstance(), 'getBrandingAssetFile').mockReturnValue(file);
+    const res = await request(appWith()).get('/api/config/branding/logo');
+    expect(res.status).toBe(200);
+    expect(res.text).toContain('logo-bytes');
+    expect(spy).toHaveBeenCalledWith('logo');
+    fs.rmSync(path.dirname(file), { recursive: true, force: true });
+  });
+
+  it('404s when no local favicon file is configured', async () => {
+    jest.spyOn(ConfigManager.getInstance(), 'getBrandingAssetFile').mockReturnValue(undefined as never);
+    const res = await request(appWith()).get('/api/config/branding/favicon');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toContain('favicon');
   });
 });

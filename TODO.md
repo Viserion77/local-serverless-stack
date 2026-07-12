@@ -17,6 +17,7 @@ verified as genuinely open; delivered work is tracked in [CHANGELOG.md](CHANGELO
 - [ ] **Self engine hardening** (divergences found in the 2026-07 docs audit)
   - Enforce (or explicitly reject) SQS `RedrivePolicy`: today it is stored verbatim and DLQ redrive never happens — failed messages redeliver via visibility timeout forever.
   - Guard unrecognized S3 sub-resource query params (`?acl`, `?policy`, `?tagging`, `?cors`, …) with `notImplemented` — today `PutObjectAcl` silently overwrites the object body.
+  - OpenSearch Serverless backlog (explicit errors today): `_mget`, scroll/PIT pagination, sub-aggregations, scripted `_update`, relevance scoring (`_score` is a constant 1 — filtering is exact, ranking is not emulated).
 
 - [ ] **Error Handling**
   - Better error messages in CLI

@@ -1,10 +1,11 @@
 # Self Engine
 
 The self engine is an in-process AWS emulator that replaces LocalStack for the
-typical serverless dev loop: DynamoDB, SQS, S3, EventBridge, SNS (minimal),
-Lambda control plane and STS served from a single `node:http` listener inside
-the orchestrator — no Docker, no container, no auth token. Design rationale and
-phased roadmap: [PRD_SELF_ENGINE.md](PRD_SELF_ENGINE.md) (PT-BR).
+typical serverless dev loop: DynamoDB, SQS, S3, EventBridge, OpenSearch
+Serverless, SNS (minimal), Lambda control plane and STS served from a single
+`node:http` listener inside the orchestrator — no Docker, no container, no
+auth token. Design rationale and phased roadmap:
+[PRD_SELF_ENGINE.md](PRD_SELF_ENGINE.md) (PT-BR).
 
 ## Enabling it
 
@@ -65,6 +66,7 @@ sub-resources (treated as plain object operations) — see
 | S3 | Create/Head/Delete bucket, ListBuckets, GetBucketLocation, versioning flag, notification configuration (incl. legacy `CloudFunctionConfiguration` XML), ListObjectsV2 (prefix/delimiter/pagination/encoding-type), PutObject (aws-chunked decoded), GetObject (Range), HeadObject, DeleteObject(s), CopyObject — bodies streamed to disk blobs, never held in memory | Multipart uploads, version stacks. Object ACL/policy sub-resources (`?acl`, `?policy`) are **not** recognized — requests dispatch on HTTP method alone and behave as plain object operations (PutObjectAcl overwrites the object body): a known divergence, not an explicit error |
 | EventBridge | Create/Delete/DescribeEventBus, ListEventBuses, PutRule (pattern validation), DeleteRule, Enable/DisableRule, Put/RemoveTargets, ListRules, ListTargetsByRule, PutEvents (per-entry results, pattern matching: exact, array-OR, `prefix`, `exists`, nested) | `anything-but`, `numeric`, `suffix`, `wildcard`, `cidr` pattern operators (rejected at PutRule), Archives |
 | Lambda (control plane) | CreateFunction (metadata absorption), GetFunction, ListFunctions, UpdateFunctionConfiguration, DeleteFunction, Add/RemovePermission, Create/Get/List/Update/DeleteEventSourceMapping (Enabled toggle = QueueInspector hold/release), Invoke (in-process via the LSS runtime; `X-Amz-Invocation-Type` honored) | Versions/aliases, concurrency APIs |
+| OpenSearch Serverless | Control plane (`aoss`): CreateCollection (deterministic ids, ACTIVE immediately), BatchGetCollection (hands out the local `collectionEndpoint`), ListCollections, DeleteCollection (id or name). Data plane under `<engine>/_aoss/<collection>`: index create/get/delete/HEAD, `_mapping` get/merge, `_doc`/`_create`/`_update` (deep merge, `doc_as_upsert`/`upsert`) with versioning, auto-create on first write, `_bulk` NDJSON with per-item results, `_search`/`_count` (`match`, `match_phrase`, `multi_match`, `term`, `terms`, `range`, `prefix`, `wildcard`, `exists`, `ids`, `bool` + `minimum_should_match`; `sort`, `from`/`size`, `_source` filtering, `?q=`), aggregations (`terms`, `avg`, `sum`, `min`, `max`, `value_count`), `_refresh`, `_cat/indices` | Security/access/lifecycle policy APIs, VPC endpoints, scripted updates, `_mget`, scroll/PIT, sub-aggregations, relevance scoring (`_score` is a constant 1), analyzers/k-NN — all rejected with an explicit OpenSearch-shaped error |
 | SNS | CreateTopic, ListTopics, DeleteTopic, GetTopicAttributes, Publish (logged + counted, no fan-out) | Subscriptions and delivery |
 | STS | GetCallerIdentity | Everything else |
 
@@ -84,9 +86,9 @@ sub-resources (treated as plain object operations) — see
 ## Storage & footprint
 
 Data lives under `dataDir` (default `~/.lss/engine`): JSON catalogs for
-metadata, JSONL snapshot + WAL per DynamoDB table / S3 object index, S3 bodies
-as content-addressed blobs. Registration writes metadata only; item data
-hydrates on first access (streamed line-by-line) and dehydrates after
+metadata, JSONL snapshot + WAL per DynamoDB table / S3 object index / OpenSearch
+index, S3 bodies as content-addressed blobs. Registration writes metadata only;
+item data hydrates on first access (streamed line-by-line) and dehydrates after
 `idleUnloadMs` or under `memoryBudgetMb` LRU pressure. SQS messages are
 memory-only (snapshotted on graceful shutdown when `persistence` is on).
 
@@ -108,4 +110,11 @@ run `lss seed`. Worst case, delete `dataDir` and start clean.
 - S3: object ACL/policy sub-resources (`?acl`, `?policy`) are not recognized —
   requests dispatch on HTTP method alone and behave as plain object operations
   (a PutObjectAcl overwrites the object body).
+- OpenSearch Serverless: the collection endpoint is path-based
+  (`<engine>/_aoss/<collection>` instead of a per-collection host), collections
+  are ACTIVE immediately (no CREATING phase), text matching is
+  tokenize-and-compare with no analyzers or relevance ranking (`_score` is a
+  constant 1 — filtering is exact, ordering needs an explicit `sort`), and
+  encryption/network/data-access policies are not enforced (the CFN resources
+  are skipped with a registration warning).
 - LocalStack volume data does not migrate; re-register + `lss seed`.

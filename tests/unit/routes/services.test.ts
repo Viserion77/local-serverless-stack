@@ -73,6 +73,7 @@ const TEMPLATE = {
     MyQueue: { Type: 'AWS::SQS::Queue', Properties: { QueueName: 'my-queue' } },
     MyTopic: { Type: 'AWS::SNS::Topic', Properties: { TopicName: 'my-topic' } },
     MyBucket: { Type: 'AWS::S3::Bucket', Properties: { BucketName: 'my-bucket' } },
+    MyCollection: { Type: 'AWS::OpenSearchServerless::Collection', Properties: { Name: 'my-collection' } },
     MyMapping: {
       Type: 'AWS::Lambda::EventSourceMapping',
       Properties: { FunctionName: 'my-fn', EventSourceArn: 'arn:queue' },
@@ -276,9 +277,9 @@ describe('GET /api/services', () => {
     jest.spyOn(CacheManager.prototype, 'getTemplate').mockResolvedValue(TEMPLATE);
     const res = await request(appWith()).get('/api/services');
     expect(res.status).toBe(200);
-    expect(res.body[0].resourcesCount).toBe(6);
+    expect(res.body[0].resourcesCount).toBe(7);
     expect(res.body[0].resourceBreakdown).toEqual({
-      lambdas: 1, tables: 1, queues: 1, topics: 1, buckets: 1, buses: 0, eventRules: 0,
+      lambdas: 1, tables: 1, queues: 1, topics: 1, buckets: 1, buses: 0, eventRules: 0, collections: 1,
     });
     expect(res.body[0].functionsCount).toBe(2);
     expect(res.body[0].routesCount).toBe(1);
@@ -326,7 +327,7 @@ describe('GET /api/services/:name', () => {
     jest.spyOn(CacheManager.prototype, 'getTemplate').mockResolvedValue(TEMPLATE);
     const res = await request(appWith()).get('/api/services/my-service');
     expect(res.status).toBe(200);
-    expect(res.body.resourcesCount).toBe(6);
+    expect(res.body.resourcesCount).toBe(7);
     expect(res.body.name).toBe('my-service');
   });
 

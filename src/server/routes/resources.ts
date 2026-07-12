@@ -47,6 +47,7 @@ router.get('/owners', async (req: Request, res: Response) => {
     const queues: Array<{ name: string; service: string }> = [];
     const topics: Array<{ name: string; service: string }> = [];
     const buckets: Array<{ name: string; service: string }> = [];
+    const collections: Array<{ name: string; service: string }> = [];
 
     for (const svc of filtered) {
       const template = await cache.getTemplate(svc.name);
@@ -57,10 +58,11 @@ router.get('/owners', async (req: Request, res: Response) => {
         else if (r.type === 'sqs') queues.push({ name: r.name, service: svc.name });
         else if (r.type === 'sns') topics.push({ name: r.name, service: svc.name });
         else if (r.type === 's3') buckets.push({ name: r.name, service: svc.name });
+        else if (r.type === 'opensearch') collections.push({ name: r.name, service: svc.name });
       }
     }
 
-    res.json({ tables, queues, topics, buckets });
+    res.json({ tables, queues, topics, buckets, collections });
   } catch (error: any) {
     res.status(500).json({ error: error.message });
   }

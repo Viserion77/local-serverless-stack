@@ -1041,4 +1041,11 @@ describe('branding', () => {
     expect(cm.getBrandingAssetFile('logo')).toBeNull();
     expect(cm.getBranding().logoUrl).toBeNull();
   });
+
+  it('resolves relative assets from process.cwd() when no config path is recorded (defensive)', () => {
+    const resolved = path.resolve(process.cwd(), './assets/logo.svg');
+    const cm = cmWith({ branding: { logo: './assets/logo.svg' } }, [resolved]);
+    (cm as any).configPath = '';
+    expect(cm.getBrandingAssetFile('logo')).toBe(resolved);
+  });
 });

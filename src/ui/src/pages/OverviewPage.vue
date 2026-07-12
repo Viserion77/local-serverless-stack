@@ -14,11 +14,12 @@ const config = ref<LssConfigSnapshot | null>(null);
 const services = ref<ServiceSummary[]>([]);
 const lambdas = ref<LambdaSummary[]>([]);
 const apis = ref<ServiceApiInfo[]>([]);
-const resources = ref<{ tables: string[]; queues: string[]; topics: string[]; buckets: string[] }>({
+const resources = ref<{ tables: string[]; queues: string[]; topics: string[]; buckets: string[]; collections?: string[] }>({
   tables: [],
   queues: [],
   topics: [],
   buckets: [],
+  collections: [],
 });
 const loading = ref(true);
 let timer: number | null = null;
@@ -273,6 +274,11 @@ onBeforeUnmount(() => {
           label="S3 buckets"
           :value="resources.buckets.length"
           tone="neutral"
+        />
+        <TStat
+          label="OpenSearch collections"
+          :value="resources.collections?.length ?? 0"
+          tone="info"
         />
       </TGrid>
 

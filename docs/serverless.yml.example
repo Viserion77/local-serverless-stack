@@ -36,5 +36,18 @@ custom:
     apiPort: 3000     # HTTP API (API Gateway emulation)
     invokePort: 3001  # direct Lambda invocations
 
+# Infrastructure resources are provisioned on registration. Supported types:
+# DynamoDB tables, SQS queues, SNS topics, S3 buckets (incl. notifications),
+# EventBridge buses/rules, Lambda event source mappings and OpenSearch
+# Serverless collections. Example:
+#
+# resources:
+#   Resources:
+#     SearchCollection:
+#       Type: AWS::OpenSearchServerless::Collection
+#       Properties:
+#         Name: example-search        # served at <engine>/_aoss/example-search
+#         Type: SEARCH
+
 package:
   individually: false

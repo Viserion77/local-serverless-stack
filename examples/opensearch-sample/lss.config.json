@@ -1,0 +1,17 @@
+{
+  "serverPort": 3150,
+  "engine": "self",
+  "selfEngine": {
+    "port": 14566
+  },
+  "region": "us-east-1",
+  "persistence": true,
+  "debug": false,
+  "stateDir": ".lss",
+  "autoPackage": true,
+  "lambdaRuntime": {
+    "enabled": true,
+    "execution": "source",
+    "watch": true
+  }
+}

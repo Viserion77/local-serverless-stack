@@ -55,6 +55,13 @@ import {
   RemoveTargetsCommand,
   DeleteRuleCommand,
 } from '@aws-sdk/client-eventbridge';
+import {
+  OpenSearchServerlessClient,
+  CreateCollectionCommand,
+  BatchGetCollectionCommand,
+  DeleteCollectionCommand,
+  ListCollectionsCommand,
+} from '@aws-sdk/client-opensearchserverless';
 import { ResourceProvisioner } from '../../../src/server/services/resource-provisioner';
 import { ConfigManager } from '../../../src/server/services/config-manager';
 import type {
@@ -64,6 +71,7 @@ import type {
   S3Resource,
   EventBusResource,
   EventRuleResource,
+  OpenSearchCollectionResource,
   EventSourceMapping,
   LambdaResource,
 } from '../../../src/server/services/cloudformation-parser';
@@ -74,6 +82,7 @@ const snsMock = mockClient(SNSClient);
 const s3Mock = mockClient(S3Client);
 const lambdaMock = mockClient(LambdaClient);
 const eventBridgeMock = mockClient(EventBridgeClient);
+const openSearchMock = mockClient(OpenSearchServerlessClient);
 
 let provisioner: ResourceProvisioner;
 
@@ -91,6 +100,7 @@ beforeEach(() => {
   s3Mock.reset();
   lambdaMock.reset();
   eventBridgeMock.reset();
+  openSearchMock.reset();
   provisioner = ResourceProvisioner.getInstance();
   (provisioner as any).resourcesByLogicalId.clear();
   (provisioner as any).currentRegion = 'us-east-1';
@@ -110,6 +120,7 @@ afterAll(() => {
   s3Mock.restore();
   lambdaMock.restore();
   eventBridgeMock.restore();
+  openSearchMock.restore();
 });
 
 const dynamoResource = (over: Partial<DynamoDBResource> = {}): DynamoDBResource => ({
@@ -141,6 +152,13 @@ const s3Resource = (over: Partial<S3Resource> = {}): S3Resource => ({
   logicalId: 'Uploads',
   name: 'uploads-bucket',
   notifications: [],
+  ...over,
+});
+
+const opensearchResource = (over: Partial<OpenSearchCollectionResource> = {}): OpenSearchCollectionResource => ({
+  type: 'opensearch',
+  logicalId: 'ProductsCollection',
+  name: 'products',
   ...over,
 });
 
@@ -1101,8 +1119,9 @@ describe('listAllResources', () => {
     sqsMock.on(ListQueuesCommand).resolves({ QueueUrls: ['http://localhost:4566/000/q1'] });
     snsMock.on(ListTopicsCommand).resolves({ Topics: [{ TopicArn: 'arn:aws:sns:us-east-1:000:topic1' }] });
     s3Mock.on(ListBucketsCommand).resolves({ Buckets: [{ Name: 'b1' }] });
+    openSearchMock.on(ListCollectionsCommand).resolves({ collectionSummaries: [{ name: 'products' }] });
     const result = await provisioner.listAllResources();
-    expect(result).toEqual({ tables: ['t1'], queues: ['q1'], topics: ['topic1'], buckets: ['b1'] });
+    expect(result).toEqual({ tables: ['t1'], queues: ['q1'], topics: ['topic1'], buckets: ['b1'], collections: ['products'] });
   });
 
   it('builds fresh clients for a different region', async () => {
@@ -1110,8 +1129,9 @@ describe('listAllResources', () => {
     sqsMock.on(ListQueuesCommand).resolves({ QueueUrls: [] });
     snsMock.on(ListTopicsCommand).resolves({ Topics: [] });
     s3Mock.on(ListBucketsCommand).resolves({ Buckets: [] });
+    openSearchMock.on(ListCollectionsCommand).resolves({ collectionSummaries: [] });
     const result = await provisioner.listAllResources('eu-west-1');
-    expect(result).toEqual({ tables: [], queues: [], topics: [], buckets: [] });
+    expect(result).toEqual({ tables: [], queues: [], topics: [], buckets: [], collections: [] });
   });
 
   it('returns empty arrays for each list when the SDK calls fail or fields are missing', async () => {
@@ -1119,7 +1139,8 @@ describe('listAllResources', () => {
     sqsMock.on(ListQueuesCommand).rejects(new Error('x'));
     snsMock.on(ListTopicsCommand).rejects(new Error('x'));
     s3Mock.on(ListBucketsCommand).rejects(new Error('x'));
-    expect(await provisioner.listAllResources()).toEqual({ tables: [], queues: [], topics: [], buckets: [] });
+    openSearchMock.on(ListCollectionsCommand).rejects(new Error('x'));
+    expect(await provisioner.listAllResources()).toEqual({ tables: [], queues: [], topics: [], buckets: [], collections: [] });
   });
 
   it('handles missing list fields (defensive || [] and filters)', async () => {
@@ -1127,8 +1148,9 @@ describe('listAllResources', () => {
     sqsMock.on(ListQueuesCommand).resolves({}); // no QueueUrls
     snsMock.on(ListTopicsCommand).resolves({ Topics: [{ TopicArn: undefined }, { TopicArn: 'arn:aws:sns:us-east-1:000:keep' }] });
     s3Mock.on(ListBucketsCommand).resolves({ Buckets: [{ Name: undefined }, { Name: 'keep' }] });
+    openSearchMock.on(ListCollectionsCommand).resolves({ collectionSummaries: [{ name: undefined }, { name: 'keep' }] });
     const result = await provisioner.listAllResources();
-    expect(result).toEqual({ tables: [], queues: [], topics: ['keep'], buckets: ['keep'] });
+    expect(result).toEqual({ tables: [], queues: [], topics: ['keep'], buckets: ['keep'], collections: ['keep'] });
   });
 
   // Calling the private listers with no argument exercises the
@@ -1139,11 +1161,13 @@ describe('listAllResources', () => {
     sqsMock.on(ListQueuesCommand).resolves({});
     snsMock.on(ListTopicsCommand).resolves({}); // no Topics → `|| []`
     s3Mock.on(ListBucketsCommand).resolves({}); // no Buckets → `|| []`
+    openSearchMock.on(ListCollectionsCommand).resolves({}); // no summaries → `|| []`
     const p = provisioner as any;
     expect(await p.listDynamoDBTables()).toEqual([]);
     expect(await p.listSQSQueues()).toEqual([]);
     expect(await p.listSNSTopics()).toEqual([]);
     expect(await p.listS3Buckets()).toEqual([]);
+    expect(await p.listOpenSearchCollections()).toEqual([]);
   });
 });
 
@@ -1367,6 +1391,103 @@ describe('createEventBus (via provisionResources)', () => {
     expect(eventBridgeMock.commandCalls(CreateEventBusCommand)).toHaveLength(1);
     expect(console.error).not.toHaveBeenCalled();
     expect(console.log).toHaveBeenCalledWith('✅ Provisioned 1 resources for infra');
+  });
+});
+
+describe('createOpenSearchCollection (via provisionResources)', () => {
+  it('creates the collection passing type and description through', async () => {
+    openSearchMock.on(CreateCollectionCommand).resolves({});
+    await provisioner.provisionResources('svc', [
+      opensearchResource({ collectionType: 'SEARCH', description: 'catalog search' }),
+    ], {});
+    const input = openSearchMock.commandCalls(CreateCollectionCommand)[0].args[0].input;
+    expect(input).toEqual({ name: 'products', type: 'SEARCH', description: 'catalog search' });
+    expect(console.log).toHaveBeenCalledWith(
+      expect.stringContaining('✓ Created OpenSearch collection: products (endpoint: '),
+    );
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('swallows ConflictException on re-registration', async () => {
+    openSearchMock.on(CreateCollectionCommand).rejects(namedError('ConflictException'));
+    await provisioner.provisionResources('svc', [opensearchResource()], {});
+    expect(console.log).toHaveBeenCalledWith('  ⚠ OpenSearch collection already exists: products');
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('swallows "already exist" messages regardless of the error name', async () => {
+    openSearchMock.on(CreateCollectionCommand).rejects(
+      namedError('SomethingElse', 'A collection with the name products already exists.'),
+    );
+    await provisioner.provisionResources('svc', [opensearchResource()], {});
+    expect(console.log).toHaveBeenCalledWith('  ⚠ OpenSearch collection already exists: products');
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('points at the self engine when the backing engine has no aoss provider (InternalFailure)', async () => {
+    openSearchMock.on(CreateCollectionCommand).rejects(namedError('InternalFailure', 'boom'));
+    await provisioner.provisionResources('svc', [opensearchResource()], {});
+    expect(console.error).toHaveBeenCalledWith(
+      'Failed to provision opensearch:products:',
+      expect.stringContaining('needs the self engine'),
+    );
+  });
+
+  it('stringifies message-less engine errors instead of printing "undefined"', async () => {
+    openSearchMock.on(CreateCollectionCommand).rejects({ name: 'InternalFailure' } as never);
+    await provisioner.provisionResources('svc', [opensearchResource()], {});
+    expect(console.error).toHaveBeenCalledWith(
+      'Failed to provision opensearch:products:',
+      expect.not.stringContaining('undefined —'),
+    );
+    expect(console.error).toHaveBeenCalledWith(
+      'Failed to provision opensearch:products:',
+      expect.stringContaining('needs the self engine'),
+    );
+  });
+
+  it('points at the self engine on LocalStack "not yet implemented" messages', async () => {
+    openSearchMock.on(CreateCollectionCommand).rejects(
+      namedError('NotImplementedError', "API for service 'opensearchserverless' not yet implemented"),
+    );
+    await provisioner.provisionResources('svc', [opensearchResource()], {});
+    expect(console.error).toHaveBeenCalledWith(
+      'Failed to provision opensearch:products:',
+      expect.stringContaining('needs the self engine'),
+    );
+  });
+
+  it('rethrows other errors (logged by the first-pass catch)', async () => {
+    openSearchMock.on(CreateCollectionCommand).rejects(namedError('ValidationException', 'bad name'));
+    await provisioner.provisionResources('svc', [opensearchResource()], {});
+    expect(console.error).toHaveBeenCalledWith('Failed to provision opensearch:products:', 'bad name');
+  });
+});
+
+describe('deleteOpenSearchCollection (via cleanupResources)', () => {
+  it('resolves the collection id by name and deletes it', async () => {
+    openSearchMock.on(BatchGetCollectionCommand).resolves({
+      collectionDetails: [{ id: 'col-123', name: 'products' }],
+    });
+    openSearchMock.on(DeleteCollectionCommand).resolves({});
+    await provisioner.cleanupResources('svc', [opensearchResource()]);
+    expect(openSearchMock.commandCalls(BatchGetCollectionCommand)[0].args[0].input).toEqual({ names: ['products'] });
+    expect(openSearchMock.commandCalls(DeleteCollectionCommand)[0].args[0].input).toEqual({ id: 'col-123' });
+    expect(console.log).toHaveBeenCalledWith('Deleted OpenSearch collection: products');
+  });
+
+  it('is a no-op when the collection is already gone', async () => {
+    openSearchMock.on(BatchGetCollectionCommand).resolves({ collectionDetails: [] });
+    await provisioner.cleanupResources('svc', [opensearchResource()]);
+    expect(openSearchMock.commandCalls(DeleteCollectionCommand)).toHaveLength(0);
+    expect(console.log).toHaveBeenCalledWith('OpenSearch collection not found (already deleted?): products');
+    expect(console.error).not.toHaveBeenCalled();
+  });
+
+  it('logs cleanup failures without aborting the pass', async () => {
+    openSearchMock.on(BatchGetCollectionCommand).rejects(new Error('aoss down'));
+    await provisioner.cleanupResources('svc', [opensearchResource()]);
+    expect(console.error).toHaveBeenCalledWith('Failed to cleanup opensearch:products:', 'aoss down');
   });
 });
 

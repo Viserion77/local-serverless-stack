@@ -119,7 +119,10 @@ Both files should contain valid JSON with the following optional properties:
   - Example: `"us-east-1"`
 
 - **services** (array, default: ["dynamodb", "sqs", "sns", "s3", "lambda", "events"])
-  - AWS services to enable in LocalStack
+  - AWS services to enable in LocalStack (`SERVICES` env of the container).
+    Ignored by the self engine, which always serves its full set — including
+    OpenSearch Serverless (`aoss`), which community LocalStack images don't
+    provide.
   - Example: `["dynamodb", "sqs", "sns", "lambda", "s3", "secretsmanager"]`
 
 - **persistence** (boolean, default: true)

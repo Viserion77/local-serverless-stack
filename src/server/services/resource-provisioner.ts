@@ -22,6 +22,13 @@ import {
   RemoveTargetsCommand,
   DeleteRuleCommand,
 } from '@aws-sdk/client-eventbridge';
+import {
+  OpenSearchServerlessClient,
+  CreateCollectionCommand,
+  BatchGetCollectionCommand,
+  DeleteCollectionCommand,
+  ListCollectionsCommand,
+} from '@aws-sdk/client-opensearchserverless';
 import { LocalStackManager } from './localstack-manager.js';
 import { ConfigManager } from './config-manager.js';
 import { SeedManager } from './seed-manager.js';
@@ -33,6 +40,7 @@ import type {
   S3Resource,
   EventBusResource,
   EventRuleResource,
+  OpenSearchCollectionResource,
   EventSourceMapping,
 } from './cloudformation-parser.js';
 import AdmZip from 'adm-zip';
@@ -45,6 +53,7 @@ export class ResourceProvisioner {
   private s3Client!: S3Client;
   private lambdaClient!: LambdaClient;
   private eventBridgeClient!: EventBridgeClient;
+  private openSearchClient!: OpenSearchServerlessClient;
   private currentRegion: string = 'us-east-1';
   // CFN logical id → resource snapshot for the service currently being
   // provisioned. Lets resolveEventSourceArn map Fn::GetAtt references
@@ -78,6 +87,7 @@ export class ResourceProvisioner {
     this.s3Client = new S3Client({ ...config, forcePathStyle: true });
     this.lambdaClient = new LambdaClient(config);
     this.eventBridgeClient = new EventBridgeClient(config);
+    this.openSearchClient = new OpenSearchServerlessClient(config);
   }
 
   getS3Client(): S3Client {
@@ -140,6 +150,10 @@ export class ResourceProvisioner {
             break;
           case 'eventbus':
             await this.createEventBus(resource);
+            provisionedCount++;
+            break;
+          case 'opensearch':
+            await this.createOpenSearchCollection(resource);
             provisionedCount++;
             break;
         }
@@ -587,6 +601,32 @@ export const handler = async (event, context) => {
     }
   }
 
+  private async createOpenSearchCollection(resource: OpenSearchCollectionResource): Promise<void> {
+    try {
+      await this.openSearchClient.send(
+        new CreateCollectionCommand({
+          name: resource.name,
+          type: resource.collectionType as any,
+          description: resource.description,
+        }),
+      );
+      const endpoint = `${LocalStackManager.getInstance().getConfig().endpoint}/_aoss/${resource.name}`;
+      console.log(`  ✓ Created OpenSearch collection: ${resource.name} (endpoint: ${endpoint})`);
+    } catch (error: any) {
+      if (error?.name === 'ConflictException' || error?.message?.includes('already exist')) {
+        console.log(`  ⚠ OpenSearch collection already exists: ${resource.name}`);
+      } else if (error?.name === 'InternalFailure' || error?.message?.includes('not yet implemented')) {
+        // The community LocalStack image has no aoss provider — say so instead
+        // of surfacing an opaque 501.
+        throw new Error(
+          `${error?.message || error} — OpenSearch Serverless needs the self engine ("engine": "self") or a LocalStack edition that supports aoss`,
+        );
+      } else {
+        throw error;
+      }
+    }
+  }
+
   private async createEventBus(resource: EventBusResource): Promise<void> {
     try {
       await this.eventBridgeClient.send(new CreateEventBusCommand({ Name: resource.name }));
@@ -880,6 +920,7 @@ export const handler = async (event, context) => {
     queues: string[];
     topics: string[];
     buckets: string[];
+    collections: string[];
   }> {
     const baseConfig = LocalStackManager.getInstance().getConfig();
     const config = region ? { ...baseConfig, region } : { ...baseConfig, region: this.currentRegion };
@@ -889,15 +930,19 @@ export const handler = async (event, context) => {
     const s3 = region && region !== this.currentRegion
       ? new S3Client({ ...config, forcePathStyle: true })
       : this.s3Client;
+    const aoss = region && region !== this.currentRegion
+      ? new OpenSearchServerlessClient(config)
+      : this.openSearchClient;
 
-    const [tables, queues, topics, buckets] = await Promise.all([
+    const [tables, queues, topics, buckets, collections] = await Promise.all([
       this.listDynamoDBTables(dynamo),
       this.listSQSQueues(sqs),
       this.listSNSTopics(sns),
       this.listS3Buckets(s3),
+      this.listOpenSearchCollections(aoss),
     ]);
 
-    return { tables, queues, topics, buckets };
+    return { tables, queues, topics, buckets, collections };
   }
 
   private async listDynamoDBTables(client: DynamoDBClient = this.dynamoClient): Promise<string[]> {
@@ -934,6 +979,17 @@ export const handler = async (event, context) => {
     try {
       const response = await client.send(new ListBucketsCommand({}));
       return response.Buckets?.map(b => b.Name || '').filter(n => n !== '') || [];
+    } catch {
+      return [];
+    }
+  }
+
+  // Empty on engines without aoss (community LocalStack) — the dashboard just
+  // shows zero collections there.
+  private async listOpenSearchCollections(client: OpenSearchServerlessClient = this.openSearchClient): Promise<string[]> {
+    try {
+      const response = await client.send(new ListCollectionsCommand({}));
+      return response.collectionSummaries?.map(c => c.name || '').filter(n => n !== '') || [];
     } catch {
       return [];
     }
@@ -985,6 +1041,10 @@ export const handler = async (event, context) => {
             await this.deleteEventRule(resource);
             cleaned++;
             break;
+          case 'opensearch':
+            await this.deleteOpenSearchCollection(resource.name);
+            cleaned++;
+            break;
           case 'event-source':
             await this.deleteEventSourceMapping(serviceName, resource.functionName);
             cleaned++;
@@ -1008,6 +1068,18 @@ export const handler = async (event, context) => {
     }
 
     console.log(`✅ Cleaned up ${cleaned} resources for ${serviceName}`);
+  }
+
+  private async deleteOpenSearchCollection(name: string): Promise<void> {
+    // DeleteCollection takes the collection id — resolve it from the name.
+    const found = await this.openSearchClient.send(new BatchGetCollectionCommand({ names: [name] }));
+    const id = found.collectionDetails?.[0]?.id;
+    if (!id) {
+      console.log(`OpenSearch collection not found (already deleted?): ${name}`);
+      return;
+    }
+    await this.openSearchClient.send(new DeleteCollectionCommand({ id }));
+    console.log(`Deleted OpenSearch collection: ${name}`);
   }
 
   private async deleteEventRule(rule: EventRuleResource): Promise<void> {

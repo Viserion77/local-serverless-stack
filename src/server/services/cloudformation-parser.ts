@@ -87,6 +87,16 @@ export interface EventBusResource {
   name: string;
 }
 
+export interface OpenSearchCollectionResource {
+  type: 'opensearch';
+  logicalId: string;
+  name: string;
+  // SEARCH | TIMESERIES | VECTORSEARCH (CFN `Type`); provisioning passes it
+  // through and defaults are left to the engine.
+  collectionType?: string;
+  description?: string;
+}
+
 export interface EventRuleTarget {
   id: string;
   // CFN function reference (Fn::GetAtt logical id), literal Lambda ARN or name.
@@ -137,6 +147,7 @@ export type Resource =
   | S3Resource
   | EventBusResource
   | EventRuleResource
+  | OpenSearchCollectionResource
   | EventSourceMapping;
 
 export class CloudFormationParser {
@@ -185,6 +196,15 @@ export class CloudFormationParser {
         // LocalStack mocks Archives: CFN reports CREATE_COMPLETE but ListArchives
         // stays empty, so provisioning one locally would only fake success.
         warnings?.push(`AWS::Events::Archive "${key}" is not provisioned locally — LocalStack mocks Archives (created but never listed/replayable).`);
+        return null;
+      case 'AWS::OpenSearchServerless::Collection':
+        return this.parseOpenSearchCollection(key, resource);
+      case 'AWS::OpenSearchServerless::SecurityPolicy':
+      case 'AWS::OpenSearchServerless::AccessPolicy':
+      case 'AWS::OpenSearchServerless::VpcEndpoint':
+        // Nothing enforces encryption/network/data-access policies locally —
+        // accepting them silently would fake a security posture.
+        warnings?.push(`${resource.Type} "${key}" is a no-op locally — the local engines do not enforce OpenSearch Serverless policies.`);
         return null;
       default:
         return null;
@@ -296,6 +316,17 @@ export class CloudFormationParser {
       name: (props.BucketName as string) || key,
       versioningEnabled: versioning?.Status === 'Enabled',
       notifications,
+    };
+  }
+
+  private parseOpenSearchCollection(key: string, resource: CloudFormationResource): OpenSearchCollectionResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    return {
+      type: 'opensearch',
+      logicalId: key,
+      name: (props.Name as string) || key.toLowerCase(),
+      collectionType: props.Type as string | undefined,
+      description: props.Description as string | undefined,
     };
   }
 

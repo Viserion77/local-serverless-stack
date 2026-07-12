@@ -168,6 +168,66 @@
     },
 
     // ------------------------------------------------------------------
+    // Example: opensearch-sample (no Docker)
+    // ------------------------------------------------------------------
+    {
+      "label": "example opensearch: setup",
+      "detail": "npm install no catalog-service do exemplo",
+      "type": "shell",
+      "command": "npm run setup",
+      "options": { "cwd": "${workspaceFolder}/examples/opensearch-sample" },
+      "icon": { "id": "desktop-download", "color": "terminal.ansiBlue" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example opensearch: start (no Docker)",
+      "detail": "Sobe o LSS com a engine própria na porta 14566",
+      "type": "shell",
+      "command": "npm run lss:start",
+      "options": { "cwd": "${workspaceFolder}/examples/opensearch-sample" },
+      "icon": { "id": "zap", "color": "terminal.ansiGreen" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example opensearch: register service",
+      "detail": "sls package no catalog-service (registra e provisiona a collection)",
+      "type": "shell",
+      "command": "npm run register:catalog",
+      "options": { "cwd": "${workspaceFolder}/examples/opensearch-sample" },
+      "icon": { "id": "cloud-upload", "color": "terminal.ansiBlue" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example opensearch: drive catalog",
+      "detail": "Indexa produtos e roda busca full-text, filtros e agregações",
+      "type": "shell",
+      "command": "curl -s -X POST http://localhost:3041/products -H 'content-type: application/json' -d '{\"name\":\"Wireless Mouse\",\"category\":\"peripherals\",\"price\":25,\"tags\":[\"usb\",\"wireless\"]}' && echo && curl -s -X POST http://localhost:3041/products -H 'content-type: application/json' -d '{\"name\":\"Mechanical Keyboard\",\"category\":\"peripherals\",\"price\":90,\"tags\":[\"usb\"]}' && echo && curl -s -X POST http://localhost:3041/products -H 'content-type: application/json' -d '{\"name\":\"USB Hub\",\"category\":\"accessories\",\"price\":15,\"tags\":[\"usb\"]}' && echo && echo '--- SEARCH q=wireless:' && curl -s 'http://localhost:3041/search?q=wireless' && echo && echo '--- SEARCH category+maxPrice:' && curl -s 'http://localhost:3041/search?category=peripherals&maxPrice=50' && echo && echo '--- STATS:' && curl -s http://localhost:3041/stats && echo",
+      "options": { "cwd": "${workspaceFolder}/examples/opensearch-sample" },
+      "icon": { "id": "run-all", "color": "terminal.ansiCyan" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example opensearch: stop",
+      "type": "shell",
+      "command": "npm run lss:stop",
+      "options": { "cwd": "${workspaceFolder}/examples/opensearch-sample" },
+      "icon": { "id": "debug-stop", "color": "terminal.ansiRed" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example opensearch: demo completo",
+      "detail": "start > register > drive — OpenSearch Serverless sem Docker em uma task",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "example opensearch: start (no Docker)",
+        "example opensearch: register service",
+        "example opensearch: drive catalog"
+      ],
+      "icon": { "id": "rocket", "color": "terminal.ansiYellow" },
+      "problemMatcher": []
+    },
+
+    // ------------------------------------------------------------------
     // Example: eventbridge-sample (LocalStack via Docker)
     // ------------------------------------------------------------------
     {

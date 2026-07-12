@@ -19,7 +19,7 @@ flowchart LR
 
 ## Features
 
-- **⚡ Self engine (the LSS differentiator)**: DynamoDB, SQS, S3, EventBridge, SNS and the Lambda control plane emulated **in-process** by the orchestrator — no Docker, no LocalStack, no auth token. Boots in milliseconds, stores data in local files, delivers events straight into your handlers. See [Self engine](#self-engine--no-docker-no-localstack-no-auth-token) below.
+- **⚡ Self engine (the LSS differentiator)**: DynamoDB, SQS, S3, EventBridge, OpenSearch Serverless, SNS and the Lambda control plane emulated **in-process** by the orchestrator — no Docker, no LocalStack, no auth token. Boots in milliseconds, stores data in local files, delivers events straight into your handlers. See [Self engine](#self-engine--no-docker-no-localstack-no-auth-token) below.
 - **Centralized provisioning**: Parses CloudFormation templates from `sls package` and provisions resources automatically — into the self engine or a single shared LocalStack, your choice per instance
 - **Event source mappings**: Automatically connects SQS queues, streams, S3 notifications and EventBridge rules to Lambda handlers
 - **Lambda runtime & API emulation**: LSS answers on the same API (30xx) and Lambda invoke (130xx) ports that serverless-offline used
@@ -54,6 +54,12 @@ What you get:
 - **SQS** with FIFO, visibility redelivery and live counters; **S3** with byte-exact
   object round trips and notifications; **EventBridge** with buses, pattern-filtered
   rules and `rate()`/cron schedules; minimal **SNS** and **STS**.
+- **OpenSearch Serverless**: collections declared as
+  `AWS::OpenSearchServerless::Collection` are provisioned via the real `aoss`
+  control plane and served through the OpenSearch REST API — document CRUD,
+  `_bulk`, `_search` with the everyday query DSL (match/term/range/bool…),
+  sorting and `terms`/metric aggregations — at
+  `http://localhost:14566/_aoss/<collection>`.
 - **Events delivered in-process**: SQS batches, DynamoDB streams, S3 notifications and
   EventBridge targets go straight from the engine to the LSS Lambda runtime — no proxy
   Lambdas, no polling containers.
@@ -62,7 +68,7 @@ What you get:
 flowchart LR
     APP[Your services<br/>AWS SDK → :14566] --> ENG
     subgraph ORCH["One orchestrator process — no Docker"]
-        ENG[Self engine<br/>DynamoDB · SQS · S3<br/>EventBridge · SNS · STS]
+        ENG[Self engine<br/>DynamoDB · SQS · S3 · EventBridge<br/>OpenSearch · SNS · STS]
         ENG -->|in-process events| RT[LSS Lambda runtime<br/>your handlers, ports 30xx/130xx]
         ENG --- FS[(local files<br/>~/.lss/engine)]
     end
@@ -128,6 +134,7 @@ complete runnable projects live in [examples/](examples/):
 | [multi-service-sample](examples/multi-service-sample/) | 3 services, cross-service events, schedules |
 | [eventbridge-sample](examples/eventbridge-sample/) | EventBridge buses, rules, producer/consumer |
 | [self-engine-sample](examples/self-engine-sample/) | The no-Docker engine end to end |
+| [opensearch-sample](examples/opensearch-sample/) | OpenSearch Serverless: full-text search, filters, aggregations |
 | [pro-sample-microservice](examples/pro-sample-microservice/) | LocalStack Pro edition + auth token |
 
 ## CLI

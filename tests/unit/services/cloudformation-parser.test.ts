@@ -14,6 +14,7 @@ import {
   S3Resource,
   EventBusResource,
   EventRuleResource,
+  OpenSearchCollectionResource,
   EventSourceMapping,
 } from '../../../src/server/services/cloudformation-parser';
 
@@ -724,6 +725,70 @@ describe('AWS::Events::Archive', () => {
       },
     } as never, warnings);
     expect(warnings).toEqual([]);
+  });
+});
+
+describe('parseOpenSearchCollection', () => {
+  it('parses name, type and description', () => {
+    const resources = parser.parse({
+      Resources: {
+        ProductsCollection: {
+          Type: 'AWS::OpenSearchServerless::Collection',
+          Properties: { Name: 'products', Type: 'SEARCH', Description: 'catalog search' },
+        },
+      },
+    } as never) as OpenSearchCollectionResource[];
+    expect(resources).toEqual([{
+      type: 'opensearch',
+      logicalId: 'ProductsCollection',
+      name: 'products',
+      collectionType: 'SEARCH',
+      description: 'catalog search',
+    }]);
+  });
+
+  it('falls back to the lowercased logical id when Name is absent (collection names must be lowercase)', () => {
+    const resources = parser.parse({
+      Resources: {
+        ProductsCollection: { Type: 'AWS::OpenSearchServerless::Collection', Properties: {} },
+      },
+    } as never) as OpenSearchCollectionResource[];
+    expect(resources[0].name).toBe('productscollection');
+    expect(resources[0].collectionType).toBeUndefined();
+  });
+
+  it('handles a collection with no Properties block', () => {
+    const resources = parser.parse({
+      Resources: {
+        Search: { Type: 'AWS::OpenSearchServerless::Collection' },
+      },
+    } as never) as OpenSearchCollectionResource[];
+    expect(resources[0].name).toBe('search');
+  });
+
+  it('skips SecurityPolicy/AccessPolicy/VpcEndpoint with a warning (nothing enforces them locally)', () => {
+    const warnings: string[] = [];
+    const resources = parser.parse({
+      Resources: {
+        Encryption: {
+          Type: 'AWS::OpenSearchServerless::SecurityPolicy',
+          Properties: { Name: 'products-encryption', Type: 'encryption', Policy: '{}' },
+        },
+        DataAccess: {
+          Type: 'AWS::OpenSearchServerless::AccessPolicy',
+          Properties: { Name: 'products-access', Type: 'data', Policy: '[]' },
+        },
+        Vpc: {
+          Type: 'AWS::OpenSearchServerless::VpcEndpoint',
+          Properties: { Name: 'products-vpce' },
+        },
+      },
+    } as never, warnings);
+    expect(resources).toEqual([]);
+    expect(warnings).toHaveLength(3);
+    expect(warnings[0]).toContain('AWS::OpenSearchServerless::SecurityPolicy "Encryption"');
+    expect(warnings[1]).toContain('AWS::OpenSearchServerless::AccessPolicy "DataAccess"');
+    expect(warnings[2]).toContain('AWS::OpenSearchServerless::VpcEndpoint "Vpc"');
   });
 });
 

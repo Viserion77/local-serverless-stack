@@ -280,6 +280,13 @@ onBeforeUnmount(() => {
           >
             🎯 {{ (row.resourceBreakdown as any).eventRules }}
           </TTag>
+          <TTag
+            v-if="(row.resourceBreakdown as any)?.collections"
+            size="sm"
+            variant="soft"
+          >
+            🔍 {{ (row.resourceBreakdown as any).collections }}
+          </TTag>
           <span
             v-if="!row.resourcesCount"
             class="muted"

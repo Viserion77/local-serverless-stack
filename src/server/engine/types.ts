@@ -45,7 +45,10 @@ export type EngineServiceName =
   | 's3'
   | 'events'
   | 'lambda'
-  | 'sts';
+  | 'sts'
+  // OpenSearch Serverless — the SigV4 signing name, shared by the control
+  // plane (X-Amz-Target OpenSearchServerless.*) and the data plane REST API.
+  | 'aoss';
 
 // DynamoDB wire-format attribute value (also reused for stream records and
 // SQS message-attribute shapes where noted). `B`/`BS` carry base64 strings —

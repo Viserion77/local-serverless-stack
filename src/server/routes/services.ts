@@ -110,6 +110,7 @@ router.get('/', async (_req: Request, res: Response) => {
           buckets: resources.filter(r => r.type === 's3').length,
           buses: resources.filter(r => r.type === 'eventbus').length,
           eventRules: resources.filter(r => r.type === 'event-rule').length,
+          collections: resources.filter(r => r.type === 'opensearch').length,
         };
         const runtime = LambdaRuntimeManager.getInstance().getRuntimeInfo(s.name);
         const gateway = GatewayManager.getInstance().getInfo(s.name);

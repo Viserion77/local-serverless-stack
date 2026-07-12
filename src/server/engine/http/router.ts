@@ -41,6 +41,7 @@ const TARGET_PREFIXES: Record<string, EngineServiceName> = {
   DynamoDB_20120810: 'dynamodb',
   AmazonSQS: 'sqs',
   AWSEvents: 'events',
+  OpenSearchServerless: 'aoss',
 };
 
 const LEGACY_SQS_MESSAGE =
@@ -57,6 +58,7 @@ const LOCALSTACK_HEALTH = {
     lambda: 'available',
     events: 'available',
     sts: 'available',
+    aoss: 'available',
   },
   edition: 'self',
   version: 'lss-self-engine',
@@ -165,6 +167,10 @@ async function handleRequest(
         else service = formAction === 'GetCallerIdentity' ? 'sts' : 'sns';
       } else if (rawPath.startsWith('/2015-03-31/')) {
         service = 'lambda';
+      } else if (rawPath === '/_aoss' || rawPath.startsWith('/_aoss/')) {
+        // Unsigned OpenSearch data-plane calls (curl against a collection
+        // endpoint) carry no scope — the /_aoss prefix is the marker.
+        service = 'aoss';
       } else {
         service = 's3';
       }
@@ -347,6 +353,10 @@ function shapeForService(
         emulator && 'jsonVersion' in emulator ? emulator.jsonVersion : service === 'events' ? '1.1' : '1.0';
       return { kind: 'json', service, version };
     }
+    case 'aoss':
+      // Control-plane failures; the emulator serializes data-plane errors in
+      // the OpenSearch JSON shape itself, without throwing.
+      return { kind: 'json', service, version: '1.0' };
     case 'sns':
     case 'sts':
       return { kind: 'query' };

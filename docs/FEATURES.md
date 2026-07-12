@@ -46,8 +46,9 @@ LocalStack. `autoPackage` can run the packaging command on demand when the templ
 | S3 buckets | Created with versioning and `s3:ObjectCreated:*` notifications (prefix/suffix filters). | unit + integration |
 | Lambda event source mappings | SQS→Lambda and DynamoDB Stream→Lambda wired via LocalStack. | unit (`resource-provisioner`) + integration |
 | EventBridge buses & rules | `AWS::Events::EventBus` created in LocalStack; `AWS::Events::Rule` (pattern or schedule) wired to Lambda targets through the same proxy → invoke-API model; `AWS::Events::Archive` skipped with a warning (LocalStack mocks it). | unit (`cloudformation-parser`, `resource-provisioner`) |
+| OpenSearch Serverless collections | `AWS::OpenSearchServerless::Collection` created via the `aoss` control plane (idempotent on `ConflictException`); `SecurityPolicy`/`AccessPolicy`/`VpcEndpoint` accepted and skipped with a warning (nothing enforces them locally); on engines without an aoss provider (community LocalStack) the failure names the self engine as the fix. | unit (`cloudformation-parser`, `resource-provisioner`) |
 | Lambda proxies | Generated proxy functions forward events to the service's Lambda Invoke API endpoint (the LSS invoke listener, contract-compatible with serverless-offline's `lambdaPort`). | unit (`resource-provisioner`) |
-| `GET /api/resources` / `…/owners` | List provisioned resources (tables/queues/topics/buckets) and map them to owning services. | unit (`routes/resources`) + integration |
+| `GET /api/resources` / `…/owners` | List provisioned resources (tables/queues/topics/buckets/collections) and map them to owning services. | unit (`routes/resources`) + integration |
 
 ## 4. Service registration (the `serverless-lss` plugin)
 
@@ -97,7 +98,7 @@ port. Asserted by: unit (`dev/dynamo-proxy`).
 active engine's health — LocalStack or self — kept under that name for compatibility). The Vue dashboard
 (served as a SPA) surfaces Overview / Services / Lambdas / APIs / Queues / S3 / DynamoDB with a region selector
 and theme toggle; the Services list and service detail pages include the per-service resource breakdown with
-EventBridge buses & rules (UI is exercised manually, not in the automated suites).
+EventBridge buses & rules and OpenSearch collections (UI is exercised manually, not in the automated suites).
 
 Dashboard branding: an optional `branding` key in `lss.config.json` (title, subtitle, logo,
 favicon, defaultTheme, plus `colors`/`themeColors` as TreeUI token overrides) customizes the dashboard. Served
@@ -163,6 +164,7 @@ the next milestone and rows below will gain integration assertions with it.
 | SQS emulation | Queues (FIFO groups/dedup), event-driven long poll, visibility redelivery, live counters for QueueInspector, MD5 digests, CreateQueue idempotency duality. | unit (`engine/sqs`) |
 | S3 emulation | Buckets, binary-exact object round trips, Range reads, ListObjectsV2 pagination/delimiter/encoding, DeleteObjects, CopyObject, notification configuration (incl. legacy XML names), versioning flag. | unit (`engine/s3`) |
 | EventBridge + SNS + STS | Buses/rules/targets, PutEvents per-entry results, pattern matcher (exact/array-OR/prefix/exists/nested; unsupported operators rejected at PutRule), minimal SNS, `GetCallerIdentity`. | unit (`engine/events`, `engine/sns-sts`) |
+| OpenSearch Serverless emulation | `aoss` control plane (Create/BatchGet/List/DeleteCollection, deterministic ids, `collectionEndpoint` handed out) + the OpenSearch REST data plane under `/_aoss/<collection>`: index/document CRUD with versioning, `_bulk` NDJSON, `_search` (match/term/terms/range/prefix/wildcard/exists/ids/bool, sort, `_source` filtering, `terms`+metric aggregations), `_count`, `_mapping`, `_cat/indices`; OpenSearch-shaped errors; unsupported operators rejected loudly. | unit (`engine/opensearch`, `engine/http/router`) |
 | Lambda control plane | Proxy absorption as metadata (INVOKE_URL kept as HTTP fallback), ESM lifecycle with `Enabled` toggle (QueueInspector hold/release), Invoke passthrough (`X-Amz-Invocation-Type`). | unit (`engine/lambda-ctl`) |
 | In-process event delivery | SQS→Lambda loops (batch size/window, visibility semantics), DynamoDB stream tailers (TRIM_HORIZON/LATEST, retry-then-advance, OnFailure destination), S3 notification fan-out (globs + prefix/suffix), EventBridge targets (`Input`/`InputPath`), schedules (`rate` + 6-field cron) — all through `LambdaRuntimeManager.invoke()`, no proxies, no polling loops. | unit (`engine/dispatch`, `engine/self-backend`) |
 

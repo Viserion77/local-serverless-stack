@@ -1,0 +1,13 @@
+{
+  "name": "opensearch-sample",
+  "version": "0.0.0",
+  "private": true,
+  "description": "A product-catalog microservice using OpenSearch Serverless on the LSS self engine: full-text search, filters and aggregations served in-process — no Docker, no OpenSearch cluster, no auth token.",
+  "scripts": {
+    "lss:start": "node ../../bin/cli.js start --self-engine",
+    "lss:stop": "node ../../bin/cli.js stop",
+    "lss:status": "node ../../bin/cli.js status",
+    "register:catalog": "npm --prefix catalog-service run package",
+    "setup": "npm --prefix catalog-service install"
+  }
+}

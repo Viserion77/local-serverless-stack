@@ -98,7 +98,7 @@ function makeQueryFake(service: 'sns' | 'sts'): QueryEmulator & { calls: QueryCa
   };
 }
 
-function makeRestFake(service: 's3' | 'lambda'): RestEmulator & { requests: AwsRequest[] } {
+function makeRestFake(service: 's3' | 'lambda' | 'aoss'): RestEmulator & { requests: AwsRequest[] } {
   const requests: AwsRequest[] = [];
   return {
     service,
@@ -130,6 +130,7 @@ interface Engine {
   sts: ReturnType<typeof makeQueryFake>;
   s3: ReturnType<typeof makeRestFake>;
   lambda: ReturnType<typeof makeRestFake>;
+  aoss: ReturnType<typeof makeRestFake>;
   close(): Promise<void>;
 }
 
@@ -142,7 +143,8 @@ async function startEngine(configOverrides: Partial<SelfEngineResolvedConfig> = 
   const sts = makeQueryFake('sts');
   const s3 = makeRestFake('s3');
   const lambda = makeRestFake('lambda');
-  const deps: EngineRouterDeps = { ctx, emulators: [dynamo, sqs, events, sns, sts, s3, lambda] };
+  const aoss = makeRestFake('aoss');
+  const deps: EngineRouterDeps = { ctx, emulators: [dynamo, sqs, events, sns, sts, s3, lambda, aoss] };
   const server = http.createServer(createEngineRequestHandler(deps));
   await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
   const port = (server.address() as AddressInfo).port;
@@ -156,6 +158,7 @@ async function startEngine(configOverrides: Partial<SelfEngineResolvedConfig> = 
     sts,
     s3,
     lambda,
+    aoss,
     close: () => new Promise<void>(resolve => server.close(() => resolve())),
   };
 }
@@ -244,6 +247,7 @@ describe('health endpoints', () => {
         lambda: 'available',
         events: 'available',
         sts: 'available',
+        aoss: 'available',
       },
       edition: 'self',
       version: 'lss-self-engine',
@@ -289,6 +293,40 @@ describe('service resolution', () => {
     expect(res.status).toBe(200);
     expect(res.headers['content-type']).toBe('application/x-amz-json-1.1');
     expect(engine.events.calls[0].operation).toBe('PutEvents');
+  });
+
+  it('routes the aoss SigV4 scope to the OpenSearch emulator (control and data plane alike)', async () => {
+    const res = await request(engine.port, {
+      headers: { authorization: auth('aoss', 'us-east-1'), 'content-type': 'application/json' },
+      path: '/products-index/_search',
+      body: '{}',
+    });
+    expect(res.status).toBe(200);
+    expect(engine.aoss.requests[0].service).toBe('aoss');
+    expect(engine.aoss.requests[0].rawPath).toBe('/products-index/_search');
+  });
+
+  it('routes OpenSearchServerless targets without a signature via the prefix map', async () => {
+    const res = await request(engine.port, {
+      headers: { 'x-amz-target': 'OpenSearchServerless.CreateCollection', 'content-type': 'application/x-amz-json-1.0' },
+      body: '{"name":"products"}',
+    });
+    expect(res.status).toBe(200);
+    expect(engine.aoss.requests[0].headers['x-amz-target']).toBe('OpenSearchServerless.CreateCollection');
+  });
+
+  it('routes unsigned /_aoss data-plane paths to the OpenSearch emulator, not S3', async () => {
+    const res = await request(engine.port, { method: 'GET', path: '/_aoss/products/items/_search' });
+    expect(res.status).toBe(200);
+    expect(engine.aoss.requests[0].rawPath).toBe('/_aoss/products/items/_search');
+    expect(engine.s3.requests).toHaveLength(0);
+  });
+
+  it('serializes aoss AwsErrors with the JSON 1.0 shape', async () => {
+    const res = await request(engine.port, { method: 'GET', path: '/_aoss/missing' });
+    expect(res.status).toBe(404);
+    expect(res.headers['content-type']).toBe('application/x-amz-json-1.0');
+    expect(res.json).toEqual({ __type: 'NoSuchKey', message: 'The specified key does not exist.' });
   });
 
   it('resolves presigned URLs via X-Amz-Credential', async () => {

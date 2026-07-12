@@ -246,10 +246,11 @@ export interface ResourceOwnersResponse {
   queues: ResourceOwner[];
   topics: ResourceOwner[];
   buckets: ResourceOwner[];
+  collections?: ResourceOwner[];
 }
 
 export interface ServiceResource {
-  type: 'lambda' | 'dynamodb' | 'sqs' | 'sns' | 's3' | 'eventbus' | 'event-rule' | 'event-source';
+  type: 'lambda' | 'dynamodb' | 'sqs' | 'sns' | 's3' | 'eventbus' | 'event-rule' | 'opensearch' | 'event-source';
   name: string;
 }
 
@@ -261,6 +262,7 @@ export interface ResourceBreakdown {
   buckets: number;
   buses?: number;
   eventRules?: number;
+  collections?: number;
 }
 
 export interface BucketSnapshot {
@@ -465,7 +467,7 @@ export const api = {
 
   // Resources
   listResources: () =>
-    request<{ tables: string[]; queues: string[]; topics: string[]; buckets: string[] }>(
+    request<{ tables: string[]; queues: string[]; topics: string[]; buckets: string[]; collections?: string[] }>(
       '/api/resources',
     ),
   listResourceOwners: () => request<ResourceOwnersResponse>('/api/resources/owners'),

@@ -27,7 +27,7 @@ const deleteDialogOpen = ref(false);
 
 const grouped = computed(() => {
   const byType: Record<string, ServiceResource[]> = {
-    lambda: [], dynamodb: [], sqs: [], sns: [], s3: [], eventbus: [], 'event-rule': [], 'event-source': [],
+    lambda: [], dynamodb: [], sqs: [], sns: [], s3: [], eventbus: [], 'event-rule': [], opensearch: [], 'event-source': [],
   };
   for (const r of service.value?.resources || []) {
     if (!byType[r.type]) byType[r.type] = [];
@@ -352,6 +352,23 @@ watch(() => props.serviceName, load);
                 variant="outline"
               >
                 {{ r.name }}
+              </TTag>
+            </TStack>
+          </TStack>
+
+          <TStack v-if="grouped.opensearch?.length" direction="vertical" gap="0.5rem">
+            <TStack direction="horizontal" gap="0.5rem" align="center">
+              <TBadge tone="info" variant="soft">OpenSearch collections</TBadge>
+              <span class="muted">{{ grouped.opensearch.length }}</span>
+            </TStack>
+            <TStack direction="horizontal" gap="0.375rem" wrap>
+              <TTag
+                v-for="r in grouped.opensearch"
+                :key="`os-${r.name}`"
+                size="sm"
+                variant="soft"
+              >
+                🔍 {{ r.name }}
               </TTag>
             </TStack>
           </TStack>

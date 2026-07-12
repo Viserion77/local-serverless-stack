@@ -82,6 +82,7 @@ describe('resources router', () => {
             { type: 'sqs', name: 'Queue1' },
             { type: 'sns', name: 'Topic1' },
             { type: 's3', name: 'Bucket1' },
+            { type: 'opensearch', name: 'products' },
             { type: 'lambda', name: 'FnIgnored' }, // unmatched type
           ] as any;
         }
@@ -96,6 +97,7 @@ describe('resources router', () => {
         queues: [{ name: 'Queue1', service: 'svc-a' }],
         topics: [{ name: 'Topic1', service: 'svc-a' }],
         buckets: [{ name: 'Bucket1', service: 'svc-a' }],
+        collections: [{ name: 'products', service: 'svc-a' }],
       });
     });
 
