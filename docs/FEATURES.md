@@ -30,7 +30,7 @@ by the live integration suite (`npm run test:integration`).
 | `stateDir` | Per-instance PID/log directory so an isolated test instance never collides with the dev instance. | unit (`cli`, `config-manager`) + integration |
 | `LSS_CONFIG_PATH` passthrough | The CLI hands the chosen config to the spawned server so both loaders agree on ports/seedsDir/region/mode. | unit (`config-manager`) + integration |
 | Managed vs external mode | `mode: managed` runs a LocalStack container; `external` connects to a running one. | unit (`config-manager`) |
-| Edition / version / image / services / persistence / region | All configurable; sensible defaults (community/latest, us-east-1, dynamodb+sqs+sns+s3+lambda). | unit (`config-manager`) |
+| Edition / version / image / services / persistence / region | All configurable; sensible defaults (community/latest, us-east-1, dynamodb+sqs+sns+s3+lambda+events). | unit (`config-manager`) |
 | `GET /api/config` | Public-safe config snapshot for the UI (never leaks the auth token — only `hasAuthToken`). | unit (`routes/config`) + integration |
 
 ## 3. Resource provisioning (from CloudFormation)
@@ -46,7 +46,7 @@ LocalStack. `autoPackage` can run the packaging command on demand when the templ
 | S3 buckets | Created with versioning and `s3:ObjectCreated:*` notifications (prefix/suffix filters). | unit + integration |
 | Lambda event source mappings | SQS→Lambda and DynamoDB Stream→Lambda wired via LocalStack. | unit (`resource-provisioner`) + integration |
 | EventBridge buses & rules | `AWS::Events::EventBus` created in LocalStack; `AWS::Events::Rule` (pattern or schedule) wired to Lambda targets through the same proxy → invoke-API model; `AWS::Events::Archive` skipped with a warning (LocalStack mocks it). | unit (`cloudformation-parser`, `resource-provisioner`) |
-| Lambda proxies | Generated proxy functions forward events to the `serverless-offline` invoke endpoint. | unit (`resource-provisioner`) |
+| Lambda proxies | Generated proxy functions forward events to the service's Lambda Invoke API endpoint (the LSS invoke listener, contract-compatible with serverless-offline's `lambdaPort`). | unit (`resource-provisioner`) |
 | `GET /api/resources` / `…/owners` | List provisioned resources (tables/queues/topics/buckets) and map them to owning services. | unit (`routes/resources`) + integration |
 
 ## 4. Service registration (the `serverless-lss` plugin)
@@ -62,7 +62,7 @@ LocalStack. `autoPackage` can run the packaging command on demand when the templ
 | Endpoint | Promise | Asserted by |
 |---|---|---|
 | `GET /` / `GET /:name` | List queues / one queue with metrics (available, inFlight, processed, delayed) and consumers. | unit (`queue-inspector`, `routes/queues`) + integration |
-| `POST /:name/messages` (+ `/receive`, `/delete`, `/purge`) | Send/receive/delete/purge messages (FIFO group/dedup supported). | unit + integration |
+| `POST /:name/messages` (+ `/messages/receive`, `/messages/delete`) and `POST /:name/purge` | Send/receive/delete/purge messages (FIFO group/dedup supported). | unit + integration |
 | `POST /:name/reset-processed` | Reset the processed counter. | unit |
 | `POST /:name/await-idle` | **Block until the queue drains** (`available===0 && inFlight===0`, optional `sinceProcessed`); 200 drained / 408 timeout. | unit (`queue-inspector`, `routes/queues`) + integration |
 | `POST /:name/hold` · `GET /:name/captured` · `POST /:name/release` | Disable the consumer mapping and capture messages, inspect them, then re-enable and re-dispatch. | unit (`queue-inspector`, `routes/queues`) + integration |
@@ -87,23 +87,32 @@ Asserted by: unit (`seed-manager`, `routes/seeds`, `cli-seed`, `seed-manager-gua
 
 ## 9. DynamoDB proxy (dev)
 
-Optional reverse proxy (`enableDynamoProxy` / `dynamoProxyPort`, default 8000) forwarding to LocalStack, for
-tools that expect DynamoDB on the standard port. Asserted by: unit (`dev/dynamo-proxy`).
+Optional reverse proxy (`enableDynamoProxy` / `dynamoProxyPort`, default 8000) forwarding to the active AWS
+engine (LocalStack, or the self engine when `engine: "self"`), for tools that expect DynamoDB on the standard
+port. Asserted by: unit (`dev/dynamo-proxy`).
 
 ## 10. Health & dashboard
 
-`GET /api/health` reports orchestrator + LocalStack + dynamo-proxy status. The Vue dashboard (served as a SPA)
-surfaces Overview / Services / Queues / DynamoDB / S3 with a region selector and theme toggle (UI is exercised
-manually, not in the automated suites).
+`GET /api/health` reports orchestrator + engine + dynamo-proxy status (the `localstack` field reports the
+active engine's health — LocalStack or self — kept under that name for compatibility). The Vue dashboard
+(served as a SPA) surfaces Overview / Services / Lambdas / APIs / Queues / S3 / DynamoDB with a region selector
+and theme toggle; the Services list and service detail pages include the per-service resource breakdown with
+EventBridge buses & rules (UI is exercised manually, not in the automated suites).
+
+Dashboard branding: an optional `branding` key in `lss.config.json` (title, subtitle, logo,
+favicon, defaultTheme, plus `colors`/`themeColors` as TreeUI token overrides) customizes the dashboard. Served
+at `GET /api/config/branding`; local logo/favicon files are exposed at `GET /api/config/branding/logo|favicon`.
+Asserted by: unit (`config-manager` "branding" block).
 
 ## 11. Programmatic client (`LssClient`)
 
 Everything the CLI/orchestrator exposes, importable for Jest e2e at runtime instead of shelling out to `npx lss`:
 `import { LssClient } from 'local-serverless-stack'`. The data-plane (`seeds`, `queues`, `dynamo`, `buckets`,
-`resources`, `services`, `config`, `health`) is HTTP against the running orchestrator; `lifecycle`
+`resources`, `services`, `lambdas`, `apis`, `config`, `health`) is HTTP against the running orchestrator; `lifecycle`
 (`start`/`stop`/`status`/`logs`) shells out to `bin/cli.js`, and `lifecycle.waitUntilReady()` polls `/api/health`
 until LocalStack is up. The constructor resolves the target from options → env (`LSS_CONFIG`, `LSS_BASE_URL`,
-`LSS_SERVER_PORT`, `AWS_REGION`) → config file, so `new LssClient()` works purely from the environment. Shipped as
+`LSS_SERVER_PORT`, `AWS_REGION`) → config file, so `new LssClient()` works purely from the environment; options
+also include `timeoutMs` (HTTP timeout per request, default 15000 — raise it for long `awaitIdle` waits). Shipped as
 a self-contained CommonJS build (`dist/client`, package `main`/`exports`). Asserted by: unit (`client/*`) +
 integration (`features.test.ts` "programmatic client" block).
 

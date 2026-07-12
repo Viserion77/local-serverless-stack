@@ -329,7 +329,7 @@ onBeforeUnmount(() => {
 .overview-hero {
   background: linear-gradient(
     135deg,
-    var(--tree-color-background-elevated, rgba(255, 255, 255, 0.02)),
+    var(--tree-color-bg-surface, rgba(255, 255, 255, 0.02)),
     transparent
   );
 }

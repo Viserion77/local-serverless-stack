@@ -12,16 +12,16 @@ Other moving parts:
 
 - **DynamoDB** — `auth-Sessions`, `users-Users`, `orders-Orders` (provisioned in community LocalStack, seeded from `./seeds`)
 - **SQS** — `orders-OrderQueue` with a Lambda consumer (`processOrderQueue`), running without serverless-offline
-- **Schedule** — `cleanupExpiredOrders` (`rate(1 hour)`); schedule *triggering* is a documented TODO, but the function is registered and invocable via the Invoke API — every Lambda is, even without API events
+- **Schedule** — `cleanupExpiredOrders` (`rate(1 hour)`), provisioned as an EventBridge rule that fires on schedule (`"events"` is enabled in `lss.config.json`; the self engine ships a native scheduler); the function is also invocable via the Invoke API — every Lambda is, even without API events
 - **TypeScript from source** — `users-service` handlers are `.ts` files run through `esbuild-register` (`lambdaRuntime.execution: "source"`), no build script
 - **Hot reload** — `lambdaRuntime.watch: true`; edit a handler and re-curl
 
-> **Ports used by this example** — LSS server `3120`, LocalStack `4572`, service APIs `3010`–`3012`, Lambda invoke `13010`–`13012`. The non-default LocalStack port keeps this example out of the way of an external LocalStack you might have on `4566`, and clear of the other examples in this repo.
+> **Ports used by this example** — LSS server `3120`, LocalStack `4572`, service APIs `3010`–`3012`, Lambda invoke `13010`–`13012`. The non-default LocalStack port keeps this example out of the way of an external LocalStack you might have on `4566`, and clear of the other examples in this repo. (Caveat: a real LocalStack install commonly publishes the whole `4566–4599` range — in that case `4572` will still conflict.)
 
 ## Prerequisites
 
 - Docker (LocalStack **community** runs in a container managed by LSS — no pro features needed)
-- Node.js ≥ 18
+- Node.js ≥ 20
 
 ## Run
 
@@ -103,7 +103,7 @@ curl http://localhost:3012/orders -H 'code: code-admin'
 # → 200 {"count":1,"items":[{"id":"...","item":"coffee","user":"admin","status":"processed",...}]}
 ```
 
-**5. Invoke any Lambda directly** — every function is reachable through the AWS Lambda Invoke API on the service's invoke port, even ones with no API event (like the scheduled `cleanupExpiredOrders`; schedule *triggering* is a TODO, but invoking works today):
+**5. Invoke any Lambda directly** — every function is reachable through the AWS Lambda Invoke API on the service's invoke port, even ones with no API event (like the scheduled `cleanupExpiredOrders`, which also fires on its own via its EventBridge schedule rule):
 
 ```bash
 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test aws lambda invoke \

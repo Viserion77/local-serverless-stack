@@ -8,6 +8,7 @@ import {
 import { currentRegion, AWS_REGIONS } from './services/region';
 import { api } from './services/api';
 import type { HealthInfo } from './services/api';
+import { branding, loadBranding, applyTheme } from './services/branding';
 
 const route = useRoute();
 const router = useRouter();
@@ -40,7 +41,7 @@ function onNavSelect(value: string) {
 function onMenuSelect(value: string) {
   if (value === 'theme') {
     theme.value = theme.value === 'dark' ? 'light' : 'dark';
-    document.documentElement.setAttribute('data-tree-theme', theme.value);
+    applyTheme(theme.value, true);
   }
 }
 
@@ -52,9 +53,12 @@ async function checkHealth() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   checkHealth();
   healthTimer = window.setInterval(checkHealth, 10000);
+  await loadBranding();
+  theme.value =
+    (document.documentElement.getAttribute('data-tree-theme') as 'dark' | 'light') || 'dark';
 });
 
 onBeforeUnmount(() => {
@@ -67,11 +71,19 @@ onBeforeUnmount(() => {
     <div class="app-shell">
       <TNavbar sticky bordered>
         <template #start>
-          <TStack direction="vertical" gap="0.125rem">
-            <strong>Local Serverless Stack</strong>
-            <span class="muted" style="font-size: 0.75rem;">
-              Local development control plane
-            </span>
+          <TStack direction="horizontal" gap="0.625rem" align="center">
+            <img
+              v-if="branding.logoUrl"
+              :src="branding.logoUrl"
+              :alt="`${branding.title} logo`"
+              class="brand-logo"
+            />
+            <TStack direction="vertical" gap="0.125rem">
+              <strong>{{ branding.title }}</strong>
+              <span v-if="branding.subtitle" class="muted" style="font-size: 0.75rem;">
+                {{ branding.subtitle }}
+              </span>
+            </TStack>
           </TStack>
         </template>
 

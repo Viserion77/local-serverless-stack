@@ -1,5 +1,5 @@
 import { Router, Request, Response } from 'express';
-import { ConfigManager } from '../services/config-manager.js';
+import { ConfigManager, BrandingAssetKind } from '../services/config-manager.js';
 
 const router = Router();
 
@@ -31,7 +31,25 @@ router.get('/', (_req: Request, res: Response) => {
     packageCommand: cm.getPackageCommand(),
     packageTimeoutMs: cm.getPackageTimeoutMs(),
     configPath: cm.getConfigPath(),
+    branding: cm.getBranding(),
   });
+});
+
+// Branding only — what the UI needs on boot (title, logo, theme colors).
+router.get('/branding', (_req: Request, res: Response) => {
+  res.json(ConfigManager.getInstance().getBranding());
+});
+
+// Serve logo/favicon files referenced by path in the config, so branding
+// assets can live next to lss.config.json without a separate web server.
+router.get('/branding/:asset(logo|favicon)', (req: Request, res: Response) => {
+  const kind = req.params.asset as BrandingAssetKind;
+  const file = ConfigManager.getInstance().getBrandingAssetFile(kind);
+  if (!file) {
+    res.status(404).json({ error: `No local ${kind} file configured` });
+    return;
+  }
+  res.sendFile(file);
 });
 
 export { router as configRouter };

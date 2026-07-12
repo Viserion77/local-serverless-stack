@@ -41,9 +41,10 @@ drop-in compatibility, set `selfEngine.port` explicitly.
 ## What keeps working
 
 The wire API is the seam: the provisioner, the dashboards/explorers, seeds,
-`LssClient`, the QueueInspector primitives (`hold`/`release`/`await-idle`) and
-the `serverless-lss` plugin all speak AWS SDK against the engine endpoint,
-unchanged. Event delivery to your handlers happens **in-process** through the
+`LssClient` and the QueueInspector primitives (`hold`/`release`/`await-idle`)
+all speak AWS SDK against the engine endpoint, unchanged. The `serverless-lss`
+plugin is unaffected too — it only POSTs JSON to the orchestrator REST API and
+never talks to the engine directly. Event delivery to your handlers happens **in-process** through the
 LSS Lambda runtime — the LocalStack-era proxy Lambdas are absorbed as metadata
 (their `INVOKE_URL` doubles as an HTTP fallback for services still running
 serverless-offline).
@@ -51,14 +52,17 @@ serverless-offline).
 ## Coverage
 
 Anything not listed answers with an explicit AWS-shaped error naming this file
-— or is forwarded verbatim to `fallbackEndpoint` when configured. The engine
-never silently succeeds.
+— or is forwarded verbatim to `fallbackEndpoint` when configured. Unknown
+operations never silently succeed. Two known divergences are the exception:
+SQS `RedrivePolicy` (accepted but not enforced) and S3 object ACL/policy
+sub-resources (treated as plain object operations) — see
+[Known divergences from AWS](#known-divergences-from-aws).
 
 | Service | Implemented (v1) | Explicit error until the hardening phase |
 |---|---|---|
 | DynamoDB | CreateTable, DescribeTable, DeleteTable, ListTables, Update/DescribeTimeToLive, Put/Get/Delete/UpdateItem, Query, Scan, BatchGetItem, BatchWriteItem — full expression language (KeyCondition, Condition, Filter, Update, Projection), GSI/LSI with projection + sparse semantics, streams (in-process), lazy TTL, decimal-exact `N` arithmetic | Transactions, UpdateTable, PartiQL, legacy parameters (`KeyConditions`, `Expected`, …), Streams wire API |
-| SQS | CreateQueue (idempotent), GetQueueUrl, Get/SetQueueAttributes (live counters), ListQueues, DeleteQueue, SendMessage(+Batch), ReceiveMessage (event-driven long poll), DeleteMessage(+Batch), PurgeQueue, ChangeMessageVisibility — FIFO groups/dedup, visibility redelivery, `x-amzn-query-error` compat header, MD5 digests | Legacy Query protocol (aws-sdk v2 / old boto3 — loud error suggests `fallbackEndpoint`), RedrivePolicy→DLQ enforcement, tags |
-| S3 | Create/Head/Delete bucket, ListBuckets, GetBucketLocation, versioning flag, notification configuration (incl. legacy `CloudFunctionConfiguration` XML), ListObjectsV2 (prefix/delimiter/pagination/encoding-type), PutObject (aws-chunked decoded), GetObject (Range), HeadObject, DeleteObject(s), CopyObject — bodies streamed to disk blobs, never held in memory | Multipart uploads, version stacks, ACL/policy APIs |
+| SQS | CreateQueue (idempotent), GetQueueUrl, Get/SetQueueAttributes (live counters), ListQueues, DeleteQueue, SendMessage(+Batch), ReceiveMessage (event-driven long poll), DeleteMessage(+Batch), PurgeQueue, ChangeMessageVisibility — FIFO groups/dedup, visibility redelivery, `x-amzn-query-error` compat header, MD5 digests. RedrivePolicy is accepted and round-trips through Get/SetQueueAttributes, but DLQ redrive is NOT enforced — failed messages redeliver via visibility timeout | Legacy Query protocol (aws-sdk v2 / old boto3 — loud error suggests `fallbackEndpoint`), tags |
+| S3 | Create/Head/Delete bucket, ListBuckets, GetBucketLocation, versioning flag, notification configuration (incl. legacy `CloudFunctionConfiguration` XML), ListObjectsV2 (prefix/delimiter/pagination/encoding-type), PutObject (aws-chunked decoded), GetObject (Range), HeadObject, DeleteObject(s), CopyObject — bodies streamed to disk blobs, never held in memory | Multipart uploads, version stacks. Object ACL/policy sub-resources (`?acl`, `?policy`) are **not** recognized — requests dispatch on HTTP method alone and behave as plain object operations (PutObjectAcl overwrites the object body): a known divergence, not an explicit error |
 | EventBridge | Create/Delete/DescribeEventBus, ListEventBuses, PutRule (pattern validation), DeleteRule, Enable/DisableRule, Put/RemoveTargets, ListRules, ListTargetsByRule, PutEvents (per-entry results, pattern matching: exact, array-OR, `prefix`, `exists`, nested) | `anything-but`, `numeric`, `suffix`, `wildcard`, `cidr` pattern operators (rejected at PutRule), Archives |
 | Lambda (control plane) | CreateFunction (metadata absorption), GetFunction, ListFunctions, UpdateFunctionConfiguration, DeleteFunction, Add/RemovePermission, Create/Get/List/Update/DeleteEventSourceMapping (Enabled toggle = QueueInspector hold/release), Invoke (in-process via the LSS runtime; `X-Amz-Invocation-Type` honored) | Versions/aliases, concurrency APIs |
 | SNS | CreateTopic, ListTopics, DeleteTopic, GetTopicAttributes, Publish (logged + counted, no fan-out) | Subscriptions and delivery |
@@ -98,4 +102,10 @@ run `lss seed`. Worst case, delete `dataDir` and start clean.
   from the base table (correct semantics, dev-scale performance).
 - SQS legacy Query protocol (pre-JSON SDKs) is not served natively — use
   `fallbackEndpoint`.
+- SQS: `RedrivePolicy` is accepted and round-trips through
+  Get/SetQueueAttributes, but DLQ redrive is NOT enforced — failed messages
+  redeliver via visibility timeout.
+- S3: object ACL/policy sub-resources (`?acl`, `?policy`) are not recognized —
+  requests dispatch on HTTP method alone and behave as plain object operations
+  (a PutObjectAcl overwrites the object body).
 - LocalStack volume data does not migrate; re-register + `lss seed`.

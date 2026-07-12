@@ -7,7 +7,7 @@ It exercises the same surface — DynamoDB (PK/SK, GSI, streams), SQS, SNS, S3 w
 ## Prerequisites
 
 - Docker
-- Node.js ≥ 18
+- Node.js ≥ 20
 - A **LocalStack auth token**. Pro images refuse to start without one. Grab a token at <https://app.localstack.cloud> → *Personal access tokens*. A free Hobby token is enough for the resources this example uses.
 
 ## Setup
@@ -31,7 +31,7 @@ $EDITOR .env   # set LOCALSTACK_AUTH_TOKEN=ls-xxxxxxxx
 | serverless-offline HTTP | `3010` |
 | serverless-offline Lambda invoke | `3011` |
 
-These are all different from `sample-microservice` (which uses `3110 / 4570 / 3000 / 3001`) **and** from a default external LocalStack on `4566`, so you can run any combination at the same time without conflict.
+These are all different from `sample-microservice` (which uses `3110 / 4570 / 3000 / 3001`) **and** from a default external LocalStack on `4566`, so you can run any combination at the same time without conflict — unless your external LocalStack publishes the whole `4566–4599` range (a common install default), in which case `4571` sits inside it and will collide.
 
 ## Run
 
@@ -75,11 +75,13 @@ curl http://localhost:3010/dev/uploads
 ## Reset
 
 ```bash
-npm run lss:seed:clear   # empties seeded tables
+npm run lss:seed:clear   # empties seeded tables — prompts for confirmation
+                         # (type "confirmar"); append -- --yes for
+                         # non-interactive use
 npm run lss:stop         # stops orchestrator + LocalStack Pro container
 ```
 
-Persistence is on, so a `lss:stop` / `lss:start` cycle preserves data. To wipe completely, also `docker rm -f` the Pro container that LSS launched.
+Persistence is on, so a `lss:stop` / `lss:start` cycle preserves data. To wipe completely, also `docker volume rm lss-localstack-4571-data` (the `--rm` container is removed automatically on stop).
 
 ## What's different from sample-microservice
 

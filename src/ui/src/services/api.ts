@@ -2,6 +2,12 @@ import { currentRegion } from './region';
 
 const API_BASE = import.meta.env.DEV ? 'http://localhost:3100' : '';
 
+// Absolute URL for orchestrator-served paths (e.g. branding assets), so they
+// also resolve under `vite dev` where the UI runs on a different port.
+export function resolveApiUrl(path: string): string {
+  return /^(https?:|data:)/i.test(path) ? path : `${API_BASE}${path}`;
+}
+
 function withRegion(path: string): string {
   const r = currentRegion.value;
   if (!r) return path;
@@ -190,6 +196,19 @@ export interface HealthInfo {
   };
 }
 
+export interface BrandingInfo {
+  title: string;
+  subtitle: string;
+  logoUrl: string | null;
+  faviconUrl: string | null;
+  defaultTheme: 'dark' | 'light';
+  colors: Record<string, string>;
+  themeColors: {
+    dark: Record<string, string>;
+    light: Record<string, string>;
+  };
+}
+
 export interface LssConfigSnapshot {
   serverPort: number;
   localstack: {
@@ -214,6 +233,7 @@ export interface LssConfigSnapshot {
   packageCommand: string;
   packageTimeoutMs: number;
   configPath: string;
+  branding: BrandingInfo;
 }
 
 export interface ResourceOwner {
@@ -384,6 +404,7 @@ export const api = {
   // Health & config
   checkHealth: () => request<HealthInfo>('/api/health'),
   getConfig: () => request<LssConfigSnapshot>('/api/config'),
+  getBranding: () => request<BrandingInfo>('/api/config/branding'),
 
   // Services
   listServices: () => request<ServiceSummary[]>('/api/services'),

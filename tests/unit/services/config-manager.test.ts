@@ -972,3 +972,73 @@ describe('getInvokeHost under the self engine', () => {
     expect(freshConfigManager().getInvokeHost()).toBe('10.0.0.7');
   });
 });
+
+describe('branding', () => {
+  function cmWith(config: Record<string, unknown>, extraFiles: string[] = []): CM {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile || extraFiles.includes(String(p)));
+    fs.readFileSync.mockReturnValue(JSON.stringify(config));
+    return freshConfigManager();
+  }
+
+  it('returns neutral defaults when branding is not configured', () => {
+    expect(freshConfigManager().getBranding()).toEqual({
+      title: 'Local Serverless Stack',
+      subtitle: 'Local development control plane',
+      logoUrl: null,
+      faviconUrl: null,
+      defaultTheme: 'dark',
+      colors: {},
+      themeColors: { dark: {}, light: {} },
+    });
+  });
+
+  it('passes through title, subtitle, defaultTheme and color overrides', () => {
+    const cm = cmWith({
+      branding: {
+        title: 'Acme Cloud',
+        subtitle: 'Sandbox local',
+        defaultTheme: 'light',
+        colors: { 'brand-primary': '#e63946' },
+        themeColors: { dark: { 'bg-primary': '#111' } },
+      },
+    });
+    const branding = cm.getBranding();
+    expect(branding.title).toBe('Acme Cloud');
+    expect(branding.subtitle).toBe('Sandbox local');
+    expect(branding.defaultTheme).toBe('light');
+    expect(branding.colors).toEqual({ 'brand-primary': '#e63946' });
+    expect(branding.themeColors).toEqual({ dark: { 'bg-primary': '#111' }, light: {} });
+  });
+
+  it('falls back to dark for an invalid defaultTheme', () => {
+    expect(cmWith({ branding: { defaultTheme: 'blue' } }).getBranding().defaultTheme).toBe('dark');
+  });
+
+  it('http(s) and data logo URLs pass through untouched and resolve no local file', () => {
+    const cm = cmWith({ branding: { logo: 'https://acme.dev/logo.svg', favicon: 'data:image/png;base64,AAA' } });
+    expect(cm.getBranding().logoUrl).toBe('https://acme.dev/logo.svg');
+    expect(cm.getBranding().faviconUrl).toBe('data:image/png;base64,AAA');
+    expect(cm.getBrandingAssetFile('logo')).toBeNull();
+    expect(cm.getBrandingAssetFile('favicon')).toBeNull();
+  });
+
+  it('a relative logo path resolves from the config dir and is served by the orchestrator', () => {
+    const resolved = path.resolve(process.cwd(), './assets/logo.svg');
+    const cm = cmWith({ branding: { logo: './assets/logo.svg' } }, [resolved]);
+    expect(cm.getBrandingAssetFile('logo')).toBe(resolved);
+    expect(cm.getBranding().logoUrl).toBe('/api/config/branding/logo');
+  });
+
+  it('an absolute logo path is used as-is when the file exists', () => {
+    const cm = cmWith({ branding: { logo: '/srv/assets/logo.png' } }, ['/srv/assets/logo.png']);
+    expect(cm.getBrandingAssetFile('logo')).toBe('/srv/assets/logo.png');
+    expect(cm.getBranding().logoUrl).toBe('/api/config/branding/logo');
+  });
+
+  it('a logo path pointing to a missing file yields null (no broken img in the UI)', () => {
+    const cm = cmWith({ branding: { logo: './missing/logo.svg' } });
+    expect(cm.getBrandingAssetFile('logo')).toBeNull();
+    expect(cm.getBranding().logoUrl).toBeNull();
+  });
+});

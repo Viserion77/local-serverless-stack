@@ -104,6 +104,49 @@ export interface ResolvedRuntimeConfig {
   invokePort?: number;
 }
 
+// Dashboard branding: title/logo/colors so the UI can carry the look of the
+// team using it. Purely cosmetic — never affects orchestration behavior.
+export interface BrandingConfig {
+  // Navbar title and browser tab title. Default: "Local Serverless Stack".
+  title?: string;
+  // Small line under the title. Default: "Local development control plane".
+  subtitle?: string;
+  // Logo shown in the navbar. Accepts an http(s)/data URL (used as-is) or a
+  // file path resolved relative to the config file's directory, which the
+  // orchestrator serves at /api/config/branding/logo.
+  logo?: string;
+  // Favicon; same URL-or-path rules as `logo`.
+  favicon?: string;
+  // Theme applied when the user hasn't picked one in the UI yet.
+  defaultTheme?: 'dark' | 'light';
+  // TreeUI token overrides applied to BOTH themes. Keys are either the token
+  // suffix ("brand-primary" → --tree-color-brand-primary) or a full custom
+  // property name ("--tree-radius-md").
+  colors?: Record<string, string>;
+  // Per-theme overrides, merged over `colors` for that theme.
+  themeColors?: {
+    dark?: Record<string, string>;
+    light?: Record<string, string>;
+  };
+}
+
+// BrandingConfig with defaults applied and file-path assets rewritten to the
+// orchestrator endpoints that serve them.
+export interface ResolvedBranding {
+  title: string;
+  subtitle: string;
+  logoUrl: string | null;
+  faviconUrl: string | null;
+  defaultTheme: 'dark' | 'light';
+  colors: Record<string, string>;
+  themeColors: {
+    dark: Record<string, string>;
+    light: Record<string, string>;
+  };
+}
+
+export type BrandingAssetKind = 'logo' | 'favicon';
+
 export interface LSSConfig {
   // Server port (dashboard + API)
   serverPort?: number;
@@ -191,6 +234,9 @@ export interface LSSConfig {
 
   // Self-engine settings (only used when engine is "self").
   selfEngine?: SelfEngineConfig;
+
+  // Dashboard branding (title, logo, theme colors). Cosmetic only.
+  branding?: BrandingConfig;
 }
 
 export class ConfigManager {
@@ -560,6 +606,51 @@ export class ConfigManager {
 
   getConfigPath(): string {
     return this.configPath;
+  }
+
+  /**
+   * Resolve a branding asset (`logo`/`favicon`) to a local file, or null when
+   * the value is unset, is a URL the browser can load directly, or the file
+   * doesn't exist. Relative paths resolve from the config file's directory so
+   * assets can live next to lss.config.json.
+   */
+  getBrandingAssetFile(kind: BrandingAssetKind): string | null {
+    const raw = this.config.branding?.[kind];
+    if (!raw || /^(https?:|data:)/i.test(raw)) {
+      return null;
+    }
+    const baseDir = this.configPath ? path.dirname(this.configPath) : process.cwd();
+    const resolved = path.isAbsolute(raw) ? raw : path.resolve(baseDir, raw);
+    return fs.existsSync(resolved) ? resolved : null;
+  }
+
+  // URL the UI should load for a branding asset: pass URLs through, rewrite
+  // existing local files to the orchestrator endpoint that serves them.
+  private getBrandingAssetUrl(kind: BrandingAssetKind): string | null {
+    const raw = this.config.branding?.[kind];
+    if (!raw) {
+      return null;
+    }
+    if (/^(https?:|data:)/i.test(raw)) {
+      return raw;
+    }
+    return this.getBrandingAssetFile(kind) ? `/api/config/branding/${kind}` : null;
+  }
+
+  getBranding(): ResolvedBranding {
+    const branding = this.config.branding ?? {};
+    return {
+      title: branding.title ?? 'Local Serverless Stack',
+      subtitle: branding.subtitle ?? 'Local development control plane',
+      logoUrl: this.getBrandingAssetUrl('logo'),
+      faviconUrl: this.getBrandingAssetUrl('favicon'),
+      defaultTheme: branding.defaultTheme === 'light' ? 'light' : 'dark',
+      colors: branding.colors ?? {},
+      themeColors: {
+        dark: branding.themeColors?.dark ?? {},
+        light: branding.themeColors?.light ?? {},
+      },
+    };
   }
 
   /**

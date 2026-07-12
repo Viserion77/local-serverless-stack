@@ -18,11 +18,11 @@ End-to-end test rig for **Local Serverless Stack (LSS)**. Exercises every integr
 ## Prerequisites
 
 - Docker (LocalStack runs in a container managed by LSS)
-- Node.js ≥ 18
+- Node.js ≥ 20
 
 > **Ports used by this example** — LSS server `3110`, LocalStack `4570`, `serverless-offline` HTTP `3000`, Lambda invoke `3001`. The non-default LocalStack port keeps this example out of the way of an external LocalStack you might have on `4566`. If you need to run two examples side by side (e.g. this one and `pro-sample-microservice`), they each have their own LSS PID/log file scoped by `serverPort`.
 
-> **Heads up — `serverless offline` does not write the CF template.** The LSS plugin reads `.serverless/cloudformation-template-update-stack.json` to discover resources, but `serverless offline start` packages in memory and skips the disk write. The `offline` script in this example chains `serverless package` first so the template is materialized before the orchestrator hook fires.
+> **Heads up — `serverless offline` does not write the CF template.** The LSS plugin only POSTs the service path (plus ports and region) to the orchestrator's `/api/services/register`; it's the **orchestrator** that then reads `.serverless/cloudformation-template-update-stack.json` from that path to discover resources. But `serverless offline start` packages in memory and skips the disk write, so the `offline` script in this example chains `serverless package` first to materialize the template before the orchestrator hook fires.
 
 ## Run
 
@@ -52,7 +52,7 @@ Open the dashboard at <http://localhost:3110>:
 - **Services** → this microservice + its routes
 - **Queues** → live SQS metrics + per-consumer view
 - **DynamoDB** → table list with the TTL warning on Users; click a table for **Items** (scan / query / CRUD), **Indexes**, and **Settings**
-- **Seeds** → re-apply or clear the bundled fixtures
+- **DynamoDB → table → Seed** → re-apply or purge the bundled fixtures (seed status also shows in the tables list)
 
 ## Try the HTTP routes
 
@@ -95,8 +95,8 @@ After uploading: refresh the **S3** tab — the bucket's object count ticks up, 
   - Use the index dropdown to query `ByStatus` instead of the table.
   - Click **View** / **Edit** / **Delete** on a row.
   - In **Settings**, enable TTL on **Sessions** with attribute `expiresAt`. Confirm the warning disappears on the table list.
-- **Seeds tab**
-  - Click **Clear** on `sample-microservice-Users`, then **Apply** to re-seed.
+- **DynamoDB → Users → Seed tab**
+  - Click **Purge** to empty the table, then **Apply** (or **Redo**) to re-seed.
 - **Queues tab**
   - Send several `/orders` requests in a row to build a small backlog before the consumer drains it.
 - **S3 tab**
@@ -106,11 +106,13 @@ After uploading: refresh the **S3** tab — the bucket's object count ticks up, 
 ## Reset
 
 ```bash
-npm run lss:seed:clear   # empties tables that have a seed file
+npm run lss:seed:clear   # empties tables that have a seed file — prompts for
+                         # confirmation (type "confirmar"); append -- --yes
+                         # for non-interactive use
 npm run lss:stop         # stops orchestrator + LocalStack
 ```
 
-LocalStack persistence is on, so a `lss:stop` / `lss:start` cycle preserves data. To wipe state completely, also `docker rm -f localstack-main` (or whatever container name your LocalStack instance uses).
+`persistence` is on in `lss.config.json`, but restoring state across restarts is a LocalStack **Pro** feature — the community image accepts `PERSISTENCE=1` and the data volume, yet starts clean, so after a `lss:stop` / `lss:start` cycle re-run `npm run offline` to re-register (tables are re-created and auto-seeded). To wipe the saved state completely, `docker volume rm lss-localstack-4570-data` (the `--rm` container is removed automatically on stop).
 
 ## File map
 

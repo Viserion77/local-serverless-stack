@@ -6,8 +6,8 @@
 
 body {
   font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-  background: var(--tree-color-background);
-  color: var(--tree-color-foreground);
+  background: var(--tree-color-bg-primary);
+  color: var(--tree-color-text-primary);
   line-height: 1.6;
 }
 
@@ -30,7 +30,15 @@ body {
 }
 
 .muted {
-  color: var(--tree-color-foreground-muted);
+  color: var(--tree-color-text-muted);
+}
+
+.brand-logo {
+  height: 2rem;
+  width: auto;
+  max-width: 10rem;
+  object-fit: contain;
+  border-radius: var(--tree-radius-sm);
 }
 
 .mono {

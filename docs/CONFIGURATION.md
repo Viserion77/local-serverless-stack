@@ -1,17 +1,25 @@
 # Configuration Guide for LSS
 
-LSS (Local Serverless Stack) supports configuration files to customize the behavior of the orchestrator, including server port, LocalStack port, and DynamoDB proxy settings.
+LSS (Local Serverless Stack) supports configuration files to customize the behavior of the orchestrator, including server port, engine selection, LocalStack settings, DynamoDB proxy, and dashboard branding.
 
 ## Configuration Files
 
 LSS looks for configuration files in the following order:
 
-1. `lss.config.json` in the current working directory
-2. `.lssrc` in the current working directory
-3. `lss.config.json` in the home directory (`~`)
-4. `.lssrc` in the home directory
+1. A file passed explicitly: `lss <cmd> --config <path>` (the CLI exports it as `LSS_CONFIG_PATH` so the server reads the same file) — always wins
+2. `lss.config.json` in the current working directory
+3. `.lssrc` in the current working directory
+4. `lss.config.json` in the home directory (`~`)
+5. `.lssrc` in the home directory
 
-The first file found will be used. If no configuration file is found, environment variables will be checked.
+The first file found will be used. Environment variables are always read afterwards and **override** values from the file (see [Priority Order](#priority-order)).
+
+```mermaid
+flowchart LR
+    A[Defaults<br/>config-manager.ts] --> B[Config file<br/>--config > cwd > home]
+    B --> C[Environment variables<br/>LSS_*, LOCALSTACK_AUTH_TOKEN]
+    C --> D[Effective config<br/>printed on lss start]
+```
 
 ## Configuration Options
 
@@ -104,7 +112,10 @@ Both files should contain valid JSON with the following optional properties:
   - Example: `8000`
 
 - **region** (string, default: "us-east-1")
-  - AWS region for LocalStack
+  - Default AWS region for the engine and provisioning
+  - The dashboard's region selector and every explorer endpoint / `LssClient`
+    data method also accept an explicit region (`?region=` query param /
+    trailing `region` argument) to inspect resources provisioned elsewhere
   - Example: `"us-east-1"`
 
 - **services** (array, default: ["dynamodb", "sqs", "sns", "s3", "lambda", "events"])
@@ -118,6 +129,23 @@ Both files should contain valid JSON with the following optional properties:
 - **debug** (boolean, default: false)
   - Enable debug mode for LocalStack
   - Example: `false`
+
+- **seedsDir** (string, default: `"./seeds"`)
+  - Directory containing DynamoDB seed files (`{tableName}.json`). Relative paths
+    resolve from the working directory. Env: `LSS_SEEDS_DIR`.
+  - Each `{tableName}.json` must contain a **JSON array of plain objects** (native
+    JSON types, not DynamoDB-typed AttributeValues) — LSS marshalls them
+    automatically. Example: `[{"userId": "u-1", "active": true}]`. See
+    [examples/sample-microservice/seeds/](../examples/sample-microservice/seeds/).
+  - Seeds are auto-applied when a table is created, and on demand via
+    `lss seed [table]` / `lss seed:clear [table]` or the seed panel in the
+    dashboard's DynamoDB tab (open a table → Seed).
+
+- **stateDir** (string, optional)
+  - Directory where this instance keeps its state (PID/lock/log files), resolved
+    relative to the working directory. Setting it isolates an instance so
+    `lss stop --config <path>` targets it and not your dev instance — useful for
+    e2e stacks running next to a normal one.
 
 - **autoPackage** (boolean, default: false)
   - When registering a service, if `.serverless/cloudformation-template-update-stack.json` is missing, run the configured `packageCommand` in the service directory and retry.
@@ -183,12 +211,14 @@ Both files should contain valid JSON with the following optional properties:
   - `invokePortOffset` (number, default `10000`): when a service declares only an
     `apiPort`, its invoke port is derived as `apiPort + invokePortOffset`
     (e.g. 3010 → 13010).
-  - `invokeHost` (string, default `"host.docker.internal"`): hostname the LocalStack
-    Lambda proxy functions use when calling back into the service invoke listener
-    (`http://{invokeHost}:{invokePort}`). In Docker-in-Docker/devcontainer setups,
-    `host.docker.internal` may point at Docker Desktop instead of the devcontainer;
-    set this to the Docker network gateway reachable from the LocalStack container
-    (for example `"172.19.0.1"`).
+  - `invokeHost` (string, default: `"host.docker.internal"` on the LocalStack
+    engine, `"127.0.0.1"` on the self engine — nothing runs in Docker there):
+    hostname the LocalStack Lambda proxy functions use when calling back into the
+    service invoke listener (`http://{invokeHost}:{invokePort}`). In
+    Docker-in-Docker/devcontainer setups, `host.docker.internal` may point at
+    Docker Desktop instead of the devcontainer; set this to the Docker network
+    gateway reachable from the LocalStack container (for example `"172.19.0.1"`).
+    Only relevant on the LocalStack engine.
   - Env overrides: `LSS_LAMBDA_RUNTIME`, `LSS_LAMBDA_EXECUTION`, `LSS_LAMBDA_WATCH`,
     `LSS_INVOKE_HOST`.
 
@@ -219,6 +249,31 @@ Both files should contain valid JSON with the following optional properties:
     }
     ```
 
+- **branding** (object, optional — dashboard look & feel, purely cosmetic)
+  - Make the dashboard carry your team's identity: title, logo, and theme colors.
+  - `title` (default `"Local Serverless Stack"`): navbar + browser tab title.
+  - `subtitle` (default `"Local development control plane"`): line under the title.
+  - `logo` / `favicon`: an `http(s)`/`data:` URL used as-is, **or a file path**
+    resolved relative to `lss.config.json` — the orchestrator serves it at
+    `/api/config/branding/logo|favicon`, so assets can live next to the config.
+  - `defaultTheme` (`"dark"` | `"light"`, default `"dark"`): theme applied until the
+    user picks one in the UI menu (their choice is remembered per browser).
+  - `colors`: [TreeUI](https://www.npmjs.com/package/@treeui/vue) token overrides
+    applied to both themes. Keys are the token suffix (`"brand-primary"` →
+    `--tree-color-brand-primary`) or a full custom property name (`"--tree-radius-md"`).
+  - `themeColors.dark` / `themeColors.light`: per-theme overrides, merged over `colors`.
+  - Example — company colors and logo:
+    ```jsonc
+    "branding": {
+      "title": "Acme Cloud",
+      "subtitle": "Sandbox local",
+      "logo": "./assets/acme.svg",
+      "defaultTheme": "light",
+      "colors": { "brand-primary": "#e63946", "brand-hover": "#c1121f" },
+      "themeColors": { "light": { "bg-primary": "#fdf6f0" } }
+    }
+    ```
+
 > Note: configuration is read once when the orchestrator starts. After editing
 > `lss.config.json`, restart the orchestrator for changes to take effect.
 
@@ -236,7 +291,15 @@ custom:
     orchestratorUrl: http://localhost:3100
 ```
 
-The plugin will automatically use the `serverPort` from the LSS configuration if you don't override it.
+The plugin never reads `lss.config.json` — its default is the hardcoded
+`http://localhost:3100`. If you change `serverPort`, also point the plugin at the
+new port via `custom.orchestrator.orchestratorUrl`, `ORCHESTRATOR_URL`, or
+`LSS_DASHBOARD_PORT`. A copy-paste template lives at
+[serverless.yml.example](serverless.yml.example).
+
+Registration fires on `sls package` (`after:package:finalize`) **and** on
+`sls offline` startup (`before:offline:start`), so offline-based workflows
+register without an extra step.
 
 ### Plugin Configuration Options
 
@@ -271,70 +334,36 @@ When only `apiPort` is known, the orchestrator derives the invoke port via
 
 ### Environment Variables for Plugin
 
-- `ORCHESTRATOR_URL` - Override orchestratorUrl
+- `ORCHESTRATOR_URL` - Override orchestratorUrl (wins over everything)
+- `LSS_DASHBOARD_PORT` - Build the orchestrator URL as `http://localhost:<port>` (loses to `ORCHESTRATOR_URL`)
 - `ORCHESTRATOR_ENABLED` - Override enabled setting (true/false)
 
 ## Examples
 
-### Basic Configuration (lss.config.json)
+Custom ports — remember to point the plugin at the new server port too:
 
-```json
-{
-  "serverPort": 3100,
-  "localstackPort": 4566,
-  "enableDynamoProxy": false
-}
+```jsonc
+// lss.config.json
+{ "serverPort": 3200, "localstackPort": 4600, "localstackEndpoint": "http://localhost:4600" }
 ```
 
-### Full Configuration with Custom Ports
-
-```json
-{
-  "serverPort": 3200,
-  "localstackPort": 4600,
-  "localstackEndpoint": "http://localhost:4600",
-  "enableDynamoProxy": true,
-  "dynamoProxyPort": 8001,
-  "region": "eu-west-1",
-  "services": ["dynamodb", "sqs", "sns", "lambda", "s3", "events"],
-  "persistence": true,
-  "debug": false
-}
-```
-
-### .lssrc File
-
-The `.lssrc` file has the same format as `lss.config.json`:
-
-```json
-{
-  "serverPort": 3100,
-  "localstackPort": 4566
-}
-```
-
-### Serverless.yml with Custom Server Port
-
-If you're using a custom server port, update both configurations:
-
-**lss.config.json:**
-```json
-{
-  "serverPort": 3200
-}
-```
-
-**serverless.yml:**
 ```yaml
+# serverless.yml (each service)
 custom:
   orchestrator:
     orchestratorUrl: http://localhost:3200
 ```
 
+`.lssrc` accepts exactly the same JSON as `lss.config.json`. A full annotated
+template ships as [lss.config.json.example](../lss.config.json.example) in the
+repo (and `lss help` prints one).
+
 ## Environment Variables
 
-If no configuration file is found, you can use environment variables:
+Environment variables can be used instead of — or to override — a configuration file:
 
+- `LSS_CONFIG` - Explicit config file path for the CLI (equivalent to `--config <path>`; also honored by `LssClient`)
+- `LSS_CONFIG_PATH` - Explicit config file path for the server (the CLI sets it from `--config` when spawning)
 - `PORT` or `LSS_DASHBOARD_PORT` - Server port
 - `LSS_LOCALSTACK_PORT` - LocalStack port
 - `LSS_LOCALSTACK_ENDPOINT` - LocalStack endpoint
@@ -343,7 +372,7 @@ If no configuration file is found, you can use environment variables:
 - `LSS_LOCALSTACK_VERSION` - Image tag (e.g. `latest`, `4.0`)
 - `LSS_LOCALSTACK_IMAGE` - Full image override
 - `LOCALSTACK_AUTH_TOKEN` - Forwarded into the container
-- `LSS_ENABLE_DYNAMO_PROXY` - Enable DynamoDB proxy (true/false or 1/0)
+- `LSS_ENABLE_DYNAMO_PROXY` - Enable DynamoDB proxy (true/false or 1/0; the legacy unprefixed `ENABLE_DYNAMO_PROXY` is still honored as a fallback, deprecated)
 - `LSS_DYNAMO_PROXY_PORT` - DynamoDB proxy port
 - `AWS_REGION` - AWS region
 - `LSS_SERVICES` - Services (comma-separated)
@@ -356,6 +385,20 @@ If no configuration file is found, you can use environment variables:
 - `LSS_LAMBDA_EXECUTION` - `auto`, `artifact`, or `source`
 - `LSS_LAMBDA_WATCH` - Enable/disable runtime source watching (true/false or 1/0)
 - `LSS_INVOKE_HOST` - Override `lambdaRuntime.invokeHost` for LocalStack proxy callbacks
+- `LSS_SEEDS_DIR` - Directory with DynamoDB seed files
+- `LSS_ENGINE` - AWS engine: `localstack` or `self`
+- `LSS_ENGINE_PORT` - Self engine port (default: 14566)
+- `LOCALSTACK_ACCESS_KEY_ID` / `LOCALSTACK_SECRET_ACCESS_KEY` - Credentials the orchestrator's SDK clients present to the engine (default: `test`/`test`); set them when an external LocalStack validates credentials
+
+### LssClient environment variables
+
+The programmatic client resolves its target from constructor options, then env,
+then config file:
+
+- `LSS_BASE_URL` - Full orchestrator URL (wins over the rest)
+- `LSS_SERVER_PORT` - Builds `http://localhost:<port>`
+- `LSS_CONFIG` - Config file to read `serverPort` from
+- `AWS_REGION` - Default region for data-plane calls
 
 ### Environment Variable Examples
 
@@ -415,10 +458,16 @@ If `localstackEdition` is `pro` and no token is found, the orchestrator fails fa
 
 ## Getting Started
 
-1. Copy the example configuration:
-   ```bash
-   cp lss.config.json.example lss.config.json
+1. Create an `lss.config.json` in your project root — a minimal one is enough
+   (every key has a sensible default):
+   ```json
+   {
+     "serverPort": 3100,
+     "services": ["dynamodb", "sqs", "sns", "s3", "lambda", "events"]
+   }
    ```
+   From a clone of this repo you can also `cp lss.config.json.example lss.config.json`
+   for the fully annotated template.
 
 2. Edit `lss.config.json` with your desired settings
 
@@ -475,7 +524,7 @@ custom:
 4. Try using the `ORCHESTRATOR_URL` environment variable:
    ```bash
    export ORCHESTRATOR_URL=http://localhost:3200
-   npx serverless offline start
+   npx serverless package
    ```
 
 ### Can't find configuration file

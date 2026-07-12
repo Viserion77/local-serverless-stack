@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- **Dashboard branding via `lss.config.json`**: new optional `branding` key — `title`, `subtitle`, `logo`, `favicon` (http(s)/data URL, or a file path resolved next to the config file and served at `GET /api/config/branding/logo|favicon`), `defaultTheme` (`dark`/`light`), and TreeUI color-token overrides via `colors` (both themes) / `themeColors.dark|light` (per theme; keys accept the token suffix like `brand-primary` or a full `--tree-*` custom property). Exposed at `GET /api/config/branding` and inside `GET /api/config`; the UI applies title/logo/favicon/theme/colors on boot. The user's theme choice in the UI menu is now persisted per browser (`localStorage`) and wins over `defaultTheme`.
+
+### Changed
+- **Dashboard component library updated**: `@treeui/vue` `^0.10.0` → `^0.11.0`. No component API changes required.
+- Docs overhaul, audited against the v0.8.0 implementation: README rewritten (correct npm scripts, plugin keys `custom.orchestrator.orchestratorUrl` + `custom.lss.{apiPort,invokePort}`, full CLI surface incl. `seed`/`seed:clear`/`--config`, accurate registration/event-flow mermaid diagrams, stale "Project Structure"/"Project Status"/publishing sections removed); `docs/README.md` is now a real documentation index (the original design proposal moved to `docs/archive/DESIGN_PROPOSAL.md` with a historical banner); `docs/RELEASE.md` matches the actual publish workflow (no tests, no auto-tags); `docs/CONFIGURATION.md` gains `--config`/`LSS_CONFIG_PATH`, `seedsDir`, `stateDir`, `branding`, the missing env vars and a config-precedence diagram; `docs/FEATURES.md`/`docs/SELF_ENGINE.md`/`CONTRIBUTING.md`/example READMEs corrected against the code (incl. two real self-engine divergences now tracked in TODO.md: SQS `RedrivePolicy` not enforced, S3 ACL/policy sub-resources not recognized).
+- `serverless.yml.example` moved to `docs/serverless.yml.example` and updated (runtime `nodejs20.x`, `custom.lss` ports as the primary mechanism).
+- `lss.config.json.example` now showcases `engine`/`selfEngine` and `branding`; the repo's dev `lss.config.json` gains `"events"` in `services`.
+- `TODO.md` re-audited: delivered items removed (npm publication, CLI unit tests, orchestrator integration tests, auto-rebuild on serverless.yml changes, architecture diagrams), half-done items narrowed, self-engine hardening backlog added.
+
+### Removed
+- Stale root files: `local-serverless-stack-0.0.3.tgz` (old package artifact, now gitignored via `*.tgz`), `run-tests.sh` (referenced npm scripts that no longer exist; CI uses npm scripts directly), `.npmignore` (redundant — the `files` allowlist in package.json controls the published content; verified identical `npm pack` output).
+
 ## [0.8.0] - 2026-07-10
 
 The self engine: an in-process AWS emulator that replaces LocalStack for the typical serverless dev loop — DynamoDB, SQS, S3, EventBridge, SNS (minimal), Lambda control plane and STS served by the orchestrator itself on one port. No Docker, no container, no auth token; boots in milliseconds; data persisted in local files. Opt-in (`engine: "self"` / `lss start --self-engine`) — LocalStack mode remains the default and fully supported. Design: `docs/PRD_SELF_ENGINE.md`; coverage matrix: `docs/SELF_ENGINE.md`.

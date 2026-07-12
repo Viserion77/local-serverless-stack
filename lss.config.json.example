@@ -1,5 +1,9 @@
 {
   "serverPort": 3100,
+  "engine": "localstack",
+  "mode": "managed",
+  "localstackEdition": "community",
+  "localstackVersion": "latest",
   "localstackPort": 4566,
   "localstackEndpoint": "http://localhost:4566",
   "enableDynamoProxy": false,
@@ -16,12 +20,33 @@
   "packageArgs": [],
   "packageEnv": {},
   "servicePackaging": {
-    "access": { "packageArgs": ["--param=custom-stage=offline"] }
+    "users-service": { "packageArgs": ["--param=custom-stage=offline"] }
   },
   "lambdaRuntime": {
     "enabled": true,
     "execution": "auto",
-    "invokePortOffset": 10000,
-    "invokeHost": "host.docker.internal"
+    "invokePortOffset": 10000
+  },
+  "serviceRuntime": {
+    "users-service": { "apiPort": 3010, "invokePort": 13010 }
+  },
+  "selfEngine": {
+    "port": 14566,
+    "fallbackEndpoint": null
+  },
+  "branding": {
+    "title": "Local Serverless Stack",
+    "subtitle": "Local development control plane",
+    "logo": "./assets/logo.svg",
+    "favicon": "./assets/favicon.ico",
+    "defaultTheme": "dark",
+    "colors": {
+      "brand-primary": "#3b82f6",
+      "brand-hover": "#2563eb"
+    },
+    "themeColors": {
+      "dark": { "bg-primary": "#0d1117" },
+      "light": { "bg-primary": "#f8fafc" }
+    }
   }
 }
