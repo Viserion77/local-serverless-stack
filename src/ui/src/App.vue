@@ -146,6 +146,7 @@ onBeforeUnmount(() => {
               <TTab value="/buckets">S3</TTab>
               <TTab value="/dynamo">DynamoDB</TTab>
               <TTab value="/opensearch">OpenSearch</TTab>
+              <TTab value="/secrets">Secrets</TTab>
             </TTabList>
           </TTabs>
         </nav>

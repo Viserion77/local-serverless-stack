@@ -19,16 +19,112 @@ flowchart LR
 
 ## Features
 
-- **⚡ Self engine (the LSS differentiator)**: DynamoDB, SQS, S3, EventBridge, OpenSearch Serverless, SNS and the Lambda control plane emulated **in-process** by the orchestrator — no Docker, no LocalStack, no auth token. Boots in milliseconds, stores data in local files, delivers events straight into your handlers. See [Self engine](#self-engine--no-docker-no-localstack-no-auth-token) below.
-- **Centralized provisioning**: Parses CloudFormation templates from `sls package` and provisions resources automatically — into the self engine or a single shared LocalStack, your choice per instance
-- **Event source mappings**: Automatically connects SQS queues, streams, S3 notifications and EventBridge rules to Lambda handlers
-- **Lambda runtime & API emulation**: LSS answers on the same API (30xx) and Lambda invoke (130xx) ports that serverless-offline used
-- **Web UI**: Vue 3 dashboard to monitor services, resources, and event mappings — [brandable with your company's colors and logo](docs/CONFIGURATION.md#configuration-properties)
-- **Hot reload**: Watch for code changes and auto-rebuild/reprovision
-- **DynamoDB seeds**: fixtures auto-applied on table creation, re-applied via `lss seed` or the dashboard
-- **CLI + programmatic client**: manage the orchestrator from the shell (`npx lss …`) or from code (`LssClient`)
+> **⚠️ Keep this inventory alive.** Every new capability MUST be added here **and** to the
+> canonical inventory in [docs/FEATURES.md](docs/FEATURES.md) — plus
+> [docs/SELF_ENGINE.md](docs/SELF_ENGINE.md) when it touches the self engine. Treat a feature that
+> isn't listed as a feature that doesn't exist: keeping these three documents in sync is part of
+> shipping the change, not an afterthought.
 
-See [docs/FEATURES.md](docs/FEATURES.md) for the complete feature inventory and how each capability is tested.
+LSS features come in two layers:
+
+- **Platform** — the orchestrator, CLI, dashboard, plugin, programmatic client, Lambda/API runtime
+  and seeds. **Engine-agnostic:** they behave the same whichever backend you choose.
+- **AWS engine** — the backend that actually serves the AWS wire protocols. You pick **one per
+  instance**: LocalStack Free, LocalStack Ultimate (Pro), or the in-process self engine.
+
+### 🧩 Platform (engine-agnostic)
+
+- **CLI (`npx lss …`)**
+  - `start` — runs the orchestrator detached (PID + log files), flags `--self-engine`, `--external`, `--pro`, `--localstack-token`, `--enable-dynamo-proxy`, `--config`
+  - `status` · `logs` · `stop` (also tears down the managed LocalStack)
+  - `seed [table]` / `seed:clear [table] -y` — apply / wipe DynamoDB fixtures (hard local-endpoint guard on clear)
+  - `help` — every command, flag and a config template
+- **Orchestration & provisioning**
+  - Service registration API (`POST /api/services/register`) — the plugin reports only *where* the service lives
+  - CloudFormation parsing from `sls package` → auto-provisions tables, queues, topics, buckets, EventBridge buses/rules and OpenSearch collections
+  - `autoPackage` — runs `sls package` on demand when the template is missing
+  - Automatic event source mappings: SQS / DynamoDB streams / S3 notifications / EventBridge rules → Lambda
+  - Per-instance isolation — `stateDir` + port-scoped PID/log paths let many LSS instances coexist (one per project)
+  - Config: `lss.config.json` / `.lssrc` + env overrides (`LSS_*`); public-safe `GET /api/config` snapshot (never leaks the auth token)
+- **Lambda runtime & API Gateway emulation** (serverless-offline replacement — same `30xx`/`130xx` ports)
+  - Function + route registry: REST (`http`, payload v1), HTTP API (`httpApi`, payload v2) and authorizers — persisted and rehydrated on restart
+  - Per-service worker processes: lazy/warm handler loading, function env/timeout/context, per-invocation log capture, crash restart
+  - Execution modes: `artifact` (extracted zip) · `source` (direct require/import; TS via native type-stripping → esbuild/tsx/ts-node) · `auto`
+  - Lambda Invoke API on `130xx` (`X-Amz-Invocation-Type` RequestResponse/Event/DryRun, `X-Amz-Function-Error`)
+  - API Gateway proxy on `30xx`: route precedence (literal > `{param}` > `{proxy+}` > `$default`, method > ANY), payload v1/v2, CORS preflight, `port-conflict` status
+  - Lambda authorizers: REST `token`/`request`, HTTP API `request` (simple responses), identity-source extraction, TTL cache + cache-clear, cross-service resolution by ARN
+  - Hot reload: source changes restart the worker; `serverless.yml` changes re-package + re-register
+- **Explorers & testing primitives** (HTTP API + dashboard)
+  - **Queues** (`/api/queues`): list + metrics (available/inFlight/processed/delayed), send/receive/delete/purge (FIFO group/dedup), `reset-processed`, `await-idle` (block until drained), `hold`/`captured`/`release` (capture-and-replay)
+  - **DynamoDB** (`/api/dynamo`): list/describe (keys, GSI/LSI, stream, TTL), scan/query with filters, item CRUD, get/set TTL
+  - **S3** (`/api/buckets`): list buckets (size/versioning/notifications), list/stream/upload (base64 or utf8)/delete objects
+  - **OpenSearch** (`/api/opensearch`): list collections, per-collection indices, run search queries
+  - **Secrets** (`/api/secrets`): list/describe secrets, reveal current value (separate endpoint so lists never carry secret material)
+  - **Seeds** (`/api/seeds`): auto-seed on table creation + on-demand run/clear, seed-file ↔ live-table mismatch diagnostic
+  - **Resources** (`/api/resources`, `…/owners`): provisioned resources mapped to owning services
+  - **Health** (`/api/health`): orchestrator + active engine + dynamo-proxy status
+- **Dashboard (Vue 3 SPA)** — nine tabs: **Overview**, **Services** (status/start/stop/logs + per-service resource breakdown incl. EventBridge buses & rules and OpenSearch collections), **Lambdas** (registry + invoke + logs), **APIs**, **Queues**, **S3**, **DynamoDB**, **OpenSearch**, **Secrets** — plus a region selector and theme toggle
+  - **Branding**: navbar title/subtitle, logo, favicon, default theme and any TreeUI color token per theme, via the `branding` config key
+- **serverless-lss plugin** — auto-registers each service on `sls package`/`offline`; orchestrator URL precedence (`ORCHESTRATOR_URL` > `LSS_DASHBOARD_PORT` > `custom.orchestrator` > 3100)
+- **Programmatic client (`LssClient`)** — the CLI/dashboard surface from code: HTTP namespaces `seeds`, `queues`, `dynamo`, `buckets`, `resources`, `services`, `lambdas`, `apis`, `config`, `health` + `lifecycle` (`start`/`stop`/`status`/`logs`/`waitUntilReady`, shells out to the CLI)
+- **DynamoDB dev proxy** — optional reverse proxy on `:8000` (`enableDynamoProxy`) forwarding to the active engine, for tooling that expects DynamoDB on the standard port
+- **DynamoDB seeds** — `seeds/{tableName}.json` fixtures auto-applied on table creation, re-applied via `lss seed` or the dashboard
+
+### 🆓 Engine: LocalStack Free (community image, Docker)
+
+LSS spins up and manages its own community LocalStack container (`lss-localstack-<port>`) with
+`dynamodb, sqs, sns, s3, lambda, events`, a persistence volume and the local Lambda executor. Events
+reach your handlers through a generated proxy Lambda inside the container that calls the LSS invoke
+listener. This is the default engine; the [localstack-free example](examples/localstack-free/) runs
+community 4.0 with no token.
+
+- **Provisioned & wired**: DynamoDB tables (keys, GSI/LSI, streams, TTL), SQS queues (incl. FIFO), SNS topics, S3 buckets (versioning + `s3:ObjectCreated:*` notifications), EventBridge buses & rules (pattern or `rate()`/cron schedules), Lambda event source mappings
+- **Not available on community**: OpenSearch Serverless (`aoss`) — provisioning fails with an explicit error pointing you at Pro or the self engine
+- Community images `>= 2026.5` require `LOCALSTACK_AUTH_TOKEN`; `mode: external` / `--external` points at a LocalStack you already run
+
+### 💎 Engine: LocalStack Ultimate (Pro image, auth token)
+
+`npx lss start --pro` (optionally `--localstack-token ls-xxx`) runs the LocalStack **Pro** image — same
+provisioning and wiring as Free, plus the Pro-only services (OpenSearch Serverless and more). The
+[localstack-ultimate example](examples/localstack-ultimate/) keeps the serverless-offline path in
+charge of the ports and exercises the full resource menu (custom bus + pattern rule with an audit
+trail, `rate()` schedule, SQS DLQ redrive with `ReportBatchItemFailures`, DynamoDB GSI + streams →
+SNS, S3 notifications, TTL from the UI).
+
+- Requires `LOCALSTACK_AUTH_TOKEN` (Ultimate plan)
+- `localstackEdition` / `localstackVersion` / `localstackImage` select the exact image
+
+### ⚡ Engine: Self (in-process AWS emulator — no Docker, no token) — *the LSS differentiator*
+
+The orchestrator serves the AWS wire protocols itself on one port (default `14566`); events are
+delivered **in-process** straight to the LSS Lambda runtime — no container, no proxy Lambdas, no
+polling. Data persists as JSONL snapshot + WAL / content-addressed blobs under `~/.lss/engine`,
+hydrated on first touch and dehydrated when idle. Anything unimplemented answers with an explicit
+AWS-shaped error or is forwarded to `selfEngine.fallbackEndpoint`. See the [Self engine
+section](#self-engine--no-docker-no-localstack-no-auth-token) below for boot-time numbers and the
+migration story, and [docs/SELF_ENGINE.md](docs/SELF_ENGINE.md) for the full coverage matrix.
+
+- **DynamoDB**
+  - Full expression language: KeyCondition, Condition, Filter, Update, Projection — decimal-exact `N` arithmetic
+  - GSI/LSI with projection + sparse semantics; Limit-before-filter parity; LEK paging
+  - Item ops: Put/Get/Delete/UpdateItem, Query, Scan, BatchGet/BatchWrite, TransactWrite/TransactGet (all-or-nothing, `CancellationReasons`, `ClientRequestToken` idempotency)
+  - **Streams** delivered in-process (TRIM_HORIZON/LATEST, retry-then-advance, OnFailure SQS destination)
+  - Lazy **TTL** expiry; AWS error names the provisioner relies on
+  - Works unchanged with platform **seeds**, the DynamoDB explorer and the dev proxy
+- **SQS** — CreateQueue (idempotent), send/receive(+batch)/delete/purge, ChangeMessageVisibility; FIFO groups/dedup, event-driven long poll, visibility redelivery, live counters, MD5 digests, `x-amzn-query-error` compat header (`RedrivePolicy` round-trips but DLQ redrive is not enforced)
+- **S3** — buckets (create/head/delete/list, location, versioning flag), ListObjectsV2 (prefix/delimiter/pagination/encoding), PutObject (aws-chunked), **presigned POST browser uploads** (`multipart/form-data`, `${filename}`, `success_action_status`/`redirect`, `x-amz-meta-*`), GetObject (Range), HeadObject, DeleteObject(s), CopyObject, notification config — bodies streamed to disk, never held in heap
+- **EventBridge** — buses/rules/targets, PutEvents per-entry results, pattern matcher (exact, array-OR, `prefix`, `exists`, nested), schedules (`rate()` + 6-field cron) from one timer wheel
+- **OpenSearch Serverless** — `aoss` control plane (Create/BatchGet/List/DeleteCollection, deterministic ids, `collectionEndpoint`) + REST data plane under `/_aoss/<collection>`: index & document CRUD with versioning, `_bulk` NDJSON, `_search`/`_count` (match/term/terms/range/prefix/wildcard/exists/ids/bool + sort, `_source` filtering, `?q=`), `terms`+metric aggregations, `_mapping`, `_refresh`, `_cat/indices`
+- **Secrets Manager** — Create/Get/Put/Update/Describe/Delete/Restore/ListSecrets, Tag/Untag, GetRandomPassword; real `AWSCURRENT`/`AWSPREVIOUS` staging, `SecretString`/`SecretBinary`, `ClientRequestToken` idempotency, per-region scoping (values persisted, not encrypted; create via SDK — CFN provisioning pending)
+- **SNS** (minimal) — CreateTopic, ListTopics, DeleteTopic, GetTopicAttributes, Publish (logged + counted, no fan-out)
+- **STS** — GetCallerIdentity
+- **Lambda control plane** — proxy absorption as metadata (`INVOKE_URL` kept as HTTP fallback), event source mapping lifecycle (`Enabled` toggle = QueueInspector hold/release), Invoke passthrough
+- **In-process event delivery** — SQS→Lambda (batch size/window, visibility semantics), DynamoDB streams, S3 notifications (globs + prefix/suffix), EventBridge targets (`Input`/`InputPath`), schedules — all via `LambdaRuntimeManager.invoke()`, no proxies, no polling
+- **Wire front door & storage** — single-port routing (SigV4-scope / X-Amz-Target / path), per-protocol error shapes, `/_localstack/health` alias, `fallbackEndpoint` reverse proxy; JSONL snapshot + WAL (torn-tail-safe, compaction), atomic JSON catalogs, content-addressed S3 blobs, hydrate-on-touch + idle dehydrate + `memoryBudgetMb` LRU
+
+For how each capability is tested (unit vs integration) see [docs/FEATURES.md](docs/FEATURES.md); the
+self-engine coverage matrix and known divergences from AWS live in
+[docs/SELF_ENGINE.md](docs/SELF_ENGINE.md).
 
 ## Self engine — no Docker, no LocalStack, no auth token
 
@@ -68,7 +164,7 @@ What you get:
 flowchart LR
     APP[Your services<br/>AWS SDK → :14566] --> ENG
     subgraph ORCH["One orchestrator process — no Docker"]
-        ENG[Self engine<br/>DynamoDB · SQS · S3 · EventBridge<br/>OpenSearch · SNS · STS]
+        ENG[Self engine<br/>DynamoDB · SQS · S3 · EventBridge<br/>OpenSearch · Secrets Manager · SNS · STS]
         ENG -->|in-process events| RT[LSS Lambda runtime<br/>your handlers, ports 30xx/130xx]
         ENG --- FS[(local files<br/>~/.lss/engine)]
     end

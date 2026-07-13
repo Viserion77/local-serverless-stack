@@ -304,6 +304,32 @@ export interface OpenSearchCollectionSummary {
   endpoint: string;
 }
 
+export interface SecretSummary {
+  name: string;
+  arn?: string;
+  description?: string;
+  lastChangedDate?: string;
+  lastAccessedDate?: string;
+  createdDate?: string;
+  deletedDate?: string;
+  tags: Array<{ key: string; value: string }>;
+  versionCount: number;
+}
+
+export interface SecretDetail extends SecretSummary {
+  versionStages: Record<string, string[]>;
+  kmsKeyId?: string;
+}
+
+export interface SecretValue {
+  name: string;
+  versionId?: string;
+  versionStages: string[];
+  secretString?: string;
+  secretBinary?: string;
+  createdDate?: string;
+}
+
 export interface OpenSearchIndexSummary {
   index: string;
   docsCount: number;
@@ -555,6 +581,13 @@ export const api = {
       `/api/opensearch/collections/${encodeURIComponent(name)}/search`,
       { method: 'POST', body: JSON.stringify(input) },
     ),
+
+  // Secrets Manager
+  listSecrets: () => request<{ secrets: SecretSummary[] }>('/api/secrets'),
+  describeSecret: (name: string) =>
+    request<SecretDetail>(`/api/secrets/${encodeURIComponent(name)}`),
+  getSecretValue: (name: string) =>
+    request<SecretValue>(`/api/secrets/${encodeURIComponent(name)}/value`),
 
   // Queues
   listQueues: () => request<QueueSnapshot[]>('/api/queues'),

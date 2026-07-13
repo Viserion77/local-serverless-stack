@@ -4,6 +4,12 @@ This is the canonical inventory of what `local-serverless-stack` (LSS) promises.
 checklist for the integration suite (`tests/integration/features.test.ts`), which boots a real isolated
 LSS + LocalStack and asserts each capability against the live HTTP API.
 
+> **⚠️ Keep this document current.** Every new capability MUST be recorded here as part of shipping
+> the change — never after the fact. Keep it in sync with the **Features** section of
+> [../README.md](../README.md) and, for self-engine work, with [SELF_ENGINE.md](SELF_ENGINE.md). A
+> feature that isn't in this inventory is treated as one that doesn't exist (and won't be covered by
+> the suite). When you add a row, wire it to a `unit`/`integration` assertion in the same PR.
+
 Legend for "Asserted by": `unit` = covered by the unit suite (`npm run test:unit`); `integration` = covered
 by the live integration suite (`npm run test:integration`).
 
@@ -96,9 +102,16 @@ port. Asserted by: unit (`dev/dynamo-proxy`).
 
 `GET /api/health` reports orchestrator + engine + dynamo-proxy status (the `localstack` field reports the
 active engine's health — LocalStack or self — kept under that name for compatibility). The Vue dashboard
-(served as a SPA) surfaces Overview / Services / Lambdas / APIs / Queues / S3 / DynamoDB with a region selector
-and theme toggle; the Services list and service detail pages include the per-service resource breakdown with
-EventBridge buses & rules and OpenSearch collections (UI is exercised manually, not in the automated suites).
+(served as a SPA) surfaces nine tabs — Overview / Services / Lambdas / APIs / Queues / S3 / DynamoDB /
+OpenSearch / Secrets — with a region selector and theme toggle; the Services list and service detail pages
+include the per-service resource breakdown with EventBridge buses & rules and OpenSearch collections (UI is
+exercised manually, not in the automated suites).
+
+The **OpenSearch explorer** (`GET /api/opensearch/collections`, `…/collections/:name/indices`,
+`POST /…/collections/:name/search`) and the **Secrets explorer** (`GET /api/secrets`, `GET /api/secrets/:name`,
+`GET /api/secrets/:name/value` — the value lives behind a separate endpoint so a plain list never carries
+secret material) back the corresponding tabs. Asserted by: unit (`opensearch-explorer`, `secrets-explorer`,
+`routes/opensearch`, `routes/secrets`).
 
 Dashboard branding: an optional `branding` key in `lss.config.json` (title, subtitle, logo,
 favicon, defaultTheme, plus `colors`/`themeColors` as TreeUI token overrides) customizes the dashboard. Served
@@ -161,11 +174,12 @@ the next milestone and rows below will gain integration assertions with it.
 | Engine selection | `engine`/`selfEngine` config keys, `LSS_ENGINE`/`LSS_ENGINE_PORT` env, `--self-engine` CLI (rejected combined with `--external`/`--pro`/`--localstack-token`); LocalStack remains the default. | unit (`config-manager`, `cli`) |
 | Wire front door | SigV4-scope/X-Amz-Target/path routing on one port; per-protocol error shapes (`__type`, Query XML, S3 XML with body-less HEAD, Lambda + `x-amzn-ErrorType`); `x-amzn-query-error` SQS compat header; aws-chunked PutObject decoding; `/_localstack/health` alias; `fallbackEndpoint` verbatim reverse proxy for anything unimplemented. | unit (`engine/http`) |
 | Storage & footprint | JSONL snapshot + WAL per table (torn-tail-safe replay, compaction), atomic JSON catalogs, content-addressed S3 blobs (never in heap), hydrate-on-first-touch + idle dehydrate + `memoryBudgetMb` LRU, debounced flushes with opt-in fsync. | unit (`engine/store`) |
-| DynamoDB emulation | Full expression language (KeyCondition/Condition/Filter/Update/Projection, decimal-exact `N` arithmetic), GSI/LSI with projection + sparse semantics, Limit-before-filter parity, LEK paging, streams records, lazy TTL, AWS error names the provisioner relies on. | unit (`engine/dynamodb`, 265 tests) |
+| DynamoDB emulation | Full expression language (KeyCondition/Condition/Filter/Update/Projection, decimal-exact `N` arithmetic), GSI/LSI with projection + sparse semantics, Limit-before-filter parity, LEK paging, streams records, lazy TTL, `TransactWriteItems`/`TransactGetItems` (all-or-nothing, `CancellationReasons`, `ClientRequestToken` idempotency, stream records for committed writes only), AWS error names the provisioner relies on. | unit (`engine/dynamodb`, `engine/dynamodb/transactions`) |
 | SQS emulation | Queues (FIFO groups/dedup), event-driven long poll, visibility redelivery, live counters for QueueInspector, MD5 digests, CreateQueue idempotency duality. | unit (`engine/sqs`) |
-| S3 emulation | Buckets, binary-exact object round trips, Range reads, ListObjectsV2 pagination/delimiter/encoding, DeleteObjects, CopyObject, notification configuration (incl. legacy XML names), versioning flag. | unit (`engine/s3`) |
+| S3 emulation | Buckets, binary-exact object round trips, Range reads, ListObjectsV2 pagination/delimiter/encoding, DeleteObjects, CopyObject, presigned POST (browser multipart form upload: `${filename}`, `success_action_status`/`redirect`, `x-amz-meta-*`), notification configuration (incl. legacy XML names), versioning flag. | unit (`engine/s3`, `engine/s3/s3-post`, `engine/s3/multipart`) |
 | EventBridge + SNS + STS | Buses/rules/targets, PutEvents per-entry results, pattern matcher (exact/array-OR/prefix/exists/nested; unsupported operators rejected at PutRule), minimal SNS, `GetCallerIdentity`. | unit (`engine/events`, `engine/sns-sts`) |
 | OpenSearch Serverless emulation | `aoss` control plane (Create/BatchGet/List/DeleteCollection, deterministic ids, `collectionEndpoint` handed out) + the OpenSearch REST data plane under `/_aoss/<collection>`: index/document CRUD with versioning, `_bulk` NDJSON, `_search` (match/term/terms/range/prefix/wildcard/exists/ids/bool, sort, `_source` filtering, `terms`+metric aggregations), `_count`, `_mapping`, `_cat/indices`; OpenSearch-shaped errors; unsupported operators rejected loudly. | unit (`engine/opensearch`, `engine/http/router`) |
+| Secrets Manager emulation | Create/Get/Put/Update/DescribeSecret, DeleteSecret (recovery window + `ForceDeleteWithoutRecovery`), RestoreSecret, ListSecrets, Tag/UntagResource, GetRandomPassword — real `AWSCURRENT`/`AWSPREVIOUS` staging, `SecretString`/`SecretBinary`, `ClientRequestToken` idempotency, per-region scoping (values persisted, not encrypted; `KmsKeyId` accepted and ignored). Rotation/replication/resource-policies rejected; CFN `AWS::SecretsManager::Secret` not yet provisioned on registration (create via SDK). Backs the Secrets explorer/tab. | unit (`engine/secretsmanager`, `secrets-explorer`) |
 | Lambda control plane | Proxy absorption as metadata (INVOKE_URL kept as HTTP fallback), ESM lifecycle with `Enabled` toggle (QueueInspector hold/release), Invoke passthrough (`X-Amz-Invocation-Type`). | unit (`engine/lambda-ctl`) |
 | In-process event delivery | SQS→Lambda loops (batch size/window, visibility semantics), DynamoDB stream tailers (TRIM_HORIZON/LATEST, retry-then-advance, OnFailure destination), S3 notification fan-out (globs + prefix/suffix), EventBridge targets (`Input`/`InputPath`), schedules (`rate` + 6-field cron) — all through `LambdaRuntimeManager.invoke()`, no proxies, no polling loops. | unit (`engine/dispatch`, `engine/self-backend`) |
 

@@ -45,6 +45,25 @@ functions:
           path: /receipts
           method: get
 
+  # GET /attachments/upload-url?filename= — returns a presigned POST so the
+  # browser uploads an attachment straight to S3 (served natively by the self
+  # engine's S3 presigned-POST handler).
+  getUploadUrl:
+    handler: src/handlers/getUploadUrl.handler
+    events:
+      - httpApi:
+          path: /attachments/upload-url
+          method: get
+
+  # GET /receipts/{id}/signature — signs the receipt id with an HMAC key read
+  # from Secrets Manager (lazily provisioned on first use).
+  signReceipt:
+    handler: src/handlers/signReceipt.handler
+    events:
+      - httpApi:
+          path: /receipts/{id}/signature
+          method: get
+
 resources:
   Resources:
     ReceiptsBucket:

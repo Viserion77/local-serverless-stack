@@ -85,6 +85,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'OpenSearch' },
   },
   {
+    path: '/secrets',
+    name: 'secrets',
+    component: () => import('./pages/SecretsPage.vue'),
+    meta: { title: 'Secrets Manager' },
+  },
+  {
     path: '/opensearch/:name',
     name: 'opensearch-collection',
     component: () => import('./pages/OpenSearchCollectionPage.vue'),

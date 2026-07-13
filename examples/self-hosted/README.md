@@ -1,15 +1,15 @@
 # self-hosted
 
-Four microservices running **entirely on the LSS self engine** — DynamoDB, SQS, S3,
-EventBridge and OpenSearch Serverless emulated in-process by the orchestrator. **No
-Docker. No LocalStack. No auth token.** The engine boots in milliseconds and serves the
+Four microservices running **entirely on the LSS self engine** — DynamoDB, SQS, S3
+(incl. presigned POST), EventBridge, OpenSearch Serverless and Secrets Manager emulated
+in-process by the orchestrator. **No Docker. No LocalStack. No auth token.** The engine boots in milliseconds and serves the
 real AWS wire protocols, so the services below use plain `@aws-sdk` v3 clients (or bare
 `fetch` for OpenSearch) pointed at `http://localhost:14566`.
 
 | Service | Role | API port | Invoke port |
 |---|---|---|---|
 | `orders-service` | `POST /orders` stores the order in DynamoDB and enqueues it on SQS; `GET /orders` lists them. Owns the `orders-Orders` table and the `orders-to-process` queue. | `3631` | `13631` |
-| `billing-service` | SQS consumer (cross-service ESM **by ARN**) writes a receipt to S3 and publishes `OrderBilled` to the `billing-events` bus; `GET /receipts` lists receipts. Owns the bucket and the bus. | `3632` | `13632` |
+| `billing-service` | SQS consumer (cross-service ESM **by ARN**) writes a receipt to S3 and publishes `OrderBilled` to the `billing-events` bus; `GET /receipts` lists receipts, `GET /attachments/upload-url` returns a presigned POST, `GET /receipts/{id}/signature` signs with a Secrets Manager key. Owns the bucket and the bus. | `3632` | `13632` |
 | `notifications-service` | EventBridge rule (`source: billing`, `detail-type: OrderBilled`) stores a notification in DynamoDB; `GET /notifications` lists them. | `3633` | `13633` |
 | `catalog-service` | `POST /products` indexes documents; `GET /products/{id}` / `DELETE /products/{id}` read and remove them; `GET /search` runs full-text + filtered queries; `GET /stats` aggregates by category. Owns the `products-catalog` OpenSearch Serverless collection. | `3634` | `13634` |
 
@@ -31,7 +31,15 @@ What this exercises on the self engine:
   **cross-service event source mapping** (billing consumes a queue owned by orders,
   referenced by ARN). Delivery is in-process to the LSS Lambda runtime.
 - **S3** — bucket from `resources:`, `PutObject`/`ListObjectsV2`/`GetObject` round trips
-  (bodies stored as blobs on disk, never in the engine heap).
+  (bodies stored as blobs on disk, never in the engine heap), plus **presigned POST**:
+  `GET /attachments/upload-url` hands back a browser form (`createPresignedPost`) that
+  uploads straight to S3 — the self engine serves the `POST /<bucket>` multipart upload
+  natively.
+- **Secrets Manager** — `GET /receipts/{id}/signature` reads an HMAC signing key from
+  Secrets Manager (lazily created on first use via `CreateSecret`/`GetRandomPassword`,
+  read via `GetSecretValue`) to sign a receipt id — the pattern of a service reading a
+  signing key at boot/request time. Inspect the secret and its `AWSCURRENT`/`AWSPREVIOUS`
+  versions in the dashboard's **Secrets** tab.
 - **EventBridge** — custom bus from `resources:`, `PutEvents` from a handler, a rule with
   pattern filtering wired to a target in **another service**, real event envelope
   (no `Records` wrapper).
@@ -86,9 +94,24 @@ curl http://localhost:3631/orders          # order stored (plus the seeded one)
 curl http://localhost:3632/receipts        # receipt written to S3 by billing
 curl http://localhost:3633/notifications   # notification created via EventBridge
 
-# 5. Dashboard: http://localhost:3140 (services, queues, tables, lambdas, APIs)
+# 5. Dashboard: http://localhost:3140 (services, queues, tables, lambdas, APIs, Secrets)
 
 npm run lss:stop
+```
+
+## Drive Secrets Manager + presigned POST
+
+```bash
+# Sign a receipt id with the HMAC key from Secrets Manager (created on first call).
+curl -s 'http://localhost:3632/receipts/rcpt-123/signature'
+# → {"receiptId":"rcpt-123","signature":"…","keyId":"billing/receipt-signing-key","keyStages":["AWSCURRENT"]}
+
+# The key now shows up in the dashboard's Secrets tab (reveal value, version stages).
+
+# Ask for a presigned POST, then upload an attachment straight to S3 with it.
+curl -s 'http://localhost:3632/attachments/upload-url?filename=invoice.pdf'
+# The response includes a ready-to-run `hint` curl: paste it (with a real -F file=@…)
+# to POST the form to the bucket. The object then appears under the S3 tab.
 ```
 
 ## Drive the catalog
