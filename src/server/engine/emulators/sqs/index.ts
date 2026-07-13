@@ -249,6 +249,30 @@ export class SqsEmulator implements TargetEmulator {
     for (const handle of receiptHandles) runtime.deleteMessage(handle);
   }
 
+  // Enqueue a message on behalf of another emulator (an EventBridge rule or
+  // schedule with an SQS target). Returns false when the queue does not exist,
+  // so the caller can warn rather than throw. The send marks the message
+  // visible, so an SQS→Lambda ESM on the queue picks it up immediately.
+  async deliverMessage(
+    region: string,
+    queueName: string,
+    body: string,
+    opts?: { messageGroupId?: string },
+  ): Promise<boolean> {
+    const catalog = await this.catalogFor(region);
+    const record = catalog.get(queueName);
+    if (!record) return false;
+    this.runtimeFor(region, record).send({
+      body,
+      // Honor the queue's default DelaySeconds, like a direct SendMessage does
+      // (EventBridge sends with no per-message delay override).
+      delayMs: this.attrMs(record, 'DelaySeconds'),
+      messageGroupId: opts?.messageGroupId,
+      contentBasedDeduplication: record.attributes.ContentBasedDeduplication === 'true',
+    });
+    return true;
+  }
+
   // Boot wiring: load a region's queue catalog before the dispatcher's sync
   // API touches it (rearming ESMs from persisted metadata).
   async ensureRegionLoaded(region: string): Promise<void> {

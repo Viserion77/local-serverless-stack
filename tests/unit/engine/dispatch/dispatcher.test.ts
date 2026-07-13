@@ -25,7 +25,7 @@ import { S3Emulator } from '../../../../src/server/engine/emulators/s3/index.js'
 import { EventsEmulator } from '../../../../src/server/engine/emulators/events/index.js';
 import { LambdaCtlEmulator } from '../../../../src/server/engine/emulators/lambda-ctl/index.js';
 import type { EventRuleTarget, S3ObjectEvent } from '../../../../src/server/engine/types.js';
-import { jsonReq, makeCtx, waitFor } from './helpers.js';
+import { awsReq, jsonReq, makeCtx, waitFor } from './helpers.js';
 import type { TestEngineContext } from './helpers.js';
 
 const REGION = 'us-east-1';
@@ -37,6 +37,7 @@ interface Harness {
   tc: TestEngineContext;
   dispatcher: EngineDispatcher;
   s3: S3Emulator;
+  sqs: SqsEmulator;
   lambdaCtl: LambdaCtlEmulator;
 }
 
@@ -49,7 +50,7 @@ function makeHarness(tuning?: { s3RetryDelaysMs?: number[] }): Harness {
   const lambdaCtl = new LambdaCtlEmulator(tc.ctx);
   const dispatcher = new EngineDispatcher({ ctx: tc.ctx, sqs, dynamo, s3, events, lambdaCtl, tuning });
   tc.ctx.dispatcher = dispatcher;
-  return { tc, dispatcher, s3, lambdaCtl };
+  return { tc, dispatcher, s3, sqs, lambdaCtl };
 }
 
 describe('EngineDispatcher.invokeFunction', () => {
@@ -414,6 +415,70 @@ describe('EngineDispatcher EventBridge targets', () => {
       2000,
       'failure log',
     );
+    warn.mockRestore();
+  });
+
+  test('delivers to an SQS target as a message (not a Lambda invoke)', async () => {
+    await h.sqs.handle('CreateQueue', { QueueName: 'proof-queue' }, awsReq(REGION));
+    emitRuleMatched([{ id: 'q', arn: `arn:aws:sqs:${REGION}:000000000000:proof-queue` }]);
+    await waitFor(() => h.sqs.hasVisibleMessages(REGION, 'proof-queue'), 2000, 'message enqueued');
+
+    // The event envelope is the message body; no Lambda invoke happened.
+    expect(invoked).not.toHaveBeenCalled();
+    const [message] = h.sqs.receiveForDelivery(REGION, 'proof-queue', 10);
+    expect(JSON.parse(message.body)).toEqual(envelope);
+  });
+
+  test('SQS target body is JSON — a string Input stays quoted (AWS-verbatim)', async () => {
+    await h.sqs.handle('CreateQueue', { QueueName: 'str-queue' }, awsReq(REGION));
+    emitRuleMatched([
+      { id: 'q', arn: `arn:aws:sqs:${REGION}:000000000000:str-queue`, input: '"widget"' },
+    ]);
+    await waitFor(() => h.sqs.hasVisibleMessages(REGION, 'str-queue'), 2000, 'message enqueued');
+    const [message] = h.sqs.receiveForDelivery(REGION, 'str-queue', 10);
+    // The body is valid JSON that parses back to the string (not the raw chars).
+    expect(message.body).toBe('"widget"');
+    expect(JSON.parse(message.body)).toBe('widget');
+  });
+
+  test('SQS target honors the queue default DelaySeconds', async () => {
+    await h.sqs.handle('CreateQueue', {
+      QueueName: 'delayed-queue',
+      Attributes: { DelaySeconds: '60' },
+    }, awsReq(REGION));
+    const deliverSpy = jest.spyOn(h.sqs, 'deliverMessage');
+    emitRuleMatched([{ id: 'q', arn: `arn:aws:sqs:${REGION}:000000000000:delayed-queue` }]);
+    // Wait until the message is actually enqueued (the delivery promise resolves
+    // true), then assert it is NOT visible — it was parked by the 60s delay,
+    // matching a direct SendMessage to a delay queue (delayMs:0 would show true).
+    await waitFor(() => deliverSpy.mock.calls.length >= 1, 2000, 'deliverMessage called');
+    expect(await deliverSpy.mock.results[0].value).toBe(true);
+    expect(h.sqs.hasVisibleMessages(REGION, 'delayed-queue')).toBe(false);
+    deliverSpy.mockRestore();
+  });
+
+  test('honors SqsParameters.MessageGroupId for a FIFO SQS target', async () => {
+    await h.sqs.handle('CreateQueue', {
+      QueueName: 'proof.fifo',
+      Attributes: { FifoQueue: 'true', ContentBasedDeduplication: 'true' },
+    }, awsReq(REGION));
+    emitRuleMatched([
+      { id: 'q', arn: `arn:aws:sqs:${REGION}:000000000000:proof.fifo`, sqsMessageGroupId: 'g1' },
+    ]);
+    await waitFor(() => h.sqs.hasVisibleMessages(REGION, 'proof.fifo'), 2000, 'fifo message enqueued');
+    const [message] = h.sqs.receiveForDelivery(REGION, 'proof.fifo', 10);
+    expect(message.messageGroupId).toBe('g1');
+  });
+
+  test('warns when an SQS target queue does not exist', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    emitRuleMatched([{ id: 'q', arn: `arn:aws:sqs:${REGION}:000000000000:ghost-queue` }]);
+    await waitFor(
+      () => warn.mock.calls.some(c => String(c[0]).includes('queue "ghost-queue" not found')),
+      2000,
+      'missing-queue warning',
+    );
+    expect(invoked).not.toHaveBeenCalled();
     warn.mockRestore();
   });
 });

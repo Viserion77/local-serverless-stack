@@ -12,8 +12,10 @@ import type {
   AwsRequest,
   EngineContext,
   EngineInvokeResult,
+  EventRuleTarget,
   SelfEngineResolvedConfig,
 } from '../../../../src/server/engine/types.js';
+import { resolveTargetInput } from '../../../../src/server/engine/dispatch/scheduler.js';
 
 export interface TestEngineContext {
   ctx: EngineContext;
@@ -106,6 +108,31 @@ export function makeInvokeStub(plan: EngineInvokeResult[] = [{ ok: true }]): {
       const result = plan[Math.min(calls.length, plan.length - 1)];
       calls.push({ ref, event, opts });
       return result;
+    },
+  };
+}
+
+export interface DeliverCall {
+  target: EventRuleTarget;
+  envelope: Record<string, unknown>;
+  sourceLabel: string;
+  // Convenience projections for assertions.
+  arn: string;
+  event: unknown;
+}
+
+// Recording stub for the scheduler's `deliverToTarget` dependency — the
+// scheduler now delegates per-target delivery here, so a test can assert what
+// each rule fired without mocking the Lambda/SQS delivery mechanism.
+export function makeDeliverStub(): {
+  calls: DeliverCall[];
+  deliverToTarget: (target: EventRuleTarget, envelope: Record<string, unknown>, sourceLabel: string) => void;
+} {
+  const calls: DeliverCall[] = [];
+  return {
+    calls,
+    deliverToTarget: (target, envelope, sourceLabel) => {
+      calls.push({ target, envelope, sourceLabel, arn: target.arn, event: resolveTargetInput(target, envelope) });
     },
   };
 }

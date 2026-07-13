@@ -88,6 +88,39 @@ describe('S3Emulator — objects', () => {
     await expectAwsError(emulator.handle(makeReq('GET', '/ghost/whatever.txt')), 'NoSuchBucket', 404);
   });
 
+  test('presigned response-* query params override GET/HEAD response headers', async () => {
+    await emulator.handle(makeReq('PUT', '/my-bucket/report.bin', {
+      body: 'data',
+      headers: { 'content-type': 'application/octet-stream' },
+    }));
+    const query = {
+      'response-content-disposition': 'attachment; filename="Q3 Report.pdf"',
+      'response-content-type': 'application/pdf',
+      'response-cache-control': 'no-store',
+      'response-content-encoding': 'gzip',
+      'response-content-language': 'en-US',
+      'response-expires': 'Wed, 21 Oct 2026 07:28:00 GMT',
+    };
+    const get = await emulator.handle(makeReq('GET', '/my-bucket/report.bin', { query }));
+    expect(get.headers?.['Content-Disposition']).toBe('attachment; filename="Q3 Report.pdf"');
+    expect(get.headers?.['Content-Type']).toBe('application/pdf');
+    expect(get.headers?.['Cache-Control']).toBe('no-store');
+    expect(get.headers?.['Content-Encoding']).toBe('gzip');
+    expect(get.headers?.['Content-Language']).toBe('en-US');
+    expect(get.headers?.Expires).toBe('Wed, 21 Oct 2026 07:28:00 GMT');
+
+    // HEAD honors them too.
+    const head = await emulator.handle(makeReq('HEAD', '/my-bucket/report.bin', {
+      query: { 'response-content-disposition': 'inline' },
+    }));
+    expect(head.headers?.['Content-Disposition']).toBe('inline');
+
+    // Absent overrides leave the stored content-type intact.
+    const plain = await emulator.handle(makeReq('GET', '/my-bucket/report.bin'));
+    expect(plain.headers?.['Content-Type']).toBe('application/octet-stream');
+    expect(plain.headers?.['Content-Disposition']).toBeUndefined();
+  });
+
   test('Range requests: bounded, open-ended, suffix, unsatisfiable and malformed', async () => {
     await emulator.handle(makeReq('PUT', '/my-bucket/digits.txt', { body: '0123456789' }));
 

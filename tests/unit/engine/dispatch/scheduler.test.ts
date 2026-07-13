@@ -10,7 +10,7 @@ import {
   resolveTargetInput,
 } from '../../../../src/server/engine/dispatch/scheduler.js';
 import type { ParsedSchedule } from '../../../../src/server/engine/dispatch/scheduler.js';
-import { awsReq, makeCtx, makeInvokeStub } from './helpers.js';
+import { awsReq, makeCtx, makeDeliverStub } from './helpers.js';
 import type { AwsRequest } from '../../../../src/server/engine/types.js';
 import type { TestEngineContext } from './helpers.js';
 
@@ -155,9 +155,9 @@ describe('EngineScheduler', () => {
       Id: 't1',
       Arn: 'arn:aws:lambda:us-east-1:000000000000:function:cleanup',
     });
-    const stub = makeInvokeStub([{ ok: true }]);
+    const stub = makeDeliverStub();
     jest.useFakeTimers();
-    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, invoke: stub.invoke });
+    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, deliverToTarget: stub.deliverToTarget });
     await scheduler.resync(REGION);
 
     expect(stub.calls).toHaveLength(0);
@@ -165,9 +165,9 @@ describe('EngineScheduler', () => {
     await flushMicrotasks();
     expect(stub.calls).toHaveLength(1);
 
-    const { ref, event, opts } = stub.calls[0];
-    expect(ref).toBe('arn:aws:lambda:us-east-1:000000000000:function:cleanup');
-    expect(opts).toEqual({ async: true });
+    const { arn, event, sourceLabel } = stub.calls[0];
+    expect(arn).toBe('arn:aws:lambda:us-east-1:000000000000:function:cleanup');
+    expect(sourceLabel).toBe('schedule every-minute');
     const envelope = event as Record<string, unknown>;
     expect(envelope['detail-type']).toBe('Scheduled Event');
     expect(envelope.source).toBe('aws.events');
@@ -192,23 +192,23 @@ describe('EngineScheduler', () => {
         { Id: 'path', Arn: 'arn:path', InputPath: '$.detail' },
       ],
     }, req());
-    const stub = makeInvokeStub([{ ok: true }]);
+    const stub = makeDeliverStub();
     jest.useFakeTimers();
-    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, invoke: stub.invoke });
+    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, deliverToTarget: stub.deliverToTarget });
     await scheduler.resync(REGION);
     jest.advanceTimersByTime(60_000);
     await flushMicrotasks();
 
     expect(stub.calls).toHaveLength(2);
-    expect(stub.calls.find(c => c.ref === 'arn:literal')?.event).toEqual({ custom: true });
-    expect(stub.calls.find(c => c.ref === 'arn:path')?.event).toEqual({});
+    expect(stub.calls.find(c => c.arn === 'arn:literal')?.event).toEqual({ custom: true });
+    expect(stub.calls.find(c => c.arn === 'arn:path')?.event).toEqual({});
     scheduler.stop();
   });
 
   test('zero timers when there are no schedule rules', async () => {
     jest.useFakeTimers();
-    const stub = makeInvokeStub();
-    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, invoke: stub.invoke });
+    const stub = makeDeliverStub();
+    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, deliverToTarget: stub.deliverToTarget });
     await scheduler.resync(REGION);
     expect(scheduler.scheduleCount()).toBe(0);
     expect(jest.getTimerCount()).toBe(0);
@@ -219,8 +219,8 @@ describe('EngineScheduler', () => {
     const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     await putScheduleRule('unsupported', 'cron(0 12 ? * 2#1 *)', { Id: 't', Arn: 'arn:t' });
     jest.useFakeTimers();
-    const stub = makeInvokeStub();
-    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, invoke: stub.invoke });
+    const stub = makeDeliverStub();
+    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, deliverToTarget: stub.deliverToTarget });
     await scheduler.resync(REGION);
     await scheduler.resync(REGION);
     expect(scheduler.scheduleCount()).toBe(0);
@@ -231,8 +231,8 @@ describe('EngineScheduler', () => {
   });
 
   test('DISABLED rules are skipped and rule changes resync via onRulesChanged', async () => {
-    const stub = makeInvokeStub();
-    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, invoke: stub.invoke });
+    const stub = makeDeliverStub();
+    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, deliverToTarget: stub.deliverToTarget });
     await scheduler.resync(REGION);
     expect(scheduler.scheduleCount()).toBe(0);
 
@@ -250,8 +250,8 @@ describe('EngineScheduler', () => {
   test('stop() clears the armed timer', async () => {
     await putScheduleRule('to-stop', 'rate(1 minute)', { Id: 't', Arn: 'arn:t' });
     jest.useFakeTimers();
-    const stub = makeInvokeStub();
-    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, invoke: stub.invoke });
+    const stub = makeDeliverStub();
+    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, deliverToTarget: stub.deliverToTarget });
     await scheduler.resync(REGION);
     expect(jest.getTimerCount()).toBe(1);
     scheduler.stop();
@@ -261,18 +261,22 @@ describe('EngineScheduler', () => {
     expect(stub.calls).toHaveLength(0);
   });
 
-  test('failed target delivery is logged, not thrown', async () => {
-    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
-    await putScheduleRule('failing', 'rate(1 minute)', { Id: 't', Arn: 'arn:missing' });
-    const stub = makeInvokeStub([{ ok: false, errorType: 'FunctionNotResolvable', errorMessage: 'nope' }]);
+  test('delegates each target delivery to deliverToTarget (incl. SQS targets)', async () => {
+    // Delivery is delegated to deliverToTarget (which dispatches by ARN service
+    // — Lambda invoke vs SQS enqueue); the scheduler just fires it per target.
+    // Failure handling lives in that dep, covered by the dispatcher test.
+    await putScheduleRule('to-queue', 'rate(1 minute)', {
+      Id: 't', Arn: 'arn:aws:sqs:us-east-1:000000000000:proof-queue',
+    });
+    const stub = makeDeliverStub();
     jest.useFakeTimers();
-    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, invoke: stub.invoke });
+    const scheduler = new EngineScheduler({ ctx: tc.ctx, events, deliverToTarget: stub.deliverToTarget });
     await scheduler.resync(REGION);
     jest.advanceTimersByTime(60_000);
     await flushMicrotasks();
     expect(stub.calls).toHaveLength(1);
-    expect(warn.mock.calls.some(c => String(c[0]).includes('delivery to arn:missing failed'))).toBe(true);
-    warn.mockRestore();
+    expect(stub.calls[0].arn).toBe('arn:aws:sqs:us-east-1:000000000000:proof-queue');
+    expect(stub.calls[0].sourceLabel).toBe('schedule to-queue');
     scheduler.stop();
   });
 });

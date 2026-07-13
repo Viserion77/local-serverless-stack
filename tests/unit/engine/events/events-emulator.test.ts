@@ -256,6 +256,26 @@ describe('targets', () => {
     ]);
   });
 
+  test('PutTargets captures SqsParameters.MessageGroupId and round-trips it', async () => {
+    await handle('PutRule', { Name: 'r', EventPattern: PATTERN });
+    await handle('PutTargets', {
+      Rule: 'r',
+      Targets: [{
+        Id: 'q',
+        Arn: 'arn:aws:sqs:us-east-1:000000000000:proof.fifo',
+        SqsParameters: { MessageGroupId: 'group-1' },
+      }],
+    });
+    const listed = await handle('ListTargetsByRule', { Rule: 'r' });
+    expect(listed.Targets).toEqual([
+      {
+        Id: 'q',
+        Arn: 'arn:aws:sqs:us-east-1:000000000000:proof.fifo',
+        SqsParameters: { MessageGroupId: 'group-1' },
+      },
+    ]);
+  });
+
   test('PutTargets/RemoveTargets/ListTargetsByRule on a missing rule throw ResourceNotFoundException', async () => {
     for (const [operation, input] of [
       ['PutTargets', { Rule: 'ghost', Targets: [TARGET] }],

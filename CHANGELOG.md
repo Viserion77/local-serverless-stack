@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.14.0] - 2026-07-13
+
+Two self-engine coverage gaps that surfaced while a project retired LocalStack: EventBridge rules/schedules now deliver to **SQS targets** (not just Lambda), and presigned **GET/HEAD honor the `response-*` header overrides** (forcing a download filename via `response-content-disposition`).
+
+### Added
+- **EventBridge → SQS target delivery**: a rule or schedule target whose ARN is an SQS queue now enqueues the resolved event as a message (previously only Lambda targets were delivered — an SQS-ARN target hit `FunctionNotResolvable` and the event was dropped). The message body is the resolved input serialized as JSON, matching AWS (the event envelope, or `Input`/`InputPath` — `Input` stays verbatim, so a JSON-string `Input` keeps its quotes); the queue's default `DelaySeconds` is honored; `SqsParameters.MessageGroupId` is captured on `PutTargets`, round-trips through `ListTargetsByRule` and is applied for FIFO targets. Delivery is unified behind a new `dispatcher.deliverToTarget(target, envelope)` that dispatches by ARN service (SQS enqueue vs Lambda invoke), shared by both the rule-matched consumer and the scheduler, so scheduled rules reach SQS targets too. A missing target queue is logged and dropped (never throws). Backed by a new `SqsEmulator.deliverMessage(region, queueName, body, opts)`.
+- **Presigned GET/HEAD `response-*` header overrides**: `GetObject`/`HeadObject` now apply the `response-content-disposition`, `response-content-type`, `response-content-encoding`, `response-content-language`, `response-cache-control` and `response-expires` query parameters to the matching response headers — the presigned-URL mechanism a browser download relies on to force a filename (`response-content-disposition=attachment; filename="…"`) or content type. Overrides coexist with Range (206) responses.
+
 ## [0.13.0] - 2026-07-13
 
 The last thing blocking a browser-facing app from dropping LocalStack (and its Docker-in-Docker): **S3 CORS**. Presigned POST/GET uploads land server-side, but a browser can't *read* the response without `Access-Control-Allow-Origin`, and the preflight `OPTIONS` was answering 400 — so real browser uploads failed even though the bytes arrived. The self engine's S3 now speaks CORS.

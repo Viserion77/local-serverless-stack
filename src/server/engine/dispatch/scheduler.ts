@@ -5,7 +5,7 @@
 // emulator's onRulesChanged hook calls it, so there is no polling anywhere.
 
 import { randomUUID } from 'crypto';
-import type { EngineContext, EngineInvokeResult, EventRuleTarget } from '../types.js';
+import type { EngineContext, EventRuleTarget } from '../types.js';
 import type { EventsEmulator } from '../emulators/events/index.js';
 
 // ---------------------------------------------------------------------------
@@ -209,7 +209,10 @@ function cronMatches(schedule: Extract<ParsedSchedule, { kind: 'cron' }>, epochM
 export interface EngineSchedulerDeps {
   ctx: EngineContext;
   events: EventsEmulator;
-  invoke: (ref: string, event: unknown, opts?: { async?: boolean }) => Promise<EngineInvokeResult>;
+  // Delivers a resolved event to one rule target, dispatching by ARN service
+  // (Lambda invoke vs SQS enqueue) — shared with the dispatcher's rule-matched
+  // path so scheduled rules reach SQS targets too.
+  deliverToTarget: (target: EventRuleTarget, envelope: Record<string, unknown>, sourceLabel: string) => void;
 }
 
 interface ScheduleEntry {
@@ -341,15 +344,7 @@ export class EngineScheduler {
       detail: {},
     };
     for (const target of entry.targets) {
-      const payload = resolveTargetInput(target, envelope);
-      void this.deps.invoke(target.arn, payload, { async: true }).then(result => {
-        if (!result.ok) {
-          console.warn(
-            `[engine-scheduler] rule ${entry.ruleName}: delivery to ${target.arn} failed: ` +
-              `${result.errorType ?? 'Error'}: ${result.errorMessage ?? ''}`,
-          );
-        }
-      });
+      this.deps.deliverToTarget(target, envelope, `schedule ${entry.ruleName}`);
     }
   }
 }

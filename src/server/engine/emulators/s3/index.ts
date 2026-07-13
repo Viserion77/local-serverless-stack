@@ -429,7 +429,7 @@ export class S3Emulator implements RestEmulator {
       return this.putObject(bucket, key, req);
     }
     if (req.method === 'GET') return this.getObject(bucket, key, req);
-    if (req.method === 'HEAD') return this.headObject(bucket, key);
+    if (req.method === 'HEAD') return this.headObject(bucket, key, req);
     if (req.method === 'DELETE') return this.deleteObject(bucket, key);
     throw notImplementedOperation('s3', `${req.method} /<bucket>/<key>`);
   }
@@ -580,6 +580,7 @@ export class S3Emulator implements RestEmulator {
     const record = await this.requireObject(bucket, key);
     const data = await this.ctx.store.readBlob(record.blobPath);
     const headers = objectHeaders(record);
+    applyResponseOverrides(headers, req.query);
     const range = parseRange(req.headers.range, record.size);
     if (range) {
       const slice = data.subarray(range.start, range.end + 1);
@@ -591,9 +592,10 @@ export class S3Emulator implements RestEmulator {
     return { status: 200, headers, body: data };
   }
 
-  private async headObject(bucket: string, key: string): Promise<AwsResponse> {
+  private async headObject(bucket: string, key: string, req: AwsRequest): Promise<AwsResponse> {
     const record = await this.requireObject(bucket, key);
     const headers = objectHeaders(record);
+    applyResponseOverrides(headers, req.query);
     headers['Content-Length'] = String(record.size);
     return { status: 200, headers };
   }
@@ -753,6 +755,27 @@ function objectHeaders(record: S3ObjectRecord): Record<string, string> {
     headers[`${METADATA_HEADER_PREFIX}${name}`] = value;
   }
   return headers;
+}
+
+// GET/HEAD response-header overrides carried as `response-*` query params (the
+// presigned-URL mechanism for forcing a download filename / content type). AWS
+// echoes each present param into the matching response header — this is what a
+// presigned GET with `response-content-disposition=attachment; filename=…`
+// relies on.
+const RESPONSE_OVERRIDE_HEADERS: Record<string, string> = {
+  'response-content-type': 'Content-Type',
+  'response-content-language': 'Content-Language',
+  'response-expires': 'Expires',
+  'response-cache-control': 'Cache-Control',
+  'response-content-disposition': 'Content-Disposition',
+  'response-content-encoding': 'Content-Encoding',
+};
+
+function applyResponseOverrides(headers: Record<string, string>, query: Record<string, string>): void {
+  for (const [param, header] of Object.entries(RESPONSE_OVERRIDE_HEADERS)) {
+    const value = query[param];
+    if (typeof value === 'string' && value.length > 0) headers[header] = value;
+  }
 }
 
 // "bytes=a-b" | "bytes=a-" | "bytes=-n". A malformed header is ignored (full

@@ -15,6 +15,7 @@ import type {
   EngineContext,
   EngineInvokeResult,
   EventRuleMatchedEvent,
+  EventRuleTarget,
   S3ObjectEvent,
 } from '../types.js';
 import type { SqsEmulator } from '../emulators/sqs/index.js';
@@ -46,6 +47,7 @@ export interface EngineDispatcherDeps {
 const DEFAULT_S3_RETRY_DELAYS_MS = [1000, 3000];
 const INVOKE_URL_TIMEOUT_MS = 30_000;
 const LAMBDA_ARN_REGION = /^arn:aws:lambda:([^:]+):/;
+const SQS_ARN = /^arn:aws:sqs:([^:]+):[^:]+:(.+)$/;
 
 export class EngineDispatcher implements DispatcherApi {
   private readonly deps: EngineDispatcherDeps;
@@ -221,16 +223,46 @@ export class EngineDispatcher implements DispatcherApi {
 
   private handleRuleMatched(event: EventRuleMatchedEvent): void {
     for (const target of event.targets) {
-      const payload = resolveTargetInput(target, event.event);
-      void this.invokeFunction(target.arn, payload, { async: true }).then(result => {
-        if (!result.ok) {
-          console.warn(
-            `[engine-dispatcher] rule ${event.ruleName}: target ${target.id} (${target.arn}) failed: ` +
-              `${result.errorType ?? 'Error'}: ${result.errorMessage ?? ''}`,
-          );
-        }
-      });
+      this.deliverToTarget(target, event.event, `rule ${event.ruleName}`);
     }
+  }
+
+  // Deliver a matched EventBridge event (rule or schedule) to one target,
+  // dispatching by the target ARN's service: an SQS ARN enqueues the resolved
+  // payload as a message; anything else (Lambda ARN or bare function name) is
+  // invoked as a function. Shared by the rule-matched consumer and the
+  // scheduler so both delivery paths cover the same target types.
+  deliverToTarget(target: EventRuleTarget, envelope: Record<string, unknown>, sourceLabel: string): void {
+    const payload = resolveTargetInput(target, envelope);
+    const sqs = SQS_ARN.exec(target.arn);
+    if (sqs) {
+      const [, region, queueName] = sqs;
+      // The message body is the resolved input serialized as JSON — matching
+      // AWS, which delivers `Input` verbatim (a JSON string stays quoted) and
+      // the event envelope as its JSON. `payload` is always JSON-safe (parsed
+      // from Input / extracted from the envelope / the envelope itself).
+      const body = JSON.stringify(payload ?? null);
+      void this.deps.sqs
+        .deliverMessage(region, queueName, body, { messageGroupId: target.sqsMessageGroupId })
+        .then(delivered => {
+          if (!delivered) {
+            console.warn(
+              `[engine-dispatcher] ${sourceLabel}: SQS target ${target.id} (${target.arn}) — ` +
+                `queue "${queueName}" not found in ${region}; event dropped`,
+            );
+          }
+        })
+        .catch(err => console.warn(`[engine-dispatcher] ${sourceLabel}: SQS target ${target.id} failed:`, err));
+      return;
+    }
+    void this.invokeFunction(target.arn, payload, { async: true }).then(result => {
+      if (!result.ok) {
+        console.warn(
+          `[engine-dispatcher] ${sourceLabel}: target ${target.id} (${target.arn}) failed: ` +
+            `${result.errorType ?? 'Error'}: ${result.errorMessage ?? ''}`,
+        );
+      }
+    });
   }
 }
 

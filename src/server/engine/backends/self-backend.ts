@@ -91,7 +91,7 @@ export class SelfEngineBackend implements EngineBackend {
     const scheduler = new EngineScheduler({
       ctx,
       events,
-      invoke: dispatcher.invokeFunction.bind(dispatcher),
+      deliverToTarget: dispatcher.deliverToTarget.bind(dispatcher),
     });
     this.scheduler = scheduler;
 

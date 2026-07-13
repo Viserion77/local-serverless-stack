@@ -192,6 +192,8 @@ export interface EventRuleTarget {
   arn: string;
   input?: string;
   inputPath?: string;
+  // SqsParameters.MessageGroupId — required by AWS for a FIFO SQS target.
+  sqsMessageGroupId?: string;
 }
 
 export interface EngineBusEvents {

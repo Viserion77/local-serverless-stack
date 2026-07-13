@@ -265,11 +265,13 @@ export class EventsEmulator implements TargetEmulator {
     const targets = [...rule.targets];
     for (const entry of entries) {
       const raw = entry as Record<string, unknown>;
+      const sqsGroupId = (raw.SqsParameters as { MessageGroupId?: unknown } | undefined)?.MessageGroupId;
       const target: EventRuleTarget = {
         id: requireString(raw, 'Id'),
         arn: requireString(raw, 'Arn'),
         ...(typeof raw.Input === 'string' ? { input: raw.Input } : {}),
         ...(typeof raw.InputPath === 'string' ? { inputPath: raw.InputPath } : {}),
+        ...(typeof sqsGroupId === 'string' ? { sqsMessageGroupId: sqsGroupId } : {}),
       };
       const index = targets.findIndex(existing => existing.id === target.id);
       if (index === -1) targets.push(target);
@@ -326,6 +328,9 @@ export class EventsEmulator implements TargetEmulator {
         Arn: target.arn,
         ...(target.input !== undefined ? { Input: target.input } : {}),
         ...(target.inputPath !== undefined ? { InputPath: target.inputPath } : {}),
+        ...(target.sqsMessageGroupId !== undefined
+          ? { SqsParameters: { MessageGroupId: target.sqsMessageGroupId } }
+          : {}),
       })),
     };
   }
