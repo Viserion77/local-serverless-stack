@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.13.0] - 2026-07-13
+
+The last thing blocking a browser-facing app from dropping LocalStack (and its Docker-in-Docker): **S3 CORS**. Presigned POST/GET uploads land server-side, but a browser can't *read* the response without `Access-Control-Allow-Origin`, and the preflight `OPTIONS` was answering 400 — so real browser uploads failed even though the bytes arrived. The self engine's S3 now speaks CORS.
+
+### Added
+- **S3 CORS on the self engine**: the S3 emulator now answers browser CORS. `PutBucketCors`/`GetBucketCors`/`DeleteBucketCors` (`?cors`) round-trip a bucket's CORS configuration (rules with `AllowedOrigin`/`AllowedMethod`/`AllowedHeader`/`ExposeHeader`/`MaxAgeSeconds`, single-`*` wildcard origins); a preflight `OPTIONS` is answered with `Access-Control-Allow-Origin`/`-Methods`/`-Headers`/`-Max-Age`; and every real response to a request carrying an `Origin` is stamped with `Access-Control-Allow-Origin`, `Access-Control-Expose-Headers` (e.g. `ETag`) and `Vary: Origin`. A configured rule that matches the origin (and, on preflight, the method + requested headers) wins and emits exactly what it allows; with no matching rule the engine falls back to a **dev-permissive default** (echo the `Origin`, allow every method) so browser uploads work out of the box on a fresh bucket — there is no cross-origin trust boundary on a local dev engine, and presigned uploads carry no credentials, so echoing the `Origin` is safe. Works for both path-style and virtual-host addressing. This unblocks browser presigned POST/GET uploads (avatars, attachments) that previously failed CORS even though the object was stored. Covered by `tests/unit/engine/s3/s3-cors.test.ts` and the full-stack wire test (preflight + stamped response + config round-trip over the real HTTP front door).
+
 ## [0.11.0] - 2026-07-13
 
 Two self-engine capabilities that let a project drop LocalStack (and the Docker-in-Docker it needs) from the daily loop: a **Secrets Manager** emulator and **S3 presigned POST**. Together they remove the last reasons a self-engine setup had to keep `selfEngine.fallbackEndpoint` pointed at a LocalStack container — the RS256 signing key an identity service reads at boot, and the browser form uploads a storage service hands out.

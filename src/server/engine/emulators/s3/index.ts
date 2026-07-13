@@ -50,11 +50,21 @@ interface S3NotificationConfiguration {
   topic: DestinationNotificationConfig[];
 }
 
+export interface S3CorsRule {
+  id?: string;
+  allowedOrigins: string[];
+  allowedMethods: string[];
+  allowedHeaders: string[];
+  exposeHeaders: string[];
+  maxAgeSeconds?: number;
+}
+
 interface S3BucketRecord {
   region: string;
   creationDate: string; // ISO 8601
   versioningStatus?: 'Enabled' | 'Suspended';
   notifications?: S3NotificationConfiguration;
+  cors?: S3CorsRule[];
 }
 
 interface S3ObjectRecord {
@@ -80,6 +90,24 @@ export class S3Emulator implements RestEmulator {
 
   async handle(req: AwsRequest): Promise<AwsResponse> {
     await this.buckets.load();
+    const origin = req.headers['origin'];
+    // Browser CORS: answer the preflight before any routing, and stamp the
+    // actual-request response with the allow-origin the browser needs to read
+    // it — otherwise presigned POST/GET uploads from a browser fail even
+    // though the bytes land. See corsHeaders() for the dev-permissive default.
+    if (req.method === 'OPTIONS') {
+      const { bucket } = parsePath(req.rawPath);
+      return { status: 200, headers: this.corsHeaders(bucket, req, origin, true), body: '' };
+    }
+    const response = await this.route(req);
+    if (origin) {
+      const { bucket } = parsePath(req.rawPath);
+      response.headers = { ...response.headers, ...this.corsHeaders(bucket, req, origin, false) };
+    }
+    return response;
+  }
+
+  private async route(req: AwsRequest): Promise<AwsResponse> {
     if ('uploads' in req.query || 'uploadId' in req.query || 'partNumber' in req.query) {
       throw s3Error(
         'NotImplemented',
@@ -94,6 +122,54 @@ export class S3Emulator implements RestEmulator {
     }
     if (key === undefined) return this.handleBucket(req, bucket);
     return this.handleObject(req, bucket, key);
+  }
+
+  // Resolve the CORS response headers for a request. A bucket CORS rule that
+  // matches the Origin (and, on preflight, the requested method/headers) wins
+  // and emits exactly what it allows. With no matching rule the engine falls
+  // back to a permissive dev default (echo the Origin, allow every method) so
+  // browser uploads work out of the box on a fresh bucket — there is no real
+  // cross-origin trust boundary on a local dev engine. Presigned uploads carry
+  // no credentials, so echoing the Origin (never `*` with credentials) is safe.
+  private corsHeaders(
+    bucket: string | undefined,
+    req: AwsRequest,
+    origin: string | undefined,
+    preflight: boolean,
+  ): Record<string, string> {
+    if (!origin) return {};
+    const method = preflight ? (req.headers['access-control-request-method'] ?? '') : req.method;
+    const requestedHeaders = req.headers['access-control-request-headers'];
+    const rules = bucket ? this.buckets.get(bucket)?.cors : undefined;
+    const matched = rules && matchCorsRule(rules, origin, method, requestedHeaders);
+
+    const headers: Record<string, string> = {
+      'Access-Control-Allow-Origin': origin,
+      Vary: 'Origin',
+    };
+    if (matched) {
+      headers['Access-Control-Allow-Methods'] = matched.allowedMethods.join(', ');
+      if (matched.exposeHeaders.length > 0) {
+        headers['Access-Control-Expose-Headers'] = matched.exposeHeaders.join(', ');
+      }
+      if (preflight) {
+        headers['Access-Control-Allow-Headers'] = matched.allowedHeaders.includes('*')
+          ? (requestedHeaders ?? '*')
+          : matched.allowedHeaders.join(', ');
+        if (matched.maxAgeSeconds !== undefined) {
+          headers['Access-Control-Max-Age'] = String(matched.maxAgeSeconds);
+        }
+      }
+    } else {
+      // Dev-permissive fallback (no matching rule / no CORS config).
+      headers['Access-Control-Allow-Methods'] = 'GET, PUT, POST, DELETE, HEAD';
+      headers['Access-Control-Expose-Headers'] = 'ETag, x-amz-request-id, x-amz-version-id';
+      if (preflight) {
+        headers['Access-Control-Allow-Headers'] = requestedHeaders ?? '*';
+        headers['Access-Control-Max-Age'] = '3600';
+      }
+    }
+    return headers;
   }
 
   // Dispatcher hook: the normalized Lambda notification entries for a bucket
@@ -111,12 +187,14 @@ export class S3Emulator implements RestEmulator {
     if (req.method === 'PUT') {
       if ('versioning' in req.query) return this.putBucketVersioning(bucket, req);
       if ('notification' in req.query) return this.putBucketNotification(bucket, req);
+      if ('cors' in req.query) return this.putBucketCors(bucket, req);
       return this.createBucket(bucket, req);
     }
     if (req.method === 'GET') {
       if ('location' in req.query) return this.getBucketLocation(bucket);
       if ('versioning' in req.query) return this.getBucketVersioning(bucket);
       if ('notification' in req.query) return this.getBucketNotification(bucket);
+      if ('cors' in req.query) return this.getBucketCors(bucket);
       if (req.query['list-type'] === '2') return this.listObjectsV2(bucket, req.query);
       throw notImplementedOperation('s3', 'ListObjects (v1) — request with list-type=2');
     }
@@ -124,7 +202,10 @@ export class S3Emulator implements RestEmulator {
       this.requireBucket(bucket);
       return { status: 200 };
     }
-    if (req.method === 'DELETE') return this.deleteBucket(bucket);
+    if (req.method === 'DELETE') {
+      if ('cors' in req.query) return this.deleteBucketCors(bucket);
+      return this.deleteBucket(bucket);
+    }
     if (req.method === 'POST' && 'delete' in req.query) return this.deleteObjects(bucket, req);
     // Browser form upload (presigned POST): multipart/form-data to the bucket.
     if (req.method === 'POST' && multipartBoundary(req.headers['content-type'])) {
@@ -213,6 +294,28 @@ export class S3Emulator implements RestEmulator {
   private getBucketNotification(bucket: string): AwsResponse {
     const record = this.requireBucket(bucket);
     return xmlResponse(200, serializeNotificationConfiguration(record.notifications));
+  }
+
+  private putBucketCors(bucket: string, req: AwsRequest): AwsResponse {
+    const record = this.requireBucket(bucket);
+    this.buckets.set(bucket, { ...record, cors: parseCorsConfiguration(req.body) });
+    return { status: 200 };
+  }
+
+  private getBucketCors(bucket: string): AwsResponse {
+    const record = this.requireBucket(bucket);
+    if (!record.cors || record.cors.length === 0) {
+      throw s3Error('NoSuchCORSConfiguration', 'The CORS configuration does not exist', 404);
+    }
+    return xmlResponse(200, serializeCorsConfiguration(record.cors));
+  }
+
+  private deleteBucketCors(bucket: string): AwsResponse {
+    const record = this.requireBucket(bucket);
+    const { cors, ...rest } = record;
+    void cors;
+    this.buckets.set(bucket, rest);
+    return { status: 204 };
   }
 
   private async listObjectsV2(bucket: string, query: Record<string, string>): Promise<AwsResponse> {
@@ -774,4 +877,73 @@ function serializeFilterRules(rules: S3NotificationFilterRule[]): string {
     .map(rule => tag('FilterRule', tag('Name', rule.name) + tag('Value', rule.value), { escape: false }))
     .join('');
   return tag('Filter', tag('S3Key', ruleXml, { escape: false }), { escape: false });
+}
+
+// ---------------------------------------------------------------------------
+// CORS configuration (PutBucketCors / GetBucketCors) + request matching
+// ---------------------------------------------------------------------------
+
+function parseCorsConfiguration(body: Buffer): S3CorsRule[] {
+  if (body.length === 0) return [];
+  const root = parseBodyXml(body);
+  return childrenNamed(root, 'CORSRule').map(node => ({
+    id: childText(node, 'ID'),
+    allowedOrigins: childrenNamed(node, 'AllowedOrigin').map(n => n.text),
+    allowedMethods: childrenNamed(node, 'AllowedMethod').map(n => n.text.toUpperCase()),
+    allowedHeaders: childrenNamed(node, 'AllowedHeader').map(n => n.text),
+    exposeHeaders: childrenNamed(node, 'ExposeHeader').map(n => n.text),
+    maxAgeSeconds: parseMaxAge(childText(node, 'MaxAgeSeconds')),
+  }));
+}
+
+function parseMaxAge(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const value = Number.parseInt(raw, 10);
+  return Number.isNaN(value) ? undefined : value;
+}
+
+function serializeCorsConfiguration(rules: S3CorsRule[]): string {
+  const ruleXml = rules
+    .map(rule => {
+      const parts = [
+        ...rule.allowedOrigins.map(o => tag('AllowedOrigin', o)),
+        ...rule.allowedMethods.map(m => tag('AllowedMethod', m)),
+        ...rule.allowedHeaders.map(h => tag('AllowedHeader', h)),
+        ...rule.exposeHeaders.map(h => tag('ExposeHeader', h)),
+      ];
+      if (rule.id !== undefined) parts.unshift(tag('ID', rule.id));
+      if (rule.maxAgeSeconds !== undefined) parts.push(tag('MaxAgeSeconds', String(rule.maxAgeSeconds)));
+      return tag('CORSRule', parts.join(''), { escape: false });
+    })
+    .join('');
+  return tag('CORSConfiguration', ruleXml, { attrs: { xmlns: S3_XMLNS }, escape: false });
+}
+
+// First rule (in document order, as AWS does) whose origin + method match and,
+// for a preflight, whose AllowedHeaders cover every requested header.
+function matchCorsRule(
+  rules: S3CorsRule[],
+  origin: string,
+  method: string,
+  requestedHeaders: string | undefined,
+): S3CorsRule | undefined {
+  return rules.find(rule => {
+    if (!rule.allowedOrigins.some(pattern => originMatches(pattern, origin))) return false;
+    if (method && !rule.allowedMethods.includes(method.toUpperCase())) return false;
+    if (requestedHeaders !== undefined && !rule.allowedHeaders.includes('*')) {
+      const allowed = new Set(rule.allowedHeaders.map(h => h.toLowerCase()));
+      const requested = requestedHeaders.split(',').map(h => h.trim().toLowerCase()).filter(Boolean);
+      if (!requested.every(h => allowed.has(h))) return false;
+    }
+    return true;
+  });
+}
+
+// AWS allows a single `*` wildcard inside an AllowedOrigin (e.g.
+// "https://*.example.com"); a bare "*" matches anything.
+function originMatches(pattern: string, origin: string): boolean {
+  if (pattern === '*') return true;
+  if (!pattern.includes('*')) return pattern === origin;
+  const [prefix, suffix] = pattern.split('*', 2);
+  return origin.startsWith(prefix) && origin.endsWith(suffix) && origin.length >= prefix.length + suffix.length;
 }

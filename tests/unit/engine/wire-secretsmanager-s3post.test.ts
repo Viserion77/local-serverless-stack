@@ -162,6 +162,47 @@ describe('wire conformance: S3 presigned POST', () => {
     expect(Buffer.compare(got.body, fileBytes)).toBe(0);
   });
 
+  it('answers a browser CORS preflight and stamps the upload response', async () => {
+    // Preflight the presigned POST — no auth header, as a browser sends it.
+    const preflight = await request(endpoint, 'OPTIONS', '/user-uploads', {
+      origin: 'http://localhost:4075',
+      'access-control-request-method': 'POST',
+      'access-control-request-headers': 'content-type',
+    });
+    expect(preflight.status).toBe(200);
+    expect(preflight.headers['access-control-allow-origin']).toBe('http://localhost:4075');
+    expect(String(preflight.headers['access-control-allow-methods'])).toContain('POST');
+
+    // The actual upload response carries the allow-origin the browser reads.
+    const boundary = '----lssCors';
+    const body = Buffer.concat([
+      Buffer.from(
+        `--${boundary}\r\nContent-Disposition: form-data; name="key"\r\n\r\ncors.txt\r\n` +
+        `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="cors.txt"\r\n\r\nhi\r\n` +
+        `--${boundary}--\r\n`,
+      ),
+    ]);
+    const post = await request(endpoint, 'POST', '/user-uploads', {
+      origin: 'http://localhost:4075',
+      'content-type': `multipart/form-data; boundary=${boundary}`,
+    }, body);
+    expect(post.status).toBe(204);
+    expect(post.headers['access-control-allow-origin']).toBe('http://localhost:4075');
+  });
+
+  it('round-trips a bucket CORS configuration', async () => {
+    const cors = '<CORSConfiguration><CORSRule>'
+      + '<AllowedOrigin>http://localhost:4075</AllowedOrigin>'
+      + '<AllowedMethod>POST</AllowedMethod><AllowedMethod>GET</AllowedMethod>'
+      + '<AllowedHeader>*</AllowedHeader><ExposeHeader>ETag</ExposeHeader>'
+      + '<MaxAgeSeconds>3000</MaxAgeSeconds></CORSRule></CORSConfiguration>';
+    const put = await request(endpoint, 'PUT', '/user-uploads?cors', s3Auth(), Buffer.from(cors));
+    expect(put.status).toBe(200);
+    const get = await request(endpoint, 'GET', '/user-uploads?cors', s3Auth());
+    expect(get.status).toBe(200);
+    expect(get.body.toString()).toContain('<MaxAgeSeconds>3000</MaxAgeSeconds>');
+  });
+
   it('303-redirects to success_action_redirect with bucket/key/etag', async () => {
     const boundary = '----lssRedirect';
     const head = [
