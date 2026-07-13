@@ -95,7 +95,7 @@ onBeforeUnmount(() => {
           </template>
 
           <template #end>
-            <TStack direction="horizontal" gap="0.5rem" align="center" justify="flex-end" wrap>
+            <div class="app-header-controls">
               <TBadge
                 :tone="health.localstack ? 'success' : 'danger'"
                 variant="soft"
@@ -128,7 +128,7 @@ onBeforeUnmount(() => {
                   </TButton>
                 </template>
               </TDropdown>
-            </TStack>
+            </div>
           </template>
         </TNavbar>
 
@@ -145,6 +145,7 @@ onBeforeUnmount(() => {
               <TTab value="/queues">Queues</TTab>
               <TTab value="/buckets">S3</TTab>
               <TTab value="/dynamo">DynamoDB</TTab>
+              <TTab value="/opensearch">OpenSearch</TTab>
             </TTabList>
           </TTabs>
         </nav>

@@ -299,6 +299,41 @@ export interface PutBucketObjectInput {
   encoding?: 'base64';
 }
 
+export interface OpenSearchCollectionSummary {
+  name: string;
+  endpoint: string;
+}
+
+export interface OpenSearchIndexSummary {
+  index: string;
+  docsCount: number;
+  health: string;
+  status: string;
+}
+
+export interface OpenSearchSearchInput {
+  index?: string;
+  q?: string;
+  query?: Record<string, unknown>;
+  from?: number;
+  size?: number;
+}
+
+export interface OpenSearchSearchHit {
+  _index: string;
+  _id: string;
+  _source: Record<string, unknown>;
+}
+
+export interface OpenSearchSearchResponse {
+  took: number;
+  hits: {
+    total: { value: number };
+    hits: OpenSearchSearchHit[];
+  };
+  aggregations?: Record<string, unknown>;
+}
+
 export interface ServiceSummary {
   name: string;
   status: 'registered' | 'running' | 'stopped' | 'error';
@@ -505,6 +540,19 @@ export const api = {
     request<{ success: boolean }>(
       `/api/buckets/${encodeURIComponent(name)}/objects?key=${encodeURIComponent(key)}`,
       { method: 'DELETE' },
+    ),
+
+  // OpenSearch collections
+  listOpenSearchCollections: () =>
+    request<{ collections: OpenSearchCollectionSummary[] }>('/api/opensearch/collections'),
+  listOpenSearchIndices: (name: string) =>
+    request<{ indices: OpenSearchIndexSummary[] }>(
+      `/api/opensearch/collections/${encodeURIComponent(name)}/indices`,
+    ),
+  searchOpenSearch: (name: string, input: OpenSearchSearchInput) =>
+    request<OpenSearchSearchResponse>(
+      `/api/opensearch/collections/${encodeURIComponent(name)}/search`,
+      { method: 'POST', body: JSON.stringify(input) },
     ),
 
   // Queues

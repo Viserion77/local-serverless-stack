@@ -78,6 +78,19 @@ const routes: RouteRecordRaw[] = [
     props: route => ({ tableName: String(route.params.name) }),
     meta: { title: 'DynamoDB Table' },
   },
+  {
+    path: '/opensearch',
+    name: 'opensearch',
+    component: () => import('./pages/OpenSearchPage.vue'),
+    meta: { title: 'OpenSearch' },
+  },
+  {
+    path: '/opensearch/:name',
+    name: 'opensearch-collection',
+    component: () => import('./pages/OpenSearchCollectionPage.vue'),
+    props: route => ({ name: String(route.params.name) }),
+    meta: { title: 'OpenSearch Collection' },
+  },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ];
 
