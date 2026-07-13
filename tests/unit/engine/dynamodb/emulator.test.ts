@@ -179,8 +179,12 @@ describe('DynamoDbEmulator', () => {
       expect(beyond.TableNames).toEqual([]);
     });
 
-    it('unknown operations throw NotImplemented', async () => {
-      await expectAwsError(call('TransactWriteItems', {}), 'NotImplemented', /dynamodb\.TransactWriteItems is not implemented/);
+    it('unknown operations throw NotImplemented without suggesting the fallback dead end', async () => {
+      const error = await expectAwsError(call('ExecuteStatement', {}), 'NotImplemented', /dynamodb\.ExecuteStatement is not implemented/);
+      // fallbackEndpoint forwards whole services only — an operation-level gap
+      // in a service the engine owns must not point people at it.
+      expect(error.message).not.toMatch(/set selfEngine\.fallbackEndpoint to forward/);
+      expect(error.message).toMatch(/does not apply/);
     });
   });
 

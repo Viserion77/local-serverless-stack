@@ -4,7 +4,7 @@
 
 import { randomUUID } from 'crypto';
 import type { AwsRequest, EngineContext, EngineServiceName, QueryEmulator } from '../types.js';
-import { notImplemented } from '../http/errors.js';
+import { notImplementedOperation } from '../http/errors.js';
 import { tag, xmlDocument } from '../http/xml.js';
 
 const STS_XMLNS = 'https://sts.amazonaws.com/doc/2011-06-15/';
@@ -19,7 +19,7 @@ export class StsEmulator implements QueryEmulator {
   }
 
   async handle(action: string, _params: Record<string, string>, _req: AwsRequest): Promise<string> {
-    if (action !== 'GetCallerIdentity') throw notImplemented('sts', action);
+    if (action !== 'GetCallerIdentity') throw notImplementedOperation('sts', action);
     const account = this.ctx.config.account;
     const result = tag(
       'GetCallerIdentityResult',

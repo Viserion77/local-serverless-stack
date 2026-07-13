@@ -33,8 +33,19 @@ export interface InvocationRecord {
   at: number;
   functionName: string;
   ok: boolean;
+  // HTTP status of an API-Gateway-shaped payload — an "ok" invocation whose
+  // handler answered a 500 must not read as healthy in the dashboard.
+  statusCode?: number;
   durationMs: number;
   logs: string[];
+}
+
+export function httpStatusOf(payload: unknown): number | undefined {
+  if (payload && typeof payload === 'object' && !Array.isArray(payload)) {
+    const status = (payload as { statusCode?: unknown }).statusCode;
+    if (typeof status === 'number' && Number.isInteger(status)) return status;
+  }
+  return undefined;
 }
 
 export interface RuntimeInfo {
@@ -247,6 +258,7 @@ export class LambdaRuntimeManager {
       at: startedAt,
       functionName: fn.name,
       ok: result.ok,
+      statusCode: result.ok ? httpStatusOf(result.payload) : undefined,
       durationMs: result.durationMs,
       logs: result.logs,
     });
@@ -289,7 +301,15 @@ export class LambdaRuntimeManager {
       execArgv: [],
     });
 
-    worker.stdout?.on('data', () => { /* per-invocation logs arrive via IPC */ });
+    // Per-invocation output arrives via IPC (the worker captures it at the
+    // stream/fd level and swallows it there); anything still reaching these
+    // pipes is unattributable — logger transports on worker threads, child
+    // processes, writes after the invocation ended — and surfaces as
+    // service-level output instead of vanishing.
+    worker.stdout?.on('data', (chunk: Buffer) => {
+      const text = chunk.toString().trim();
+      if (text) console.log(`[${runtime.entry.name}:worker] ${text}`);
+    });
     worker.stderr?.on('data', (chunk: Buffer) => {
       const text = chunk.toString().trim();
       if (text) console.error(`[${runtime.entry.name}:worker] ${text}`);

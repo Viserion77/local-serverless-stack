@@ -6,11 +6,11 @@
 
 import path from 'path';
 import fs from 'fs';
-import util from 'util';
 import { createRequire } from 'module';
 import { pathToFileURL } from 'url';
 import { AsyncLocalStorage } from 'async_hooks';
 import crypto from 'crypto';
+import { installOutputCapture } from './log-capture.js';
 
 interface InvokeMessage {
   type: 'invoke';
@@ -41,21 +41,23 @@ type HandlerFn = (event: unknown, context: unknown, callback?: (err: unknown, re
 
 const handlerCache = new Map<string, HandlerFn>();
 const logStorage = new AsyncLocalStorage<string[]>();
+const activeLogs = new Set<string[]>();
 let tsLoaderRegistered = false;
 
-// Capture console output per invocation without breaking interleaved async
-// handlers — AsyncLocalStorage routes each log line to the invocation that
-// emitted it.
-for (const level of ['log', 'info', 'warn', 'error', 'debug'] as const) {
-  const original = console[level].bind(console);
-  console[level] = (...args: unknown[]) => {
-    const sink = logStorage.getStore();
-    if (sink) {
-      sink.push(`${level.toUpperCase()} ${util.format(...args)}`);
-    }
-    original(...args);
-  };
-}
+// Capture output per invocation without breaking interleaved async handlers —
+// AsyncLocalStorage routes each line to the invocation that emitted it. The
+// capture hooks the stream AND fd layers (not just console.*), so structured
+// loggers like pino — which write JSON straight to fd 1 via sonic-boom — land
+// in the invocation record too. Lines with no invocation context (module init
+// during cold start, stray timers) attribute to the only in-flight invocation
+// when that is unambiguous; otherwise they pass through to the worker's
+// stdout/stderr for the manager to surface as service-level output.
+const capture = installOutputCapture(() => {
+  const contextual = logStorage.getStore();
+  if (contextual && activeLogs.has(contextual)) return contextual;
+  if (!contextual && activeLogs.size === 1) return activeLogs.values().next().value;
+  return undefined;
+});
 
 function resolveHandlerFile(root: string, filePart: string): string | null {
   const base = path.resolve(root, filePart);
@@ -218,6 +220,7 @@ async function handleInvoke(msg: InvokeMessage): Promise<void> {
   if (!process.env.AWS_SECRET_ACCESS_KEY) process.env.AWS_SECRET_ACCESS_KEY = 'test';
 
   const reply = (result: Omit<ResultMessage, 'type' | 'invokeId' | 'logs' | 'durationMs'>) => {
+    capture.flush(logs);
     const message: ResultMessage = {
       type: 'result',
       invokeId: msg.invokeId,
@@ -228,6 +231,7 @@ async function handleInvoke(msg: InvokeMessage): Promise<void> {
     process.send?.(message);
   };
 
+  activeLogs.add(logs);
   try {
     const handler = await loadHandler(msg);
     const context = buildContext(msg, deadline, requestId);
@@ -253,6 +257,8 @@ async function handleInvoke(msg: InvokeMessage): Promise<void> {
         trace: error.stack ? error.stack.split('\n') : undefined,
       },
     });
+  } finally {
+    activeLogs.delete(logs);
   }
 }
 

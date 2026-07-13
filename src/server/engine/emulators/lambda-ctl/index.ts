@@ -7,7 +7,7 @@
 // LSS provisioner and QueueInspector call — see docs/PRD_SELF_ENGINE.md §6.
 
 import { randomUUID } from 'crypto';
-import { AwsError, notImplemented } from '../../http/errors.js';
+import { AwsError, notImplementedOperation } from '../../http/errors.js';
 import type { CatalogStore } from '../../store/store-types.js';
 import type {
   AwsRequest,
@@ -153,13 +153,13 @@ export class LambdaCtlEmulator implements RestEmulator {
   async handle(req: AwsRequest): Promise<AwsResponse> {
     const segments = req.rawPath.split('/').filter(s => s.length > 0).map(decodeSegment);
     if (segments[0] !== '2015-03-31') {
-      throw notImplemented('lambda', `${req.method} ${req.rawPath}`);
+      throw notImplementedOperation('lambda', `${req.method} ${req.rawPath}`);
     }
     await this.ensureLoaded(req.region);
     const [, root, ...rest] = segments;
     if (root === 'functions') return this.handleFunctionRoutes(req, rest);
     if (root === 'event-source-mappings') return this.handleMappingRoutes(req, rest);
-    throw notImplemented('lambda', `${req.method} ${req.rawPath}`);
+    throw notImplementedOperation('lambda', `${req.method} ${req.rawPath}`);
   }
 
   private async handleFunctionRoutes(req: AwsRequest, rest: string[]): Promise<AwsResponse> {
@@ -178,7 +178,7 @@ export class LambdaCtlEmulator implements RestEmulator {
     } else if (rest.length === 2 && rest[1] === 'invocations' && req.method === 'POST') {
       return this.invoke(req, rest[0]);
     }
-    throw notImplemented('lambda', `${req.method} ${req.rawPath}`);
+    throw notImplementedOperation('lambda', `${req.method} ${req.rawPath}`);
   }
 
   private handleMappingRoutes(req: AwsRequest, rest: string[]): AwsResponse {
@@ -190,7 +190,7 @@ export class LambdaCtlEmulator implements RestEmulator {
       if (req.method === 'PUT') return this.updateEventSourceMapping(req, rest[0]);
       if (req.method === 'DELETE') return this.deleteEventSourceMapping(req, rest[0]);
     }
-    throw notImplemented('lambda', `${req.method} ${req.rawPath}`);
+    throw notImplementedOperation('lambda', `${req.method} ${req.rawPath}`);
   }
 
   // -------------------------------------------------------------------------

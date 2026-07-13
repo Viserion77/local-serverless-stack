@@ -24,7 +24,7 @@ import type {
   RestEmulator,
 } from '../../types.js';
 import type { CatalogStore, ItemTable } from '../../store/store-types.js';
-import { AwsError, notImplemented } from '../../http/errors.js';
+import { AwsError, notImplementedOperation } from '../../http/errors.js';
 import { jsonSuccessResponse } from '../../http/protocols/aws-json.js';
 import {
   computeAggregations,
@@ -170,7 +170,7 @@ export class OpenSearchEmulator implements RestEmulator {
       case 'BatchGetCollection': return this.batchGetCollection(region, input);
       case 'ListCollections': return this.listCollections(region);
       case 'DeleteCollection': return this.deleteCollection(region, input);
-      default: throw notImplemented('aoss', operation);
+      default: throw notImplementedOperation('aoss', operation);
     }
   }
 
@@ -441,8 +441,9 @@ export class OpenSearchEmulator implements RestEmulator {
     return new OsError(
       400,
       'illegal_argument_exception',
-      `${req.method} ${req.rawPath} is not supported by the LSS self engine — see docs/SELF_ENGINE.md#coverage, ` +
-        'or set selfEngine.fallbackEndpoint to forward unimplemented operations',
+      `${req.method} ${req.rawPath} is not supported by the LSS self engine — see docs/SELF_ENGINE.md#coverage. ` +
+        '(selfEngine.fallbackEndpoint does not apply here: it forwards whole services the engine does not serve, ' +
+        'and this collection lives in the self engine.)',
     );
   }
 

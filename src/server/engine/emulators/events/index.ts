@@ -17,7 +17,7 @@ import type {
   TargetEmulator,
 } from '../../types.js';
 import type { CatalogStore } from '../../store/store-types.js';
-import { AwsError, notImplemented } from '../../http/errors.js';
+import { AwsError, notImplementedOperation } from '../../http/errors.js';
 import { matches, validatePattern } from './pattern.js';
 
 const DEFAULT_BUS = 'default';
@@ -95,7 +95,7 @@ export class EventsEmulator implements TargetEmulator {
       case 'ListRules': return this.listRules(region, input);
       case 'ListTargetsByRule': return this.listTargetsByRule(region, input);
       case 'PutEvents': return this.putEvents(region, input);
-      default: throw notImplemented('events', operation);
+      default: throw notImplementedOperation('events', operation);
     }
   }
 

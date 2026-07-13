@@ -8,7 +8,7 @@ import type {
   AttributeMap, AwsRequest, EngineContext, TargetEmulator,
 } from '../../types.js';
 import type { CatalogStore, ItemTable } from '../../store/store-types.js';
-import { AwsError, dynamoError, notImplemented, validationError } from '../../http/errors.js';
+import { AwsError, dynamoError, notImplementedOperation, validationError } from '../../http/errors.js';
 import {
   applyProjection, applyUpdate, assertPlaceholdersUsed, attributeValuesEqual, compileCondition,
 } from './expressions/index.js';
@@ -22,6 +22,10 @@ import {
 import { executeQuery, executeScan, indexHasItem } from './query.js';
 import type { PageResult } from './query.js';
 import { DynamoStreams } from './streams.js';
+import {
+  parseTransactGetItems, parseTransactWriteItems, TransactTokenCache,
+} from './transactions.js';
+import type { TransactGetOp, TransactWriteOp } from './transactions.js';
 
 const DYNAMO_NS = 'com.amazonaws.dynamodb.v20120810';
 const TTL_USER_IDENTITY = { type: 'Service', principalId: 'dynamodb.amazonaws.com' };
@@ -48,6 +52,7 @@ export class DynamoDbEmulator implements TargetEmulator {
 
   private readonly streams: DynamoStreams;
   private readonly catalogs = new Map<string, CatalogStore<TableRecord>>();
+  private readonly transactTokens = new TransactTokenCache();
 
   constructor(private readonly ctx: EngineContext) {
     this.streams = new DynamoStreams(ctx);
@@ -70,7 +75,9 @@ export class DynamoDbEmulator implements TargetEmulator {
       case 'Scan': return this.scan(region, input);
       case 'BatchGetItem': return this.batchGetItem(region, input);
       case 'BatchWriteItem': return this.batchWriteItem(region, input);
-      default: throw notImplemented('dynamodb', operation);
+      case 'TransactWriteItems': return this.transactWriteItems(region, input);
+      case 'TransactGetItems': return this.transactGetItems(region, input);
+      default: throw notImplementedOperation('dynamodb', operation);
     }
   }
 
@@ -474,13 +481,7 @@ export class DynamoDbEmulator implements TargetEmulator {
     } else {
       updated = structuredClone(base);
     }
-    for (const { AttributeName } of record.keySchema) {
-      if (updated[AttributeName] === undefined || !attributeValuesEqual(updated[AttributeName], keyInput[AttributeName]!)) {
-        throw validationError(
-          `One or more parameter values were invalid: Cannot update attribute ${AttributeName}. This attribute is part of the key`,
-        );
-      }
-    }
+    this.assertKeyUnchanged(record, updated, keyInput);
     assertItemSize(updated);
     items.put(key, updated);
     this.streams.append(region, record.tableName, {
@@ -504,6 +505,16 @@ export class DynamoDbEmulator implements TargetEmulator {
     else if (returnValues === 'UPDATED_OLD' && old) response.Attributes = pick(old, touched);
     this.addConsumedCapacity(response, input, record.tableName);
     return response;
+  }
+
+  private assertKeyUnchanged(record: TableRecord, updated: AttributeMap, keyInput: AttributeMap): void {
+    for (const { AttributeName } of record.keySchema) {
+      if (updated[AttributeName] === undefined || !attributeValuesEqual(updated[AttributeName], keyInput[AttributeName]!)) {
+        throw validationError(
+          `One or more parameter values were invalid: Cannot update attribute ${AttributeName}. This attribute is part of the key`,
+        );
+      }
+    }
   }
 
   // Top-level attribute names touched by an UpdateExpression — the granularity
@@ -624,5 +635,231 @@ export class DynamoDbEmulator implements TargetEmulator {
       }
     }
     return { UnprocessedItems: {} };
+  }
+
+  // -- transactions ----------------------------------------------------------------
+
+  // The prepare loop awaits table/item hydration, which lets the store's
+  // memory-budget sweeper dehydrate a table hydrated earlier in the same
+  // request. The evaluate/commit phases must run synchronously against
+  // hydrated tables, so loop until one pass finds everything resident.
+  private async ensureHydrated(tables: ItemTable[]): Promise<void> {
+    for (let pass = 0; pass < 10 && tables.some((table) => !table.isHydrated()); pass++) {
+      for (const table of tables) {
+        if (!table.isHydrated()) await table.hydrate();
+      }
+    }
+  }
+
+  private transactDuplicateGuard(): (record: TableRecord, canonical: string) => void {
+    const seen = new Set<string>();
+    return (record, canonical) => {
+      const target = JSON.stringify([record.tableName, canonical]);
+      if (seen.has(target)) {
+        throw validationError('Transaction request cannot include multiple operations on one item');
+      }
+      seen.add(target);
+    };
+  }
+
+  private transactConsumedCapacity(response: Record<string, unknown>, input: Record<string, unknown>, tableNames: string[]): void {
+    const mode = input.ReturnConsumedCapacity;
+    if (mode === 'TOTAL' || mode === 'INDEXES') {
+      response.ConsumedCapacity = [...new Set(tableNames)]
+        .map((tableName) => ({ TableName: tableName, CapacityUnits: 0 }));
+    }
+  }
+
+  private async transactWriteItems(region: string, input: Record<string, unknown>): Promise<object> {
+    const ops = parseTransactWriteItems(input);
+
+    const token = input.ClientRequestToken;
+    if (token !== undefined && (typeof token !== 'string' || token.length === 0 || token.length > 36)) {
+      throw validationError('ClientRequestToken must be a non-empty string with a maximum length of 36');
+    }
+    // Idempotency is namespaced per region — DynamoDB is a regional service,
+    // and one emulator instance serves every region.
+    const tokenKey = typeof token === 'string' ? JSON.stringify([region, token]) : undefined;
+    if (tokenKey !== undefined) {
+      const replay = this.transactTokens.begin(tokenKey, JSON.stringify(input.TransactItems), {
+        mismatch: () => dynamoError(
+          'IdempotentParameterMismatchException',
+          'Request with the same client token already completed with different parameters',
+        ),
+        inProgress: () => dynamoError(
+          'TransactionInProgressException',
+          'The transaction with the given request token is currently in progress',
+        ),
+      });
+      if (replay) return replay;
+    }
+    try {
+      const response = await this.executeTransactWrite(region, input, ops);
+      if (tokenKey !== undefined) this.transactTokens.complete(tokenKey, response);
+      return response;
+    } catch (err) {
+      // Failed transactions are not idempotency-cached — a retry re-executes.
+      if (tokenKey !== undefined) this.transactTokens.abandon(tokenKey);
+      throw err;
+    }
+  }
+
+  // All-or-nothing (PRD RF3): conditions AND the update computations are
+  // evaluated against current state first — in one synchronous block, so no
+  // other request interleaves between the checks and the writes — and any
+  // failure cancels the whole request with per-item CancellationReasons (the
+  // shape clients inspect to map "condition failed on entry N" to domain
+  // errors like duplicate e-mail). Only a fully clean pass applies the
+  // writes — each one emitting its stream record.
+  private async executeTransactWrite(
+    region: string,
+    input: Record<string, unknown>,
+    ops: TransactWriteOp[],
+  ): Promise<object> {
+    interface PreparedOp {
+      op: TransactWriteOp;
+      record: TableRecord;
+      items: ItemTable;
+      canonical: string;
+      keyInput: AttributeMap;
+      old?: AttributeMap;
+      stored?: AttributeMap;
+    }
+    const guardDuplicate = this.transactDuplicateGuard();
+    const prepared: PreparedOp[] = [];
+    for (const op of ops) {
+      const record = await this.requireTable(region, op.tableName);
+      const items = await this.itemsFor(region, record.tableName);
+      let keyInput: AttributeMap;
+      if (op.kind === 'Put') {
+        validateItemKey(record, op.item!);
+        assertItemSize(op.item!);
+        keyInput = keyMapOf(record, op.item!);
+      } else {
+        keyInput = validateProvidedKey(record, op.key);
+      }
+      assertPlaceholdersUsed([op.updateExpression, op.conditionExpression], op.ctx);
+      // Statically invalid updates reject the request up front (AWS
+      // behavior): syntax/placeholder errors and expressions that touch a
+      // key attribute. Runtime apply failures cancel the transaction below.
+      if (op.kind === 'Update') {
+        const touched = this.topLevelUpdatedNames(op.updateExpression!, op.ctx);
+        for (const { AttributeName } of record.keySchema) {
+          if (touched.includes(AttributeName)) {
+            throw validationError(
+              `One or more parameter values were invalid: Cannot update attribute ${AttributeName}. This attribute is part of the key`,
+            );
+          }
+        }
+      }
+      guardDuplicate(record, canonicalKey(record, keyInput));
+      prepared.push({ op, record, items, canonical: canonicalKey(record, keyInput), keyInput });
+    }
+    await this.ensureHydrated(prepared.map((entry) => entry.items));
+
+    const reasons: Array<Record<string, unknown>> = prepared.map((entry) => {
+      const { op, record, keyInput } = entry;
+      entry.old = this.liveItem(region, record, entry.items, entry.canonical);
+      if (op.conditionExpression) {
+        const passed = compileCondition(op.conditionExpression, op.ctx).evaluate(entry.old ?? {});
+        if (!passed) {
+          const reason: Record<string, unknown> = { Code: 'ConditionalCheckFailed', Message: 'The conditional request failed' };
+          if (op.returnOldOnFail && entry.old) reason.Item = structuredClone(entry.old);
+          return reason;
+        }
+      }
+      if (op.kind === 'Put') {
+        entry.stored = structuredClone(op.item!);
+      } else if (op.kind === 'Update') {
+        // Dry-run the update NOW so a failing op cancels the transaction
+        // (AWS reports it as a ValidationError cancellation reason) instead
+        // of surfacing after earlier ops were already written.
+        try {
+          const base = entry.old ?? (structuredClone(keyInput) as AttributeMap);
+          const stored = applyUpdate(op.updateExpression!, base, op.ctx);
+          this.assertKeyUnchanged(record, stored, keyInput);
+          assertItemSize(stored);
+          entry.stored = stored;
+        } catch (err) {
+          if (err instanceof AwsError && err.code === 'ValidationException') {
+            return { Code: 'ValidationError', Message: err.message };
+          }
+          throw err;
+        }
+      }
+      return { Code: 'None', Message: null };
+    });
+    if (reasons.some((reason) => reason.Code !== 'None')) {
+      throw new AwsError(
+        'TransactionCanceledException',
+        `Transaction cancelled, please refer cancellation reasons for specific reasons [${reasons.map((r) => r.Code).join(', ')}]`,
+        {
+          typeName: `${DYNAMO_NS}#TransactionCanceledException`,
+          extra: { CancellationReasons: reasons },
+        },
+      );
+    }
+
+    for (const { op, record, items, canonical, old, stored } of prepared) {
+      if (op.kind === 'ConditionCheck') continue;
+      if (op.kind === 'Delete') {
+        if (old) {
+          items.delete(canonical);
+          this.streams.append(region, record.tableName, {
+            eventName: 'REMOVE',
+            keys: keyMapOf(record, old),
+            oldImage: old,
+          });
+        }
+        continue;
+      }
+      items.put(canonical, stored!);
+      this.streams.append(region, record.tableName, {
+        eventName: old ? 'MODIFY' : 'INSERT',
+        keys: keyMapOf(record, stored!),
+        oldImage: old,
+        newImage: stored,
+      });
+    }
+
+    const response: Record<string, unknown> = {};
+    this.transactConsumedCapacity(response, input, prepared.map((entry) => entry.record.tableName));
+    return response;
+  }
+
+  private async transactGetItems(region: string, input: Record<string, unknown>): Promise<object> {
+    const gets = parseTransactGetItems(input);
+    interface PreparedGet {
+      get: TransactGetOp;
+      record: TableRecord;
+      items: ItemTable;
+      canonical: string;
+    }
+    const guardDuplicate = this.transactDuplicateGuard();
+    const prepared: PreparedGet[] = [];
+    for (const get of gets) {
+      const record = await this.requireTable(region, get.tableName);
+      const items = await this.itemsFor(region, record.tableName);
+      const keyInput = validateProvidedKey(record, get.key);
+      assertPlaceholdersUsed([get.projectionExpression], get.ctx);
+      const canonical = canonicalKey(record, keyInput);
+      guardDuplicate(record, canonical);
+      prepared.push({ get, record, items, canonical });
+    }
+    await this.ensureHydrated(prepared.map((entry) => entry.items));
+
+    // One synchronous pass — the reads are a consistent snapshot, matching
+    // the operation's serializable-isolation contract.
+    const responses = prepared.map(({ get, record, items, canonical }): Record<string, unknown> => {
+      const item = this.liveItem(region, record, items, canonical);
+      if (!item) return {};
+      const clone = structuredClone(item);
+      return {
+        Item: get.projectionExpression ? applyProjection(get.projectionExpression, clone, get.ctx) : clone,
+      };
+    });
+    const response: Record<string, unknown> = { Responses: responses };
+    this.transactConsumedCapacity(response, input, prepared.map((entry) => entry.record.tableName));
+    return response;
   }
 }

@@ -7,7 +7,7 @@
 // branches on err.name 'QueueAlreadyExists' / substring 'NonExistentQueue',
 // queue-inspector reads the live Approximate* counters and CreatedTimestamp.
 
-import { AwsError, notImplemented } from '../../http/errors.js';
+import { AwsError, notImplementedOperation } from '../../http/errors.js';
 import type {
   AwsRequest,
   EngineContext,
@@ -197,7 +197,7 @@ export class SqsEmulator implements TargetEmulator {
       case 'ChangeMessageVisibility':
         return this.changeMessageVisibility(region, catalog, input);
       default:
-        throw notImplemented('sqs', operation);
+        throw notImplementedOperation('sqs', operation);
     }
   }
 

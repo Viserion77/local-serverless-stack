@@ -234,7 +234,7 @@ describe('SelfEngineBackend', () => {
     const backend = new SelfEngineBackend(makeConfig(dataDir));
     await backend.start();
     try {
-      const response = await target(backend.getEndpoint(), 'DynamoDB_20120810.TransactWriteItems', {});
+      const response = await target(backend.getEndpoint(), 'DynamoDB_20120810.ExecuteStatement', {});
       expect(response.status).toBe(400);
       expect(response.body).toContain('NotImplemented');
     } finally {

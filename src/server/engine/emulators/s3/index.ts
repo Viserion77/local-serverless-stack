@@ -7,7 +7,7 @@
 import { createHash, randomUUID } from 'crypto';
 import type { AwsRequest, AwsResponse, EngineContext, RestEmulator } from '../../types.js';
 import type { CatalogStore, ItemTable } from '../../store/store-types.js';
-import { s3Error, notImplemented } from '../../http/errors.js';
+import { s3Error, notImplementedOperation } from '../../http/errors.js';
 import { tag, xmlDocument, parseXml, childrenNamed, childText } from '../../http/xml.js';
 import type { XmlNode } from '../../http/xml.js';
 
@@ -88,7 +88,7 @@ export class S3Emulator implements RestEmulator {
     const { bucket, key } = parsePath(req.rawPath);
     if (!bucket) {
       if (req.method === 'GET') return this.listBuckets();
-      throw notImplemented('s3', `${req.method} /`);
+      throw notImplementedOperation('s3', `${req.method} /`);
     }
     if (key === undefined) return this.handleBucket(req, bucket);
     return this.handleObject(req, bucket, key);
@@ -116,7 +116,7 @@ export class S3Emulator implements RestEmulator {
       if ('versioning' in req.query) return this.getBucketVersioning(bucket);
       if ('notification' in req.query) return this.getBucketNotification(bucket);
       if (req.query['list-type'] === '2') return this.listObjectsV2(bucket, req.query);
-      throw notImplemented('s3', 'ListObjects (v1) — request with list-type=2');
+      throw notImplementedOperation('s3', 'ListObjects (v1) — request with list-type=2');
     }
     if (req.method === 'HEAD') {
       this.requireBucket(bucket);
@@ -124,7 +124,7 @@ export class S3Emulator implements RestEmulator {
     }
     if (req.method === 'DELETE') return this.deleteBucket(bucket);
     if (req.method === 'POST' && 'delete' in req.query) return this.deleteObjects(bucket, req);
-    throw notImplemented('s3', `${req.method} /<bucket>`);
+    throw notImplementedOperation('s3', `${req.method} /<bucket>`);
   }
 
   private createBucket(bucket: string, req: AwsRequest): AwsResponse {
@@ -322,7 +322,7 @@ export class S3Emulator implements RestEmulator {
     if (req.method === 'GET') return this.getObject(bucket, key, req);
     if (req.method === 'HEAD') return this.headObject(bucket, key);
     if (req.method === 'DELETE') return this.deleteObject(bucket, key);
-    throw notImplemented('s3', `${req.method} /<bucket>/<key>`);
+    throw notImplementedOperation('s3', `${req.method} /<bucket>/<key>`);
   }
 
   private async putObject(bucket: string, key: string, req: AwsRequest): Promise<AwsResponse> {

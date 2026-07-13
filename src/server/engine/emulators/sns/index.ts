@@ -10,7 +10,7 @@
 import { randomUUID } from 'crypto';
 import type { AwsRequest, EngineContext, EngineServiceName, QueryEmulator } from '../../types.js';
 import type { CatalogStore } from '../../store/store-types.js';
-import { AwsError, notImplemented } from '../../http/errors.js';
+import { AwsError, notImplementedOperation } from '../../http/errors.js';
 import { tag, xmlDocument } from '../../http/xml.js';
 
 const SNS_XMLNS = 'http://sns.amazonaws.com/doc/2010-03-31/';
@@ -40,7 +40,7 @@ export class SnsEmulator implements QueryEmulator {
       case 'DeleteTopic': return this.deleteTopic(region, params);
       case 'GetTopicAttributes': return this.getTopicAttributes(region, params);
       case 'Publish': return this.publish(region, params);
-      default: throw notImplemented('sns', action);
+      default: throw notImplementedOperation('sns', action);
     }
   }
 

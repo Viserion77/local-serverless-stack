@@ -50,11 +50,28 @@ export function s3Error(code: string, message: string, status: number): AwsError
   return new AwsError(code, message, { status });
 }
 
+// Service-level gap (router): the whole service is unknown to the engine, so
+// the fallback proxy WOULD forward it — suggesting fallbackEndpoint is honest
+// here (this error is only reachable when no fallback is configured).
 export function notImplemented(service: string, operation: string): AwsError {
   return new AwsError(
     'NotImplemented',
     `${service}.${operation} is not implemented by the LSS self engine — ` +
       'see docs/SELF_ENGINE.md#coverage, or set selfEngine.fallbackEndpoint to forward it to a LocalStack instance',
+    { status: 400 },
+  );
+}
+
+// Operation-level gap inside a service the engine DOES serve: the fallback
+// proxy never forwards these (and it would read the wrong state anyway — the
+// service's data lives in the self engine), so the message must not send
+// people down the fallbackEndpoint dead end.
+export function notImplementedOperation(service: string, operation: string): AwsError {
+  return new AwsError(
+    'NotImplemented',
+    `${service}.${operation} is not implemented by the LSS self engine — see docs/SELF_ENGINE.md#coverage. ` +
+      `(selfEngine.fallbackEndpoint does not apply here: it forwards whole services the engine does not serve, ` +
+      `and ${service} — with its data — is served by the self engine.)`,
     { status: 400 },
   );
 }

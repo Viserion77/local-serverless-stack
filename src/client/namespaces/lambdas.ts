@@ -42,6 +42,8 @@ export interface LambdaInvocationRecord {
   at: number;
   functionName: string;
   ok: boolean;
+  // HTTP status of an API-Gateway-shaped payload, when the handler returned one.
+  statusCode?: number;
   durationMs: number;
   logs: string[];
 }

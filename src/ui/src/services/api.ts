@@ -398,6 +398,7 @@ export interface LambdaInvocationRecord {
   at: number;
   functionName: string;
   ok: boolean;
+  statusCode?: number;
   durationMs: number;
   logs: string[];
 }

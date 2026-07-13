@@ -428,6 +428,13 @@ watch(() => props.functionName, () => {
                           <TBadge :tone="rec.ok ? 'success' : 'danger'" variant="soft">
                             {{ rec.ok ? 'OK' : 'Error' }}
                           </TBadge>
+                          <TBadge
+                            v-if="rec.statusCode && rec.statusCode >= 400"
+                            :tone="rec.statusCode >= 500 ? 'danger' : 'warning'"
+                            variant="soft"
+                          >
+                            HTTP {{ rec.statusCode }}
+                          </TBadge>
                         </TStack>
                         <span class="muted mono" style="font-size: 0.75rem;">
                           {{ rec.durationMs }}ms · {{ rec.logs.length }} line{{ rec.logs.length === 1 ? '' : 's' }}
