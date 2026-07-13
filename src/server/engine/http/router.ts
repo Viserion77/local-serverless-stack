@@ -42,6 +42,7 @@ const TARGET_PREFIXES: Record<string, EngineServiceName> = {
   AmazonSQS: 'sqs',
   AWSEvents: 'events',
   OpenSearchServerless: 'aoss',
+  secretsmanager: 'secretsmanager',
 };
 
 const LEGACY_SQS_MESSAGE =
@@ -58,6 +59,7 @@ const LOCALSTACK_HEALTH = {
     lambda: 'available',
     events: 'available',
     sts: 'available',
+    secretsmanager: 'available',
     aoss: 'available',
   },
   edition: 'self',
@@ -353,6 +355,8 @@ function shapeForService(
         emulator && 'jsonVersion' in emulator ? emulator.jsonVersion : service === 'events' ? '1.1' : '1.0';
       return { kind: 'json', service, version };
     }
+    case 'secretsmanager':
+      return { kind: 'json', service, version: '1.1' };
     case 'aoss':
       // Control-plane failures; the emulator serializes data-plane errors in
       // the OpenSearch JSON shape itself, without throwing.

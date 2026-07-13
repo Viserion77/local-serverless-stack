@@ -10,6 +10,8 @@ import type { CatalogStore, ItemTable } from '../../store/store-types.js';
 import { s3Error, notImplementedOperation } from '../../http/errors.js';
 import { tag, xmlDocument, parseXml, childrenNamed, childText } from '../../http/xml.js';
 import type { XmlNode } from '../../http/xml.js';
+import { multipartBoundary, parseMultipart } from './multipart.js';
+import type { MultipartField } from './multipart.js';
 
 const S3_XMLNS = 'http://s3.amazonaws.com/doc/2006-03-01/';
 // Fixed canonical owner (same fiction LocalStack uses) — tooling only displays it.
@@ -124,6 +126,10 @@ export class S3Emulator implements RestEmulator {
     }
     if (req.method === 'DELETE') return this.deleteBucket(bucket);
     if (req.method === 'POST' && 'delete' in req.query) return this.deleteObjects(bucket, req);
+    // Browser form upload (presigned POST): multipart/form-data to the bucket.
+    if (req.method === 'POST' && multipartBoundary(req.headers['content-type'])) {
+      return this.postObject(bucket, req);
+    }
     throw notImplementedOperation('s3', `${req.method} /<bucket>`);
   }
 
@@ -349,6 +355,82 @@ export class S3Emulator implements RestEmulator {
     return { status: 200, headers: { ETag: `"${eTag}"` } };
   }
 
+  // Presigned POST (browser form upload): the object key and options travel as
+  // form fields, the bytes as a `file` part. The POST policy/signature fields
+  // are accepted but not verified — the engine never verifies SigV4 either.
+  private async postObject(bucket: string, req: AwsRequest): Promise<AwsResponse> {
+    const bucketRecord = this.requireBucket(bucket);
+    const boundary = multipartBoundary(req.headers['content-type'])!;
+    const fields = parseMultipart(req.body, boundary);
+    const file = fields.find(field => field.name.toLowerCase() === 'file');
+    if (!file) {
+      throw s3Error('InvalidArgument', 'POST requires exactly one file upload per request.', 400);
+    }
+    const lookup = (name: string): string | undefined =>
+      fields.find(field => field.name.toLowerCase() === name.toLowerCase() && field.filename === undefined)?.data.toString('utf8');
+
+    const keyTemplate = lookup('key');
+    if (!keyTemplate) throw s3Error('InvalidArgument', 'Bucket POST must contain a field named "key".', 400);
+    // AWS substitutes ${filename} with the uploaded file's (base) name.
+    const uploadName = file.filename ? file.filename.split(/[\\/]/).pop()! : '';
+    // Function replacement so a filename containing $-sequences ($&, $$, …) is
+    // inserted literally, not interpreted as a replacement pattern.
+    const key = keyTemplate.replace(/\$\{filename\}/g, () => uploadName);
+    if (!key) throw s3Error('InvalidArgument', 'The specified key is not valid.', 400);
+
+    const index = await this.index(bucket);
+    const eTag = md5Hex(file.data);
+    const blobPath = await this.ctx.store.writeBlob(`s3/${bucket}/blobs`, file.data);
+    const previous = index.get(key) as S3ObjectRecord | undefined;
+    const record: S3ObjectRecord = {
+      size: file.data.length,
+      eTag,
+      lastModified: new Date().toISOString(),
+      blobPath,
+      contentType: lookup('content-type') ?? file.contentType ?? DEFAULT_CONTENT_TYPE,
+      metadata: metadataFromFields(fields),
+      storageClass: 'STANDARD',
+    };
+    index.put(key, record);
+    if (previous && previous.blobPath !== blobPath) {
+      await this.deleteBlobIfUnreferenced(index, previous.blobPath);
+    }
+    this.queueObjectEvent(bucketRecord.region, bucket, 's3:ObjectCreated:Post', key, record.size, eTag);
+    return this.postResponse(bucket, key, eTag, fields);
+  }
+
+  private postResponse(bucket: string, key: string, eTag: string, fields: MultipartField[]): AwsResponse {
+    const value = (name: string): string | undefined =>
+      fields.find(field => field.name.toLowerCase() === name.toLowerCase() && field.filename === undefined)?.data.toString('utf8');
+    const location = `${this.ctx.endpoint()}/${bucket}/${key.split('/').map(encodeURIComponent).join('/')}`;
+    const etagHeader = `"${eTag}"`;
+
+    const redirect = value('success_action_redirect') ?? value('redirect');
+    if (redirect) {
+      try {
+        const url = new URL(redirect);
+        url.searchParams.set('bucket', bucket);
+        url.searchParams.set('key', key);
+        url.searchParams.set('etag', etagHeader);
+        return { status: 303, headers: { Location: url.toString(), ETag: etagHeader } };
+      } catch {
+        // Malformed redirect target falls through to the status-based reply.
+      }
+    }
+
+    const status = value('success_action_status');
+    if (status === '200') return { status: 200, headers: { ETag: etagHeader } };
+    if (status === '201') {
+      const body = tag(
+        'PostResponse',
+        tag('Location', location) + tag('Bucket', bucket) + tag('Key', key) + tag('ETag', etagHeader),
+        { escape: false },
+      );
+      return { status: 201, headers: { 'Content-Type': 'application/xml', ETag: etagHeader }, body: xmlDocument(body) };
+    }
+    return { status: 204, headers: { ETag: etagHeader } };
+  }
+
   private async copyObject(bucket: string, key: string, req: AwsRequest): Promise<AwsResponse> {
     const bucketRecord = this.requireBucket(bucket);
     const rawSource = req.headers['x-amz-copy-source'] ?? '';
@@ -539,6 +621,19 @@ function metadataFromHeaders(headers: Record<string, string>): Record<string, st
   for (const [name, value] of Object.entries(headers)) {
     if (name.startsWith(METADATA_HEADER_PREFIX)) {
       metadata[name.slice(METADATA_HEADER_PREFIX.length)] = value;
+    }
+  }
+  return metadata;
+}
+
+// Presigned-POST metadata rides as x-amz-meta-* form fields (case-insensitive).
+function metadataFromFields(fields: MultipartField[]): Record<string, string> {
+  const metadata: Record<string, string> = {};
+  for (const field of fields) {
+    if (field.filename !== undefined) continue;
+    const name = field.name.toLowerCase();
+    if (name.startsWith(METADATA_HEADER_PREFIX)) {
+      metadata[name.slice(METADATA_HEADER_PREFIX.length)] = field.data.toString('utf8');
     }
   }
   return metadata;

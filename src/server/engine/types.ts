@@ -46,6 +46,7 @@ export type EngineServiceName =
   | 'events'
   | 'lambda'
   | 'sts'
+  | 'secretsmanager'
   // OpenSearch Serverless — the SigV4 signing name, shared by the control
   // plane (X-Amz-Target OpenSearchServerless.*) and the data plane REST API.
   | 'aoss';

@@ -247,6 +247,7 @@ describe('health endpoints', () => {
         lambda: 'available',
         events: 'available',
         sts: 'available',
+        secretsmanager: 'available',
         aoss: 'available',
       },
       edition: 'self',
