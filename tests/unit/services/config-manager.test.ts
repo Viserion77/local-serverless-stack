@@ -495,6 +495,13 @@ describe('getters: branch coverage on config-provided values', () => {
     expect(freshConfigManager().getSeedsDir()).toBe('/abs/seeds');
   });
 
+  it('getSecretsSeedDir returns <seedsDir>/secrets', () => {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify({ seedsDir: '/abs/seeds' }));
+    expect(freshConfigManager().getSecretsSeedDir()).toBe(path.join('/abs/seeds', 'secrets'));
+  });
+
   it('getStateDir resolves a relative stateDir against cwd', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
     fs.existsSync.mockImplementation((p) => p === cwdFile);
@@ -878,6 +885,16 @@ describe('printSummary', () => {
     cm.printSummary();
     const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
     expect(out).toContain('LocalStack Auth Token: not set');
+  });
+
+  it('prints "Config Secrets: N" when the config declares a non-empty secrets map', () => {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify({ secrets: { a: 'x', b: 'y' } }));
+    const cm = freshConfigManager();
+    cm.printSummary();
+    const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(out).toContain('Config Secrets: 2');
   });
 });
 

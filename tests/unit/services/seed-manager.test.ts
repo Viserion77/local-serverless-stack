@@ -15,6 +15,11 @@ import {
   BatchWriteItemCommand,
   ScanCommand,
 } from '@aws-sdk/client-dynamodb';
+import {
+  SecretsManagerClient,
+  DescribeSecretCommand,
+  CreateSecretCommand,
+} from '@aws-sdk/client-secrets-manager';
 
 jest.mock('fs');
 import fs from 'fs';
@@ -24,6 +29,14 @@ import { LocalStackManager } from '../../../src/server/services/localstack-manag
 import { ConfigManager } from '../../../src/server/services/config-manager';
 
 const ddbMock = mockClient(DynamoDBClient);
+const secretsMock = mockClient(SecretsManagerClient);
+
+// Named error with an SDK-style `.name` (mirrors resource-provisioner.test.ts).
+function namedError(name: string, message = name): Error {
+  const e = new Error(message);
+  (e as any).name = name;
+  return e;
+}
 
 const SEEDS_DIR = '/tmp/seeds';
 
@@ -39,10 +52,12 @@ let files: Record<string, string>;
 
 beforeEach(() => {
   ddbMock.reset();
+  secretsMock.reset();
   manager = SeedManager.getInstance();
   // Reset singleton client cache + region.
   const m = manager as any;
   m.clients.clear();
+  m.secretsClients.clear();
   m.defaultRegion = 'us-east-1';
 
   files = {};
@@ -73,6 +88,7 @@ afterEach(() => {
 
 afterAll(() => {
   ddbMock.restore();
+  secretsMock.restore();
 });
 
 function writeSeedFile(table: string, content: unknown): void {
@@ -533,6 +549,121 @@ describe('seedOnTableCreated', () => {
     await Promise.resolve();
     expect(warnSpy).toHaveBeenCalledWith(
       expect.stringContaining('auto-seed for Users failed: unknown error'),
+    );
+  });
+});
+
+// Boot Secrets Manager seeding — the error/skip arms of readSecretSeedFile() and
+// ensureSecret(). Happy paths run against the real self engine in
+// wire-secret-seed-on-boot.test.ts; here we mock SecretsManagerClient to drive the
+// DescribeSecret/CreateSecret failure branches. Kept in this file (not a separate
+// one) so seed-manager.ts has exactly two coverage loaders — this suite and the
+// wire suite — which keeps the merged branch coverage of the secret paths stable.
+describe('readSecretSeedFile (secret seeds)', () => {
+  it('warns and returns null for a malformed JSON seed file (Error message)', () => {
+    files[`${SEEDS_DIR}/secrets/bad.json`] = 'not json {';
+    const result = (manager as any).readSecretSeedFile(`${SEEDS_DIR}/secrets/bad.json`);
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining(`failed to read secret seed ${SEEDS_DIR}/secrets/bad.json`),
+    );
+  });
+
+  it('reports "unknown error" when the parse throws a non-Error', () => {
+    files[`${SEEDS_DIR}/secrets/ok.json`] = '{}';
+    const parseSpy = jest.spyOn(JSON, 'parse').mockImplementation(() => {
+      throw 'string failure';
+    });
+    const result = (manager as any).readSecretSeedFile(`${SEEDS_DIR}/secrets/ok.json`);
+    expect(result).toBeNull();
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('unknown error'));
+    parseSpy.mockRestore();
+  });
+});
+
+describe('listSecretSeeds / seedAllSecrets', () => {
+  it('listSecretSeeds returns [] when the secrets dir does not exist', () => {
+    // existsSync is true only for SEEDS_DIR + crafted files, so `<SEEDS_DIR>/secrets`
+    // is absent → the `!existsSync(dir)` early return (line 343) is taken.
+    expect((manager as any).listSecretSeeds()).toEqual([]);
+  });
+
+  it('seedAllSecrets defaults the region to defaultRegion when none is passed', async () => {
+    // No seed files and an empty config map → nothing to seed, but the
+    // `region || this.defaultRegion` default (line 429) is exercised.
+    jest.spyOn(ConfigManager.getInstance(), 'getSecretSeeds').mockReturnValue({});
+    await expect(manager.seedAllSecrets()).resolves.toBeUndefined();
+  });
+});
+
+describe('ensureSecret', () => {
+  it('skips a secret scheduled for deletion (DescribeSecret returns DeletedDate)', async () => {
+    secretsMock.on(DescribeSecretCommand).resolves({ DeletedDate: new Date() });
+    await manager.ensureSecret('app/key', 'value');
+    expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('scheduled for deletion'));
+    expect(secretsMock.commandCalls(CreateSecretCommand)).toHaveLength(0);
+  });
+
+  it('warns and returns when DescribeSecret fails with a non-ResourceNotFound error', async () => {
+    secretsMock.on(DescribeSecretCommand).rejects(namedError('AccessDeniedException', 'denied'));
+    await manager.ensureSecret('app/key', 'value');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('could not describe "app/key": denied'),
+    );
+    expect(secretsMock.commandCalls(CreateSecretCommand)).toHaveLength(0);
+  });
+
+  it('reports "unknown error" when DescribeSecret rejects a non-Error', async () => {
+    // aws-sdk-client-mock coerces .rejects(string) into an Error, so spy on the
+    // per-region client's send to reject a genuine non-Error value.
+    const client = (manager as any).secretsClientFor('us-east-1');
+    jest.spyOn(client, 'send').mockRejectedValue('weird-failure' as never);
+    await manager.ensureSecret('app/key', 'value');
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('could not describe "app/key": unknown error'),
+    );
+  });
+
+  it('skips a value that normalizes to neither secretString nor generateSecretString', async () => {
+    secretsMock.on(DescribeSecretCommand).rejects(namedError('ResourceNotFoundException'));
+    await manager.ensureSecret('app/key', { secretString: null } as never);
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('"app/key" seed has no secretString/generateSecretString'),
+    );
+    expect(secretsMock.commandCalls(CreateSecretCommand)).toHaveLength(0);
+  });
+
+  it('creates a secret with tags when the value carries them (Tags mapped through)', async () => {
+    secretsMock.on(DescribeSecretCommand).rejects(namedError('ResourceNotFoundException'));
+    secretsMock.on(CreateSecretCommand).resolves({});
+    await manager.ensureSecret('app/key', { secretString: 'v', tags: { team: 'identity' } } as never);
+    const calls = secretsMock.commandCalls(CreateSecretCommand);
+    expect(calls).toHaveLength(1);
+    expect((calls[0].args[0].input as any).Tags).toEqual([{ Key: 'team', Value: 'identity' }]);
+  });
+
+  it('swallows a CreateSecret failure — warns and does not throw (Error)', async () => {
+    secretsMock.on(DescribeSecretCommand).rejects(namedError('ResourceNotFoundException'));
+    secretsMock.on(CreateSecretCommand).rejects(new Error('boom'));
+    await expect(manager.ensureSecret('app/key', 'value')).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('seed for "app/key" failed: boom'),
+    );
+  });
+
+  it('swallows a CreateSecret failure with "unknown error" (non-Error)', async () => {
+    // DescribeSecret rejects ResourceNotFound (fall through to create), then
+    // CreateSecret rejects a genuine non-Error → outer catch "unknown error".
+    const client = (manager as any).secretsClientFor('us-east-1');
+    jest.spyOn(client, 'send').mockImplementation((cmd: unknown) => {
+      if (cmd instanceof DescribeSecretCommand) {
+        return Promise.reject(namedError('ResourceNotFoundException'));
+      }
+      return Promise.reject('nope');
+    });
+    await expect(manager.ensureSecret('app/key', 'value')).resolves.toBeUndefined();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('seed for "app/key" failed: unknown error'),
     );
   });
 });

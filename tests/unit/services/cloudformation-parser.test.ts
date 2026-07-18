@@ -535,6 +535,29 @@ describe('parseS3', () => {
     expect(res.corsRules![0].allowedMethods).toEqual(['GET']);
   });
 
+  it('coerces a bare-string AllowedMethods/AllowedOrigins into single-element arrays', () => {
+    const [res] = parser.parse({
+      Resources: {
+        B: {
+          Type: 'AWS::S3::Bucket',
+          Properties: {
+            CorsConfiguration: {
+              CorsRules: [{ AllowedOrigins: 'https://x.example.com', AllowedMethods: 'GET' }],
+            },
+          },
+        },
+      },
+    } as never) as S3Resource[];
+    expect(res.corsRules).toEqual([
+      {
+        allowedOrigins: ['https://x.example.com'],
+        allowedMethods: ['GET'],
+        allowedHeaders: [],
+        exposeHeaders: [],
+      },
+    ]);
+  });
+
   it('assigns NO corsRules key for a bucket with no CorsConfiguration', () => {
     const [res] = parser.parse({
       Resources: {
@@ -582,6 +605,21 @@ describe('parseSecret', () => {
     expect(res.tags).toEqual([]);
     expect(res.secretString).toBeUndefined();
     expect(res.generateSecretString).toBeUndefined();
+  });
+
+  it('coerces missing tag Key/Value to empty strings', () => {
+    const [res] = parser.parse({
+      Resources: {
+        S: {
+          Type: 'AWS::SecretsManager::Secret',
+          Properties: { Tags: [{ Value: 'v-only' }, { Key: 'k-only' }] },
+        },
+      },
+    } as never) as SecretsManagerResource[];
+    expect(res.tags).toEqual([
+      { Key: '', Value: 'v-only' },
+      { Key: 'k-only', Value: '' },
+    ]);
   });
 
   it('preserves GenerateSecretString fields verbatim (no password generated at parse time)', () => {

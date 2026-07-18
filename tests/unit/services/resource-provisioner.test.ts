@@ -501,6 +501,20 @@ describe('createS3Bucket (via provisionResources)', () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Failed to apply CORS'));
     expect(console.error).not.toHaveBeenCalled();
   });
+
+  it('warns with the Unknown error fallback when PutBucketCors rejects a non-Error', async () => {
+    // The SDK mock wraps thrown values in Error, so reject a genuine non-Error from
+    // the client instance to hit the CORS catch's `: 'Unknown error'` arm.
+    jest.spyOn((provisioner as any).s3Client, 'send').mockImplementation((cmd: any) => {
+      if (cmd instanceof PutBucketCorsCommand) return Promise.reject('cors-weird');
+      return Promise.resolve({});
+    });
+    await provisioner.provisionResources('svc', [s3Resource({
+      corsRules: [{ allowedOrigins: ['*'], allowedMethods: ['GET'], allowedHeaders: [], exposeHeaders: [] }],
+    })]);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Failed to apply CORS'));
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Unknown error'));
+  });
 });
 
 describe('createSecret (via provisionResources)', () => {
@@ -578,6 +592,18 @@ describe('createSecret (via provisionResources)', () => {
     expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('created with no value'));
     const input = secretsMock.commandCalls(CreateSecretCommand)[0].args[0].input as any;
     expect(input.SecretString).toBeUndefined();
+  });
+
+  it('rethrows a CreateSecret error with a falsy name (`error?.name || \'\'` fallback)', async () => {
+    // An empty .name makes `error?.name` falsy → the `|| ''` fallback is taken and,
+    // being neither ResourceExists nor InvalidRequest, the error is rethrown (464).
+    // It surfaces through provisionResources' outer catch as a console.error.
+    secretsMock.on(CreateSecretCommand).rejects(namedError('', 'kaboom'));
+    await provisioner.provisionResources('svc', [secretResource({ secretString: 'v' })]);
+    expect(console.error).toHaveBeenCalledWith(
+      expect.stringContaining('Failed to provision secret:'),
+      'kaboom',
+    );
   });
 });
 
