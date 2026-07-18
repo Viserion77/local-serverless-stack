@@ -167,6 +167,86 @@ export interface EventSourceMapping {
   filterCriteria?: { Filters?: Array<{ Pattern?: string }> };
 }
 
+// --- Raw AWS::ApiGatewayV2 + AWS::Lambda::Permission resources ---------------
+// Hand-authored HTTP API v2 topologies declared under CFN `resources:` (an ::Api
+// fronting ::Route/::Integration/::Authorizer wired to Lambdas that may live in
+// OTHER stacks). The parser records the raw intrinsics; the assembler
+// (raw-api-assembler.ts) reduces IntegrationUri/AuthorizerUri to concrete ARNs
+// via resolveArnLike and folds them into the same route registry as
+// serverless-state. Every member carries `name` so the shared Resource[]
+// consumers (resource-provisioner's `'name' in resource` narrowing) still type.
+
+export interface ApiResource {
+  type: 'apigw-api';
+  logicalId: string;
+  // The ::Api Name property, else the logical id.
+  name: string;
+  protocolType?: string;
+  // True when a CorsConfiguration block is present (drives HttpRoute.cors).
+  cors: boolean;
+}
+
+export interface ApiIntegrationResource {
+  type: 'apigw-integration';
+  logicalId: string;
+  name: string;
+  // Logical id of the ::Api this integration belongs to (from ApiId).
+  apiRef?: string;
+  integrationType?: string;
+  // Raw IntegrationUri intrinsic — reduced to a Lambda ARN by resolveArnLike.
+  integrationUri: unknown;
+  payloadFormatVersion?: string;
+  timeoutInMillis?: number;
+}
+
+export interface ApiRouteResource {
+  type: 'apigw-route';
+  logicalId: string;
+  name: string;
+  apiRef?: string;
+  // Verbatim RouteKey ('METHOD /path' or '$default').
+  routeKey: string;
+  // Uppercase method ('ANY' for $default / '*').
+  method: string;
+  // Normalized path (leading slash; '$default' kept verbatim).
+  path: string;
+  // Integration logical id parsed out of Target ("integrations/<id>").
+  integrationRef?: string;
+  // AuthorizationType (NONE default, CUSTOM → Lambda authorizer, JWT/AWS_IAM unsupported).
+  authorizationType: string;
+  // Authorizer logical id parsed out of AuthorizerId ({Ref}).
+  authorizerRef?: string;
+}
+
+export interface ApiAuthorizerResource {
+  type: 'apigw-authorizer';
+  logicalId: string;
+  // The ::Authorizer Name property, else the logical id (stable authorizer key).
+  name: string;
+  apiRef?: string;
+  authorizerType?: string;
+  identitySource: string[];
+  // Raw AuthorizerUri intrinsic — reduced to a Lambda ARN by resolveArnLike.
+  authorizerUri: unknown;
+  enableSimpleResponses: boolean;
+  // AWS default '1.0'; serverless emits '2.0'. Carried through verbatim.
+  authorizerPayloadFormatVersion: string;
+  // AWS default 300; 0 disables caching.
+  resultTtlInSeconds: number;
+}
+
+export interface LambdaPermissionResource {
+  type: 'lambda-permission';
+  logicalId: string;
+  name: string;
+  // Raw FunctionName intrinsic — reduced to a Lambda ARN by resolveArnLike.
+  functionRef: unknown;
+  action?: string;
+  principal?: string;
+  // Raw SourceArn intrinsic (the granting execute-api ARN).
+  sourceArn: unknown;
+}
+
 export type Resource =
   | LambdaResource
   | DynamoDBResource
@@ -177,7 +257,32 @@ export type Resource =
   | EventBusResource
   | EventRuleResource
   | OpenSearchCollectionResource
-  | EventSourceMapping;
+  | EventSourceMapping
+  | ApiResource
+  | ApiIntegrationResource
+  | ApiRouteResource
+  | ApiAuthorizerResource
+  | LambdaPermissionResource;
+
+// Context threaded into resolveArnLike so cross-stack IntegrationUri/AuthorizerUri/
+// Permission.FunctionName reduce to concrete Lambda ARNs. `region`/`accountId`/
+// `partition` feed pseudo-params; `lambdas` maps same-template logical ids to
+// their resolved Lambda; `exports` is the cross-service Fn::ImportValue map.
+export interface ArnResolutionContext {
+  region: string;
+  accountId: string;
+  partition: string;
+  lambdas: Map<string, LambdaResource>;
+  exports?: Map<string, string>;
+  warnings?: string[];
+}
+
+export interface ResolvedArn {
+  // The reduced value: a concrete ARN when resolvable, else a best-effort token.
+  value: string;
+  // True when the value is a concrete ARN/string usable for request-time lookup.
+  resolved: boolean;
+}
 
 export class CloudFormationParser {
   // `warnings` collects non-fatal template findings (e.g. resource types LSS
@@ -230,6 +335,16 @@ export class CloudFormationParser {
         return null;
       case 'AWS::OpenSearchServerless::Collection':
         return this.parseOpenSearchCollection(key, resource);
+      case 'AWS::ApiGatewayV2::Api':
+        return this.parseApi(key, resource);
+      case 'AWS::ApiGatewayV2::Integration':
+        return this.parseApiIntegration(key, resource);
+      case 'AWS::ApiGatewayV2::Route':
+        return this.parseApiRoute(key, resource);
+      case 'AWS::ApiGatewayV2::Authorizer':
+        return this.parseApiAuthorizer(key, resource);
+      case 'AWS::Lambda::Permission':
+        return this.parseLambdaPermission(key, resource);
       case 'AWS::OpenSearchServerless::SecurityPolicy':
       case 'AWS::OpenSearchServerless::AccessPolicy':
       case 'AWS::OpenSearchServerless::VpcEndpoint':
@@ -525,6 +640,201 @@ export class CloudFormationParser {
       parsed.filterCriteria = props.FilterCriteria as EventSourceMapping['filterCriteria'];
     }
     return parsed;
+  }
+
+  private parseApi(key: string, resource: CloudFormationResource): ApiResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    return {
+      type: 'apigw-api',
+      logicalId: key,
+      name: (props.Name as string) || key,
+      protocolType: props.ProtocolType as string | undefined,
+      cors: props.CorsConfiguration !== undefined,
+    };
+  }
+
+  private parseApiIntegration(key: string, resource: CloudFormationResource): ApiIntegrationResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    return {
+      type: 'apigw-integration',
+      logicalId: key,
+      name: key,
+      apiRef: this.extractFunctionName(props.ApiId) || undefined,
+      integrationType: props.IntegrationType as string | undefined,
+      integrationUri: props.IntegrationUri,
+      payloadFormatVersion: props.PayloadFormatVersion as string | undefined,
+      timeoutInMillis: props.TimeoutInMillis as number | undefined,
+    };
+  }
+
+  private parseApiRoute(key: string, resource: CloudFormationResource): ApiRouteResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    const routeKey = String(props.RouteKey ?? '');
+    const { method, path } = this.parseRouteKey(routeKey);
+    return {
+      type: 'apigw-route',
+      logicalId: key,
+      name: key,
+      apiRef: this.extractFunctionName(props.ApiId) || undefined,
+      routeKey,
+      method,
+      path,
+      integrationRef: this.parseIntegrationRef(props.Target),
+      authorizationType: (props.AuthorizationType as string) || 'NONE',
+      authorizerRef: this.extractFunctionName(props.AuthorizerId) || undefined,
+    };
+  }
+
+  private parseApiAuthorizer(key: string, resource: CloudFormationResource): ApiAuthorizerResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    const ttl = Number(props.AuthorizerResultTtlInSeconds);
+    return {
+      type: 'apigw-authorizer',
+      logicalId: key,
+      name: (props.Name as string) || key,
+      apiRef: this.extractFunctionName(props.ApiId) || undefined,
+      authorizerType: props.AuthorizerType as string | undefined,
+      identitySource: toStringArray(props.IdentitySource),
+      authorizerUri: props.AuthorizerUri,
+      enableSimpleResponses: Boolean(props.EnableSimpleResponses),
+      // AWS default is '1.0' when omitted; serverless emits '2.0'.
+      authorizerPayloadFormatVersion: (props.AuthorizerPayloadFormatVersion as string) || '1.0',
+      // AWS default 300; a literal 0 (disable caching) is preserved.
+      resultTtlInSeconds: Number.isFinite(ttl) && ttl >= 0 ? ttl : 300,
+    };
+  }
+
+  private parseLambdaPermission(key: string, resource: CloudFormationResource): LambdaPermissionResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    return {
+      type: 'lambda-permission',
+      logicalId: key,
+      name: key,
+      functionRef: props.FunctionName,
+      action: props.Action as string | undefined,
+      principal: props.Principal as string | undefined,
+      sourceArn: props.SourceArn,
+    };
+  }
+
+  // RouteKey → { method, path }. '$default' (and '*') become an ANY catch-all;
+  // otherwise "METHOD /path" splits into an uppercase method + normalized path.
+  private parseRouteKey(routeKey: string): { method: string; path: string } {
+    const trimmed = routeKey.trim();
+    if (trimmed === '$default') return { method: 'ANY', path: '$default' };
+    const [rawMethod, rawPath] = trimmed.split(/\s+/);
+    const method = (rawMethod || 'ANY').toUpperCase();
+    return {
+      method: method === '*' ? 'ANY' : method,
+      path: this.normalizeRoutePath(rawPath || '/'),
+    };
+  }
+
+  // Same normalization as ServerlessStateParser.normalizePath so raw routes and
+  // state routes share one dedup key space. '$default' never reaches here —
+  // parseRouteKey returns it before splitting a method off.
+  private normalizeRoutePath(path: string): string {
+    const trimmed = path.trim().replace(/\/+$/, '');
+    if (trimmed === '' || trimmed === '/') return '/';
+    return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
+  }
+
+  // Target is a literal 'integrations/<IntegrationLogicalId>' or
+  // Fn::Join['/', ['integrations', {Ref: <IntegrationLogicalId>}]] → the id.
+  private parseIntegrationRef(target: unknown): string | undefined {
+    if (typeof target === 'string') {
+      const match = /^integrations\/(.+)$/.exec(target);
+      return match ? match[1] : undefined;
+    }
+    if (target && typeof target === 'object') {
+      const join = (target as Record<string, unknown>)['Fn::Join'];
+      if (Array.isArray(join) && Array.isArray(join[1])) {
+        const parts = join[1] as unknown[];
+        const last = parts[parts.length - 1];
+        if (typeof last === 'string') return last;
+        if (last && typeof last === 'object' && 'Ref' in (last as Record<string, unknown>)) {
+          return String((last as Record<string, unknown>).Ref);
+        }
+      }
+    }
+    return undefined;
+  }
+
+  // General intrinsic → ARN-like reducer for IntegrationUri/AuthorizerUri/
+  // Permission.FunctionName. Extends the Ref/Fn::GetAtt handling with Fn::Sub,
+  // Fn::ImportValue and Fn::Join, resolving same-template Lambda logical ids to
+  // ARNs and substituting the AWS::Region/AccountId/Partition pseudo-params.
+  resolveArnLike(ref: unknown, ctx: ArnResolutionContext): ResolvedArn {
+    if (ref === undefined || ref === null) return { value: '', resolved: false };
+    if (typeof ref === 'string') return { value: ref, resolved: ref.length > 0 };
+    if (typeof ref !== 'object') return { value: '', resolved: false };
+    const obj = ref as Record<string, unknown>;
+
+    if ('Ref' in obj) {
+      const id = String(obj.Ref);
+      const lambda = ctx.lambdas.get(id);
+      if (lambda) return { value: this.lambdaArn(lambda, ctx), resolved: true };
+      return { value: id, resolved: false };
+    }
+
+    if ('Fn::GetAtt' in obj) {
+      const raw = obj['Fn::GetAtt'];
+      const parts = Array.isArray(raw) ? raw.map(String) : String(raw).split('.');
+      const lambda = ctx.lambdas.get(parts[0]);
+      if (lambda && parts[1] === 'Arn') return { value: this.lambdaArn(lambda, ctx), resolved: true };
+      return { value: parts.filter(Boolean).join('.'), resolved: false };
+    }
+
+    if ('Fn::Sub' in obj) return this.resolveSub(obj['Fn::Sub'], ctx);
+
+    if ('Fn::ImportValue' in obj) {
+      const name = this.resolveArnLike(obj['Fn::ImportValue'], ctx).value;
+      const exported = ctx.exports?.get(name);
+      if (exported !== undefined) return { value: exported, resolved: true };
+      ctx.warnings?.push(`Fn::ImportValue "${name}" is not among the known stack exports — keeping the literal token; register the exporting service with LSS.`);
+      return { value: name, resolved: false };
+    }
+
+    if ('Fn::Join' in obj) {
+      const join = obj['Fn::Join'];
+      if (Array.isArray(join) && Array.isArray(join[1])) {
+        const delim = String(join[0] ?? '');
+        const parts = (join[1] as unknown[]).map(part => this.resolveArnLike(part, ctx));
+        return { value: parts.map(p => p.value).join(delim), resolved: parts.every(p => p.resolved) };
+      }
+      return { value: '', resolved: false };
+    }
+
+    return { value: '', resolved: false };
+  }
+
+  private resolveSub(sub: unknown, ctx: ArnResolutionContext): ResolvedArn {
+    let template: string;
+    let vars: Record<string, unknown> = {};
+    if (typeof sub === 'string') {
+      template = sub;
+    } else if (Array.isArray(sub)) {
+      template = String(sub[0] ?? '');
+      if (sub[1] && typeof sub[1] === 'object') vars = sub[1] as Record<string, unknown>;
+    } else {
+      return { value: '', resolved: false };
+    }
+
+    const value = template.replace(/\$\{([^}]+)\}/g, (_match, token: string) => {
+      const key = token.trim();
+      if (key === 'AWS::Region') return ctx.region;
+      if (key === 'AWS::AccountId') return ctx.accountId;
+      if (key === 'AWS::Partition') return ctx.partition;
+      if (key in vars) return this.resolveArnLike(vars[key], ctx).value;
+      const lambda = ctx.lambdas.get(key.split('.')[0]);
+      if (lambda) return this.lambdaArn(lambda, ctx);
+      return `\${${token}}`;
+    });
+    return { value, resolved: !value.includes('${') };
+  }
+
+  private lambdaArn(lambda: LambdaResource, ctx: ArnResolutionContext): string {
+    return `arn:${ctx.partition}:lambda:${ctx.region}:${ctx.accountId}:function:${lambda.name}`;
   }
 
   private extractFunctionName(ref: unknown): string {

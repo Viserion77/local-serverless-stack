@@ -17,7 +17,30 @@ import {
   EventRuleResource,
   OpenSearchCollectionResource,
   EventSourceMapping,
+  ApiResource,
+  ApiIntegrationResource,
+  ApiRouteResource,
+  ApiAuthorizerResource,
+  LambdaPermissionResource,
+  ArnResolutionContext,
 } from '../../../src/server/services/cloudformation-parser';
+
+const APIGW_RAW = path.resolve(__dirname, '../../fixtures/apigw-raw-template.json');
+
+// A resolver context whose same-template Lambda map + region drive resolveArnLike.
+function ctxWith(overrides: Partial<ArnResolutionContext> = {}): ArnResolutionContext {
+  return {
+    region: 'sa-east-1',
+    accountId: '000000000000',
+    partition: 'aws',
+    lambdas: new Map(),
+    ...overrides,
+  };
+}
+
+function lambdaResource(logicalId: string, name: string): LambdaResource {
+  return { type: 'lambda', logicalId, name, handler: '', runtime: 'nodejs20.x', environment: {}, memorySize: 128, timeout: 30 };
+}
 
 const FIXTURE = path.resolve(__dirname, '../../fixtures/sample-cloudformation.json');
 // A committed snapshot of the sample-microservice deploy template. We do NOT read
@@ -595,6 +618,22 @@ describe('parseSecret', () => {
     });
   });
 
+  it('coerces tag entries missing Key or Value to empty strings', () => {
+    const [res] = parser.parse({
+      Resources: {
+        DbSecret: {
+          Type: 'AWS::SecretsManager::Secret',
+          Properties: { Tags: [{}, { Key: 'only-key' }, { Value: 'only-value' }] },
+        },
+      },
+    } as never) as SecretsManagerResource[];
+    expect(res.tags).toEqual([
+      { Key: '', Value: '' },
+      { Key: 'only-key', Value: '' },
+      { Key: '', Value: 'only-value' },
+    ]);
+  });
+
   it('falls back to the logical id when Name is absent and defaults tags to []', () => {
     const [res] = parser.parse({
       Resources: {
@@ -1026,6 +1065,390 @@ describe('parseOpenSearchCollection', () => {
     expect(warnings[0]).toContain('AWS::OpenSearchServerless::SecurityPolicy "Encryption"');
     expect(warnings[1]).toContain('AWS::OpenSearchServerless::AccessPolicy "DataAccess"');
     expect(warnings[2]).toContain('AWS::OpenSearchServerless::VpcEndpoint "Vpc"');
+  });
+});
+
+describe('parseApi (AWS::ApiGatewayV2::Api)', () => {
+  it('parses name, protocolType and flags a present CorsConfiguration', () => {
+    const [res] = parser.parse({
+      Resources: {
+        HttpApi: {
+          Type: 'AWS::ApiGatewayV2::Api',
+          Properties: { Name: 'gw', ProtocolType: 'HTTP', CorsConfiguration: { AllowedOrigins: ['*'] } },
+        },
+      },
+    } as never) as ApiResource[];
+    expect(res).toEqual({ type: 'apigw-api', logicalId: 'HttpApi', name: 'gw', protocolType: 'HTTP', cors: true });
+  });
+
+  it('falls back to the logical id and reports cors:false with no Properties', () => {
+    const [res] = parser.parse({
+      Resources: { HttpApi: { Type: 'AWS::ApiGatewayV2::Api' } },
+    } as never) as ApiResource[];
+    expect(res).toEqual({ type: 'apigw-api', logicalId: 'HttpApi', name: 'HttpApi', protocolType: undefined, cors: false });
+  });
+});
+
+describe('parseApiIntegration (AWS::ApiGatewayV2::Integration)', () => {
+  it('parses type, raw IntegrationUri, payload version, timeout and ApiId ref', () => {
+    const [res] = parser.parse({
+      Resources: {
+        Int: {
+          Type: 'AWS::ApiGatewayV2::Integration',
+          Properties: {
+            ApiId: { Ref: 'HttpApi' },
+            IntegrationType: 'AWS_PROXY',
+            IntegrationUri: { 'Fn::GetAtt': ['FnLambdaFunction', 'Arn'] },
+            PayloadFormatVersion: '2.0',
+            TimeoutInMillis: 30000,
+          },
+        },
+      },
+    } as never) as ApiIntegrationResource[];
+    expect(res).toEqual({
+      type: 'apigw-integration',
+      logicalId: 'Int',
+      name: 'Int',
+      apiRef: 'HttpApi',
+      integrationType: 'AWS_PROXY',
+      integrationUri: { 'Fn::GetAtt': ['FnLambdaFunction', 'Arn'] },
+      payloadFormatVersion: '2.0',
+      timeoutInMillis: 30000,
+    });
+  });
+
+  it('tolerates a bare integration with no Properties', () => {
+    const [res] = parser.parse({
+      Resources: { Int: { Type: 'AWS::ApiGatewayV2::Integration' } },
+    } as never) as ApiIntegrationResource[];
+    expect(res.apiRef).toBeUndefined();
+    expect(res.integrationType).toBeUndefined();
+    expect(res.integrationUri).toBeUndefined();
+  });
+});
+
+describe('parseApiRoute (AWS::ApiGatewayV2::Route)', () => {
+  it('parses a CUSTOM route: method/path from RouteKey, integration from Fn::Join Target, authorizer from AuthorizerId', () => {
+    const [res] = parser.parse({
+      Resources: {
+        R: {
+          Type: 'AWS::ApiGatewayV2::Route',
+          Properties: {
+            ApiId: { Ref: 'HttpApi' },
+            RouteKey: 'GET /users',
+            Target: { 'Fn::Join': ['/', ['integrations', { Ref: 'Int' }]] },
+            AuthorizationType: 'CUSTOM',
+            AuthorizerId: { Ref: 'Auth' },
+          },
+        },
+      },
+    } as never) as ApiRouteResource[];
+    expect(res).toEqual({
+      type: 'apigw-route',
+      logicalId: 'R',
+      name: 'R',
+      apiRef: 'HttpApi',
+      routeKey: 'GET /users',
+      method: 'GET',
+      path: '/users',
+      integrationRef: 'Int',
+      authorizationType: 'CUSTOM',
+      authorizerRef: 'Auth',
+    });
+  });
+
+  it('parses a literal "integrations/<id>" Target and defaults AuthorizationType to NONE', () => {
+    const [res] = parser.parse({
+      Resources: {
+        R: {
+          Type: 'AWS::ApiGatewayV2::Route',
+          Properties: { RouteKey: 'post /items/', Target: 'integrations/Int9' },
+        },
+      },
+    } as never) as ApiRouteResource[];
+    expect(res.integrationRef).toBe('Int9');
+    expect(res.authorizationType).toBe('NONE');
+    expect(res.authorizerRef).toBeUndefined();
+    expect(res.method).toBe('POST');
+    // Trailing slash normalized away.
+    expect(res.path).toBe('/items');
+  });
+
+  it('maps $default and "*" RouteKeys to an ANY catch-all', () => {
+    const [def] = parser.parse({
+      Resources: { R: { Type: 'AWS::ApiGatewayV2::Route', Properties: { RouteKey: '$default' } } },
+    } as never) as ApiRouteResource[];
+    expect(def).toMatchObject({ method: 'ANY', path: '$default' });
+
+    const [star] = parser.parse({
+      Resources: { R: { Type: 'AWS::ApiGatewayV2::Route', Properties: { RouteKey: '* /wild' } } },
+    } as never) as ApiRouteResource[];
+    expect(star).toMatchObject({ method: 'ANY', path: '/wild' });
+  });
+
+  it('normalizes a missing/blank path to "/" and defaults a missing method to ANY', () => {
+    // No Properties block at all.
+    const [bare] = parser.parse({
+      Resources: { R: { Type: 'AWS::ApiGatewayV2::Route' } },
+    } as never) as ApiRouteResource[];
+    expect(bare.routeKey).toBe('');
+    expect(bare.method).toBe('ANY');
+    expect(bare.path).toBe('/');
+
+    const [slash] = parser.parse({
+      Resources: { R: { Type: 'AWS::ApiGatewayV2::Route', Properties: { RouteKey: 'GET /' } } },
+    } as never) as ApiRouteResource[];
+    expect(slash.path).toBe('/');
+  });
+
+  it('adds the leading slash to a RouteKey path that omits it', () => {
+    const [res] = parser.parse({
+      Resources: { R: { Type: 'AWS::ApiGatewayV2::Route', Properties: { RouteKey: 'GET users/{id}' } } },
+    } as never) as ApiRouteResource[];
+    expect(res.path).toBe('/users/{id}');
+  });
+
+  it('returns no integrationRef for a non-matching string Target, a non-join object, or a join without a ref part', () => {
+    const parseTarget = (Target: unknown) =>
+      (parser.parse({
+        Resources: { R: { Type: 'AWS::ApiGatewayV2::Route', Properties: { RouteKey: 'GET /x', Target } } },
+      } as never) as ApiRouteResource[])[0].integrationRef;
+
+    expect(parseTarget('not-an-integration')).toBeUndefined();
+    expect(parseTarget({ 'Fn::Sub': 'nope' })).toBeUndefined();
+    expect(parseTarget({ 'Fn::Join': ['/', 'not-an-array'] })).toBeUndefined();
+    // Fn::Join whose last part is a literal string id.
+    expect(parseTarget({ 'Fn::Join': ['/', ['integrations', 'LiteralInt']] })).toBe('LiteralInt');
+    // Fn::Join whose last part is neither a string nor a {Ref}.
+    expect(parseTarget({ 'Fn::Join': ['/', ['integrations', { 'Fn::Sub': 'x' }]] })).toBeUndefined();
+  });
+});
+
+describe('parseApiAuthorizer (AWS::ApiGatewayV2::Authorizer)', () => {
+  it('parses a REQUEST authorizer with all v2 fields', () => {
+    const [res] = parser.parse({
+      Resources: {
+        Auth: {
+          Type: 'AWS::ApiGatewayV2::Authorizer',
+          Properties: {
+            ApiId: { Ref: 'HttpApi' },
+            Name: 'sessionAuthorizerV2',
+            AuthorizerType: 'REQUEST',
+            IdentitySource: ['$request.header.authorization'],
+            EnableSimpleResponses: true,
+            AuthorizerPayloadFormatVersion: '2.0',
+            AuthorizerResultTtlInSeconds: 3600,
+            AuthorizerUri: 'arn:aws:lambda:sa-east-1:000000000000:function:users-service-dev-sessionAuthorizerV2Local',
+          },
+        },
+      },
+    } as never) as ApiAuthorizerResource[];
+    expect(res).toEqual({
+      type: 'apigw-authorizer',
+      logicalId: 'Auth',
+      name: 'sessionAuthorizerV2',
+      apiRef: 'HttpApi',
+      authorizerType: 'REQUEST',
+      identitySource: ['$request.header.authorization'],
+      authorizerUri: 'arn:aws:lambda:sa-east-1:000000000000:function:users-service-dev-sessionAuthorizerV2Local',
+      enableSimpleResponses: true,
+      authorizerPayloadFormatVersion: '2.0',
+      resultTtlInSeconds: 3600,
+    });
+  });
+
+  it('applies AWS defaults (name=logicalId, payload 1.0, ttl 300, simple false, identitySource [])', () => {
+    const [res] = parser.parse({
+      Resources: { Auth: { Type: 'AWS::ApiGatewayV2::Authorizer' } },
+    } as never) as ApiAuthorizerResource[];
+    expect(res.name).toBe('Auth');
+    expect(res.authorizerPayloadFormatVersion).toBe('1.0');
+    expect(res.resultTtlInSeconds).toBe(300);
+    expect(res.enableSimpleResponses).toBe(false);
+    expect(res.identitySource).toEqual([]);
+  });
+
+  it('accepts a lone IdentitySource string as a one-element list', () => {
+    const [res] = parser.parse({
+      Resources: {
+        Auth: {
+          Type: 'AWS::ApiGatewayV2::Authorizer',
+          Properties: { IdentitySource: '$request.header.authorization' },
+        },
+      },
+    } as never) as ApiAuthorizerResource[];
+    expect(res.identitySource).toEqual(['$request.header.authorization']);
+  });
+
+  it('preserves a literal 0 TTL (caching disabled) but rejects a non-numeric TTL back to 300', () => {
+    const [zero] = parser.parse({
+      Resources: { Auth: { Type: 'AWS::ApiGatewayV2::Authorizer', Properties: { AuthorizerResultTtlInSeconds: 0 } } },
+    } as never) as ApiAuthorizerResource[];
+    expect(zero.resultTtlInSeconds).toBe(0);
+
+    const [bad] = parser.parse({
+      Resources: { Auth: { Type: 'AWS::ApiGatewayV2::Authorizer', Properties: { AuthorizerResultTtlInSeconds: 'oops' } } },
+    } as never) as ApiAuthorizerResource[];
+    expect(bad.resultTtlInSeconds).toBe(300);
+  });
+});
+
+describe('parseLambdaPermission (AWS::Lambda::Permission)', () => {
+  it('captures the raw FunctionName/SourceArn plus action and principal', () => {
+    const [res] = parser.parse({
+      Resources: {
+        Perm: {
+          Type: 'AWS::Lambda::Permission',
+          Properties: {
+            Action: 'lambda:InvokeFunction',
+            FunctionName: { 'Fn::GetAtt': ['FnLambdaFunction', 'Arn'] },
+            Principal: 'apigateway.amazonaws.com',
+            SourceArn: { 'Fn::Sub': 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:abc/*' },
+          },
+        },
+      },
+    } as never) as LambdaPermissionResource[];
+    expect(res).toEqual({
+      type: 'lambda-permission',
+      logicalId: 'Perm',
+      name: 'Perm',
+      action: 'lambda:InvokeFunction',
+      functionRef: { 'Fn::GetAtt': ['FnLambdaFunction', 'Arn'] },
+      principal: 'apigateway.amazonaws.com',
+      sourceArn: { 'Fn::Sub': 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:abc/*' },
+    });
+  });
+
+  it('tolerates a permission with no Properties', () => {
+    const [res] = parser.parse({
+      Resources: { Perm: { Type: 'AWS::Lambda::Permission' } },
+    } as never) as LambdaPermissionResource[];
+    expect(res).toEqual({
+      type: 'lambda-permission',
+      logicalId: 'Perm',
+      name: 'Perm',
+      action: undefined,
+      functionRef: undefined,
+      principal: undefined,
+      sourceArn: undefined,
+    });
+  });
+});
+
+describe('resolveArnLike (intrinsic → ARN reducer)', () => {
+  const lambdas = new Map([['FnLambdaFunction', lambdaResource('FnLambdaFunction', 'svc-dev-fn')]]);
+  const ARN = 'arn:aws:lambda:sa-east-1:000000000000:function:svc-dev-fn';
+
+  it('passes literal strings through (empty string is unresolved)', () => {
+    expect(parser.resolveArnLike('literal', ctxWith())).toEqual({ value: 'literal', resolved: true });
+    expect(parser.resolveArnLike('', ctxWith())).toEqual({ value: '', resolved: false });
+  });
+
+  it('treats null/undefined and non-object primitives as unresolved', () => {
+    expect(parser.resolveArnLike(undefined, ctxWith())).toEqual({ value: '', resolved: false });
+    expect(parser.resolveArnLike(null, ctxWith())).toEqual({ value: '', resolved: false });
+    expect(parser.resolveArnLike(42, ctxWith())).toEqual({ value: '', resolved: false });
+  });
+
+  it('resolves Ref/Fn::GetAtt to a same-template Lambda ARN', () => {
+    expect(parser.resolveArnLike({ Ref: 'FnLambdaFunction' }, ctxWith({ lambdas }))).toEqual({ value: ARN, resolved: true });
+    expect(parser.resolveArnLike({ 'Fn::GetAtt': ['FnLambdaFunction', 'Arn'] }, ctxWith({ lambdas }))).toEqual({ value: ARN, resolved: true });
+  });
+
+  it('leaves a Ref/GetAtt to a non-Lambda (or non-Arn attribute) unresolved', () => {
+    expect(parser.resolveArnLike({ Ref: 'HttpApi' }, ctxWith({ lambdas }))).toEqual({ value: 'HttpApi', resolved: false });
+    expect(parser.resolveArnLike({ 'Fn::GetAtt': ['Table', 'StreamArn'] }, ctxWith({ lambdas }))).toEqual({ value: 'Table.StreamArn', resolved: false });
+    // String short-form Fn::GetAtt.
+    expect(parser.resolveArnLike({ 'Fn::GetAtt': 'Table.Arn' }, ctxWith({ lambdas }))).toEqual({ value: 'Table.Arn', resolved: false });
+  });
+
+  it('resolves Fn::Sub with AWS pseudo-params, a lambda token, and a vars map', () => {
+    const sub = { 'Fn::Sub': 'arn:${AWS::Partition}:lambda:${AWS::Region}:${AWS::AccountId}:function:svc-dev-fn' };
+    expect(parser.resolveArnLike(sub, ctxWith({ lambdas }))).toEqual({ value: ARN, resolved: true });
+
+    // ${LogicalId.Arn} interpolates the same-template Lambda ARN.
+    expect(parser.resolveArnLike({ 'Fn::Sub': '${FnLambdaFunction.Arn}' }, ctxWith({ lambdas }))).toEqual({ value: ARN, resolved: true });
+
+    // Array form with an explicit variables map.
+    expect(parser.resolveArnLike(
+      { 'Fn::Sub': ['prefix-${Who}', { Who: 'you' }] },
+      ctxWith(),
+    )).toEqual({ value: 'prefix-you', resolved: true });
+  });
+
+  it('marks an Fn::Sub with an unknown token unresolved and rejects a non-string/array Sub', () => {
+    expect(parser.resolveArnLike({ 'Fn::Sub': 'x-${Unknown}' }, ctxWith())).toEqual({ value: 'x-${Unknown}', resolved: false });
+    expect(parser.resolveArnLike({ 'Fn::Sub': { bad: true } }, ctxWith())).toEqual({ value: '', resolved: false });
+    // Array form whose second element is not a variables object → empty vars.
+    expect(parser.resolveArnLike({ 'Fn::Sub': ['plain'] }, ctxWith())).toEqual({ value: 'plain', resolved: true });
+  });
+
+  it('resolves Fn::ImportValue against the export map and warns when missing', () => {
+    const exports = new Map([['other-stack-fn-arn', ARN]]);
+    expect(parser.resolveArnLike({ 'Fn::ImportValue': 'other-stack-fn-arn' }, ctxWith({ exports }))).toEqual({ value: ARN, resolved: true });
+
+    const warnings: string[] = [];
+    expect(parser.resolveArnLike({ 'Fn::ImportValue': 'ghost' }, ctxWith({ exports, warnings }))).toEqual({ value: 'ghost', resolved: false });
+    expect(warnings[0]).toContain('Fn::ImportValue "ghost"');
+
+    // Import name given as a nested intrinsic (Fn::Sub) with no export → still warns, no warnings sink.
+    expect(parser.resolveArnLike({ 'Fn::ImportValue': { 'Fn::Sub': 'p-${AWS::Region}' } }, ctxWith({ exports }))).toEqual({ value: 'p-sa-east-1', resolved: false });
+  });
+
+  it('joins Fn::Join parts (resolved only when every part resolved) and rejects a malformed join', () => {
+    expect(parser.resolveArnLike(
+      { 'Fn::Join': [':', ['a', { Ref: 'FnLambdaFunction' }]] },
+      ctxWith({ lambdas }),
+    )).toEqual({ value: `a:${ARN}`, resolved: true });
+
+    // A part that does not resolve makes the whole join unresolved.
+    expect(parser.resolveArnLike(
+      { 'Fn::Join': ['/', ['integrations', { Ref: 'HttpApi' }]] },
+      ctxWith({ lambdas }),
+    )).toEqual({ value: 'integrations/HttpApi', resolved: false });
+
+    expect(parser.resolveArnLike({ 'Fn::Join': ['x'] }, ctxWith())).toEqual({ value: '', resolved: false });
+
+    // A null delimiter degrades to an empty separator rather than "null".
+    expect(parser.resolveArnLike({ 'Fn::Join': [null, ['a', 'b']] }, ctxWith())).toEqual({ value: 'ab', resolved: true });
+  });
+
+  it('treats a nullish Fn::Sub template as an empty string', () => {
+    expect(parser.resolveArnLike({ 'Fn::Sub': [null, { Who: 'x' }] }, ctxWith())).toEqual({ value: '', resolved: true });
+  });
+
+  it('returns unresolved for an object with no recognized intrinsic key', () => {
+    expect(parser.resolveArnLike({ Nonsense: true }, ctxWith())).toEqual({ value: '', resolved: false });
+  });
+});
+
+describe('raw ApiGatewayV2 fixture (end-to-end parse)', () => {
+  it('parses the committed serverless-compiled raw-API template into the five resource kinds', () => {
+    const template = JSON.parse(fs.readFileSync(APIGW_RAW, 'utf8'));
+    const resources = parser.parse(template);
+
+    const route = resources.find(r => r.type === 'apigw-route') as ApiRouteResource;
+    expect(route).toMatchObject({ method: 'GET', path: '/users', integrationRef: 'HttpApiIntegrationListUsers', authorizationType: 'CUSTOM', authorizerRef: 'HttpApiAuthorizerSessionV2' });
+
+    const integration = resources.find(r => r.type === 'apigw-integration') as ApiIntegrationResource;
+    expect(integration.integrationType).toBe('AWS_PROXY');
+    expect(integration.payloadFormatVersion).toBe('2.0');
+
+    const authorizer = resources.find(r => r.type === 'apigw-authorizer') as ApiAuthorizerResource;
+    expect(authorizer).toMatchObject({ name: 'sessionAuthorizerV2', enableSimpleResponses: true, authorizerPayloadFormatVersion: '2.0', resultTtlInSeconds: 3600 });
+
+    const api = resources.find(r => r.type === 'apigw-api') as ApiResource;
+    expect(api.cors).toBe(true);
+
+    const permission = resources.find(r => r.type === 'lambda-permission') as LambdaPermissionResource;
+    expect(permission.principal).toBe('apigateway.amazonaws.com');
+
+    // The same-template Fn::GetAtt IntegrationUri reduces to the Lambda ARN.
+    const lambdas = new Map(
+      resources.filter((r): r is LambdaResource => r.type === 'lambda').map(l => [l.logicalId, l] as const),
+    );
+    const resolved = parser.resolveArnLike(integration.integrationUri, ctxWith({ lambdas }));
+    expect(resolved).toEqual({ value: 'arn:aws:lambda:sa-east-1:000000000000:function:users-service-dev-listUsers', resolved: true });
   });
 });
 

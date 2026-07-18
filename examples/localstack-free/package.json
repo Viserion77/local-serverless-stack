@@ -12,8 +12,9 @@
     "register:auth": "npm --prefix auth-service run package",
     "register:users": "npm --prefix users-service run package",
     "register:orders": "npm --prefix orders-service run package",
-    "register:all": "npm run register:events && npm run register:auth && npm run register:users && npm run register:orders",
-    "setup": "npm --prefix events-stack install && npm --prefix auth-service install && npm --prefix users-service install && npm --prefix orders-service install",
+    "register:gateway": "npm --prefix gateway-stack run package",
+    "register:all": "npm run register:events && npm run register:auth && npm run register:users && npm run register:orders && npm run register:gateway",
+    "setup": "npm --prefix events-stack install && npm --prefix auth-service install && npm --prefix users-service install && npm --prefix orders-service install && npm --prefix gateway-stack install",
     "console": "npx -y http-server . -p 8620 -c-1"
   }
 }

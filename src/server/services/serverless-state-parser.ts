@@ -32,6 +32,19 @@ export interface HttpRoute {
   cors: boolean;
   // Name of an entry in the service's authorizers list.
   authorizerName?: string;
+  // Cross-service / raw-CFN target ARN when the route does not resolve to a
+  // local short name; resolved to a live function at request time via
+  // FunctionRegistry.resolve(). Undefined for state-derived local routes.
+  functionArn?: string;
+  // HTTP API payload format ('2.0' for raw ::Integration routes). Informational;
+  // event building keys off eventType. Undefined for state-derived routes.
+  payloadVersion?: '1.0' | '2.0';
+  // True when the route came from raw AWS::ApiGatewayV2 resources rather than a
+  // functions[].events entry (surfaced by GET /apis).
+  raw?: boolean;
+  // The granting AWS::Lambda::Permission SourceArn (execute-api ARN), when a
+  // matching apigateway.amazonaws.com permission was found.
+  sourceArn?: string;
 }
 
 export interface AuthorizerConfig {

@@ -1,12 +1,13 @@
 # localstack-free
 
-The single **LocalStack community (free)** example: four services that exercise **LSS's API + Lambda emulation** end to end — API Gateway proxy, per-service Lambda runtime workers, Lambda authorizers (local **and** cross-service), a shared **EventBridge bus**, **DynamoDB streams → SNS**, and **S3 bucket notifications**. There is **no `serverless-offline` anywhere** and no `serverless deploy`: each service ships only the `serverless-lss` plugin, and LSS itself serves the HTTP APIs and the AWS Lambda Invoke API.
+The single **LocalStack community (free)** example: five services that exercise **LSS's API + Lambda emulation** end to end — API Gateway proxy, per-service Lambda runtime workers, Lambda authorizers (local **and** cross-service), raw **CloudFormation API Gateway v2** topologies, a shared **EventBridge bus**, **DynamoDB streams → SNS**, and **S3 bucket notifications**. There is **no `serverless-offline` anywhere** and no `serverless deploy`: each service ships only the `serverless-lss` plugin, and LSS itself serves the HTTP APIs and the AWS Lambda Invoke API.
 
 | Service | Language | API flavor | Authorizer | API port | Invoke port |
 |---|---|---|---|---|---|
 | `users-service` | TypeScript | HTTP API (payload **v2**) | local v2 **simple response** | `3610` | `13610` |
 | `auth-service` | JavaScript | REST API (payload **v1**) | local v1 **REQUEST** (IAM policy) | `3611` | `13611` |
 | `orders-service` | JavaScript | REST API (payload **v1**) | **cross-service** by ARN → auth-service | `3612` | `13612` |
+| `gateway-stack` | — | **raw CFN** HTTP API v2 (`AWS::ApiGatewayV2::*`) — **no functions of its own** | **cross-stack** by ARN → users-service | `3613` | `13613` |
 | `events-stack` | — | **resources-only** — owns the `domain-events` bus (+ an Archive, which LSS skips with a warning). No functions, no ports. | — | — | — |
 
 ## What this exercises
@@ -16,6 +17,8 @@ The single **LocalStack community (free)** example: four services that exercise 
 - **Hot reload** — `lambdaRuntime.watch: true`; edit a handler and re-curl.
 - **SQS consumer** — `orders-OrderQueue` with a Lambda consumer (`processOrderQueue`), running without serverless-offline.
 - **Schedule** — `cleanupExpiredOrders` (`rate(1 hour)`), provisioned as an EventBridge rule that fires on schedule (`"events"` is enabled in `lss.config.json`); the function is also invocable via the Invoke API — every Lambda is, even without API events.
+- **Raw `AWS::ApiGatewayV2::*` routes, cross-stack** — `gateway-stack` has **no `functions:` block and no `httpApi:` event at all**. It declares an `::Api` + `::Route` + `::Integration` + `::Authorizer` (plus the `AWS::Lambda::Permission` invoke grant) directly under `resources:`, all pointing at **users-service's** Lambdas by ARN. LSS parses those resource types, reduces `IntegrationUri`/`AuthorizerUri` (literal ARN, `Fn::GetAtt`, `Fn::Sub`, `Fn::ImportValue`, `Fn::Join`) to concrete ARNs, and registers them into the *same* route registry the `httpApi:` events feed — resolving the cross-stack target through the global function registry at request time, so **registration order does not matter**. A raw `::Route` that mirrors an existing `httpApi:` event is de-duplicated (the state route wins), which is why registering `users-service` still yields its three routes, not six. There is **no `/api/{proxy+}` or `$default` catch-all anywhere** in this example.
+- **`AWS::Lambda::Permission` as an advisory grant** — present, its `SourceArn` is recorded on the route; absent, the route still registers and LSS logs one warning naming the ungranted function (in AWS the call would 500, but locally the in-process runtime performs the invoke).
 - **`AWS::Events::EventBus` in `resources:`** — registering `events-stack` (just `sls package`, never `deploy`) creates the `domain-events` bus in LocalStack. A service with zero functions and no ports registers fine.
 - **`AWS::Events::Archive`** — accepted and skipped with a registration warning (LocalStack mocks Archives: CFN says `CREATE_COMPLETE`, `ListArchives` stays empty).
 - **`events: eventBridge` trigger + pattern filtering** — `users-service`'s `createUser` publishes `UserSignedUp` (`source: users`) with a plain SDK `PutEvents`; `auth-service`'s `onUserSignedUp` rule (pattern `source: users`, `detail-type: UserSignedUp`) stores each event in `auth-SignupAudit`. Events with a non-matching source/detail-type are not delivered.
@@ -25,7 +28,7 @@ The single **LocalStack community (free)** example: four services that exercise 
 - **Seeds** — `auth-Sessions`, `users-Users`, and `orders-Orders` are seeded from `./seeds` (a ready-made session `code-admin` included).
 - **Dashboard branding** — see [Branding](#branding) below.
 
-> **Ports used by this example** — LSS server `3120`, LocalStack `4572`, service APIs `3610`–`3612`, Lambda invoke `13610`–`13612`, validation console `8620`. The non-default LocalStack port keeps this example out of the way of an external LocalStack you might have on `4566`, and clear of the other examples in this repo. (Caveat: a real LocalStack install commonly publishes the whole `4566–4599` range — in that case `4572` will still conflict.)
+> **Ports used by this example** — LSS server `3120`, LocalStack `4572`, service APIs `3610`–`3613`, Lambda invoke `13610`–`13613`, validation console `8620`. The non-default LocalStack port keeps this example out of the way of an external LocalStack you might have on `4566`, and clear of the other examples in this repo. (Caveat: a real LocalStack install commonly publishes the whole `4566–4599` range — in that case `4572` will still conflict.)
 
 ## Prerequisites
 
@@ -95,6 +98,28 @@ curl http://localhost:3611/signups
 ```
 
 `GET /users` and `GET /users/{id}` work the same way (`Authorization: Bearer lss-secret`).
+
+**3b. A raw cross-stack CloudFormation route** — `gateway-stack` owns **no Lambdas**. Its `GET /gw/users` exists only as an `AWS::ApiGatewayV2::Route` under `resources:`, wired by ARN to users-service's `listUsers`, and guarded by an `AWS::ApiGatewayV2::Authorizer` pointing at users-service's v2 authorizer. LSS resolves both across the stack boundary at request time:
+
+```bash
+# Same body as :3610/users — but served by the gateway stack's raw route,
+# invoking a Lambda that belongs to another service entirely.
+curl http://localhost:3613/gw/users -H 'authorization: Bearer lss-secret'
+# → 200 {"items":[...]}
+
+# The cross-stack authorizer is enforced, not bypassed:
+curl -i http://localhost:3613/gw/users
+# → 401 (identity source header absent — authorizer never invoked, as in AWS)
+curl -i http://localhost:3613/gw/users -H 'authorization: Bearer wrong'
+# → 403 (authorizer returned {isAuthorized:false})
+```
+
+Confirm the topology resolved on its own — the route reports the cross-service `functionArn`, and nothing anywhere falls back to a catch-all:
+
+```bash
+curl -s http://localhost:3120/api/apis | grep -o '"path":"[^"]*"' | sort -u
+# → …"path":"/gw/users"… and NO "/api/{proxy+}" and NO "$default"
+```
 
 **4. Cross-service authorizer + SQS + stream → SNS** — `orders-service` declares its authorizer by **ARN**; the Lambda behind it lives in `auth-service`. The order flows through SQS → `processOrderQueue` → DynamoDB, and the table's stream fans the write out to the `orders-OrderEvents` SNS topic via `onOrderStream`:
 
@@ -177,6 +202,10 @@ seeds/
   orders-Orders.json             ← three seeded orders (writes also flow through the stream)
 events-stack/                    ← resources-only: domain-events bus + Archive (skipped)
   serverless.yml
+gateway-stack/                   ← raw CFN HTTP API v2, no functions, ports 3613/13613
+  serverless.yml                 ← ::Api + ::Route + ::Integration + ::Authorizer
+                                    + Lambda::Permission, all targeting users-service
+                                    Lambdas by cross-stack ARN. No httpApi: event.
 auth-service/                    ← JS, REST v1, ports 3611/13611
   serverless.yml                 ← + eventBridge rule on the shared bus (by ARN)
   src/handlers/

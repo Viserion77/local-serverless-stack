@@ -25,10 +25,14 @@ router.get('/', (_req: Request, res: Response) => {
           method: route.method,
           path: route.path,
           functionName: route.functionName,
+          // Cross-service / raw-CFN target ARN (undefined for local state routes).
+          functionArn: route.functionArn,
           eventType: route.eventType,
           payloadVersion: route.eventType === 'httpApi' ? '2.0' : '1.0',
           cors: route.cors,
           authorizerName: route.authorizerName,
+          // True when sourced from raw AWS::ApiGatewayV2 resources.
+          raw: route.raw,
         })),
         authorizers: service.authorizers.map(a => ({
           name: a.name,

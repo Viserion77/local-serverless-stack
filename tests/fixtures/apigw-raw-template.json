@@ -1,0 +1,86 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Committed snapshot of a serverless-compiled HTTP API v2 raw-resource shape (::Api/::Route/::Integration/::Authorizer + Lambda::Permission), used to lock the CloudFormationParser + intrinsic-resolver output.",
+  "Resources": {
+    "ListUsersLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "users-service-dev-listUsers",
+        "Handler": "src/handlers/listUsers.handler",
+        "Runtime": "nodejs20.x"
+      }
+    },
+    "SessionAuthorizerV2LocalLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "users-service-dev-sessionAuthorizerV2Local",
+        "Handler": "src/handlers/session-authorizer-v2.handler",
+        "Runtime": "nodejs20.x"
+      }
+    },
+    "HttpApi": {
+      "Type": "AWS::ApiGatewayV2::Api",
+      "Properties": {
+        "Name": "dev-users-service",
+        "ProtocolType": "HTTP",
+        "CorsConfiguration": {
+          "AllowedOrigins": ["*"],
+          "AllowedMethods": ["*"]
+        }
+      }
+    },
+    "HttpApiIntegrationListUsers": {
+      "Type": "AWS::ApiGatewayV2::Integration",
+      "Properties": {
+        "ApiId": { "Ref": "HttpApi" },
+        "IntegrationType": "AWS_PROXY",
+        "IntegrationUri": { "Fn::GetAtt": ["ListUsersLambdaFunction", "Arn"] },
+        "PayloadFormatVersion": "2.0",
+        "TimeoutInMillis": 30000
+      }
+    },
+    "HttpApiRouteGetUsers": {
+      "Type": "AWS::ApiGatewayV2::Route",
+      "Properties": {
+        "ApiId": { "Ref": "HttpApi" },
+        "RouteKey": "GET /users",
+        "Target": { "Fn::Join": ["/", ["integrations", { "Ref": "HttpApiIntegrationListUsers" }]] },
+        "AuthorizationType": "CUSTOM",
+        "AuthorizerId": { "Ref": "HttpApiAuthorizerSessionV2" }
+      }
+    },
+    "HttpApiAuthorizerSessionV2": {
+      "Type": "AWS::ApiGatewayV2::Authorizer",
+      "Properties": {
+        "ApiId": { "Ref": "HttpApi" },
+        "Name": "sessionAuthorizerV2",
+        "AuthorizerType": "REQUEST",
+        "IdentitySource": ["$request.header.authorization"],
+        "EnableSimpleResponses": true,
+        "AuthorizerPayloadFormatVersion": "2.0",
+        "AuthorizerResultTtlInSeconds": 3600,
+        "AuthorizerUri": { "Fn::GetAtt": ["SessionAuthorizerV2LocalLambdaFunction", "Arn"] }
+      }
+    },
+    "ListUsersLambdaPermissionHttpApi": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "Action": "lambda:InvokeFunction",
+        "FunctionName": { "Fn::GetAtt": ["ListUsersLambdaFunction", "Arn"] },
+        "Principal": "apigateway.amazonaws.com",
+        "SourceArn": { "Fn::Sub": "arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*" }
+      }
+    }
+  },
+  "Outputs": {
+    "ListUsersFunctionQualifiedArn": {
+      "Description": "Cross-stack export of the listUsers Lambda ARN",
+      "Value": { "Fn::GetAtt": ["ListUsersLambdaFunction", "Arn"] },
+      "Export": { "Name": "users-service-dev-listUsers-arn" }
+    },
+    "ServiceEndpoint": {
+      "Description": "URL of the service endpoint",
+      "Value": "https://example.execute-api.sa-east-1.amazonaws.com"
+    }
+  }
+}

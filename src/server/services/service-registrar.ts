@@ -7,6 +7,7 @@
 import fs from 'fs/promises';
 import path from 'path';
 import { CloudFormationParser, Resource, LambdaResource } from './cloudformation-parser.js';
+import { assembleRawApiResources, collectStackExports } from './raw-api-assembler.js';
 import {
   ServerlessStateParser,
   RegisteredFunction,
@@ -49,6 +50,10 @@ export class ServiceRegistrar {
   private static instance: ServiceRegistrar;
   private cache = new CacheManager();
   private cacheReady = false;
+  // Cross-service CloudFormation export map (Outputs[].Export.Name → value),
+  // accumulated across registrations so a raw route's Fn::ImportValue target can
+  // reduce to a concrete ARN regardless of which stack exported it.
+  private exportMap = new Map<string, string>();
 
   static getInstance(): ServiceRegistrar {
     if (!ServiceRegistrar.instance) {
@@ -122,6 +127,26 @@ export class ServiceRegistrar {
         triggers: [],
       }));
     }
+
+    // Fold raw AWS::ApiGatewayV2::Route/Integration/Authorizer resources (declared
+    // under CFN `resources:`) into the same route/authorizer registry, resolving
+    // cross-stack Lambda targets by ARN and deduping against the state routes
+    // (which win). Genuinely-raw routes (a gateway stack fronting another stack's
+    // Lambda) are appended; state mirrors are dropped.
+    const assembled = assembleRawApiResources(cfnParser, {
+      resources,
+      region: effectiveRegion,
+      localFunctions: functions,
+      stateRoutes: routes ?? [],
+      exports: this.exportMap,
+      warnings,
+    });
+    if (assembled.routes.length > 0) {
+      routes = [...(routes ?? []), ...assembled.routes];
+      authorizers = [...(authorizers ?? []), ...assembled.authorizers];
+    }
+    // Record this stack's exports so a later service's Fn::ImportValue resolves.
+    collectStackExports(cfnParser, resources, template.Outputs as Record<string, unknown> | undefined, effectiveRegion, this.exportMap);
 
     // Port resolution: lss.config.json serviceRuntime > plugin payload >
     // invokePortOffset rule (apiPort 30xx → invokePort 130xx).

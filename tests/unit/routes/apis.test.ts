@@ -138,6 +138,68 @@ describe('GET /api/apis', () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual([]);
   });
+
+  it('surfaces a raw cross-stack route with its resolved functionArn and no {proxy+}/$default stand-in', async () => {
+    const CROSS_ARN = 'arn:aws:lambda:sa-east-1:000000000000:function:users-service-dev-listUsers';
+    FunctionRegistry.getInstance().registerService({
+      name: 'gateway-stack',
+      root: '/abs/gateway-stack',
+      templateHash: 'h',
+      lastUpdated: 1,
+      status: 'registered',
+      apiPort: 3613,
+      stage: 'dev',
+      // A gateway-only service: no functions of its own, one raw ApiGatewayV2 route.
+      routes: [
+        {
+          functionName: 'users-service-dev-listUsers',
+          method: 'GET',
+          path: '/gw/users',
+          eventType: 'httpApi',
+          cors: true,
+          authorizerName: 'sessionAuthorizerV2',
+          functionArn: CROSS_ARN,
+          payloadVersion: '2.0',
+          raw: true,
+          sourceArn: 'arn:aws:execute-api:sa-east-1:000000000000:gw123/*',
+        },
+      ],
+      authorizers: [
+        {
+          name: 'sessionAuthorizerV2',
+          type: 'request',
+          eventType: 'httpApi',
+          payloadVersion: '2.0',
+          enableSimpleResponses: true,
+          identitySource: ['$request.header.authorization'],
+          resultTtlInSeconds: 3600,
+          arn: 'arn:aws:lambda:sa-east-1:000000000000:function:users-service-dev-sessionAuthorizerV2Local',
+        },
+      ],
+    });
+
+    const res = await request(appWith()).get('/api/apis');
+
+    expect(res.status).toBe(200);
+    expect(res.body[0].routes).toEqual([
+      {
+        method: 'GET',
+        path: '/gw/users',
+        functionName: 'users-service-dev-listUsers',
+        functionArn: CROSS_ARN,
+        eventType: 'httpApi',
+        payloadVersion: '2.0',
+        cors: true,
+        authorizerName: 'sessionAuthorizerV2',
+        raw: true,
+      },
+    ]);
+    expect(res.body[0].authorizers[0].arn).toContain('sessionAuthorizerV2Local');
+    // The raw topology resolved on its own — no catch-all stand-in anywhere.
+    const paths = res.body.flatMap((s: any) => s.routes.map((r: any) => r.path));
+    expect(paths).not.toContain('/api/{proxy+}');
+    expect(paths).not.toContain('$default');
+  });
 });
 
 describe('POST /api/apis/authorizer-cache/clear', () => {

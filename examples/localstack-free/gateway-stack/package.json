@@ -1,0 +1,14 @@
+{
+  "name": "gateway-stack-example",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Gateway-only stack with no functions: a RAW AWS::ApiGatewayV2 Api/Route/Integration/Authorizer topology (+ Lambda::Permission) fronting Lambdas owned by users-service. Proves LSS serves cross-stack raw routes with no /api/{proxy+} fallback.",
+  "scripts": {
+    "package": "serverless package",
+    "register": "serverless package"
+  },
+  "devDependencies": {
+    "osls": "4.0.0",
+    "serverless-lss": "file:../../../packages/serverless-plugin"
+  }
+}

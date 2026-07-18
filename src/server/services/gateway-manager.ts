@@ -268,7 +268,19 @@ export class GatewayManager {
         authorizer = decision.authorizer;
       }
 
-      const fn = entry.functions.find(f => f.name === route.functionName);
+      // Resolve the route's target: a local function by short name first, then
+      // (for a cross-stack raw route, or any local miss) the global registry by
+      // ARN/name — the same mechanism the cross-service authorizer uses, so
+      // registration order does not matter.
+      let fn = entry.functions.find(f => f.name === route.functionName);
+      let targetService = serviceName;
+      if (!fn || route.functionArn) {
+        const resolved = FunctionRegistry.getInstance().resolve(route.functionArn ?? route.functionName, serviceName);
+        if (resolved) {
+          fn = resolved.fn;
+          targetService = resolved.service.name;
+        }
+      }
       if (!fn) {
         return this.send(res, errorResponse(500, 'Internal Server Error'), corsHeaders);
       }
@@ -276,7 +288,7 @@ export class GatewayManager {
       const eventOptions = { request, route, pathParameters, stage, authorizer };
       const event = route.eventType === 'httpApi' ? buildV2Event(eventOptions) : buildV1Event(eventOptions);
 
-      const result = await LambdaRuntimeManager.getInstance().invoke(serviceName, fn, event);
+      const result = await LambdaRuntimeManager.getInstance().invoke(targetService, fn, event);
       if (!result.ok) {
         console.error(`❌ [${serviceName}] ${request.method} ${request.path} → ${fn.name}: ${result.errorType}: ${result.errorMessage}`);
         return this.send(res, errorResponse(route.eventType === 'httpApi' ? 500 : 502, 'Internal server error'), corsHeaders);
