@@ -22,6 +22,7 @@ import type {
   ArnResolutionContext,
 } from './cloudformation-parser.js';
 import type { HttpRoute, AuthorizerConfig, RegisteredFunction } from './serverless-state-parser.js';
+import { unwrapLambdaInvokeUri } from './lambda-invoke-uri.js';
 
 const ACCOUNT_ID = '000000000000';
 const PARTITION = 'aws';
@@ -76,11 +77,14 @@ function functionNameFromArn(value: string): string {
 
 // A concrete ARN/name → a local short name (when the service owns it) or a
 // cross-stack ARN carried on the route/authorizer for request-time resolution.
+// The input is unwrapped first: IntegrationUri/AuthorizerUri/FunctionName all
+// legitimately arrive as an API Gateway invocation URI wrapping the real ARN.
 function resolveTarget(arnOrName: string, localFunctions: RegisteredFunction[]): ResolvedTarget {
-  const fnName = functionNameFromArn(arnOrName);
+  const unwrapped = unwrapLambdaInvokeUri(arnOrName);
+  const fnName = functionNameFromArn(unwrapped);
   const local = localFunctions.find(f => f.fullName === fnName || f.name === fnName);
   if (local) return { functionName: local.name, fnName };
-  return { functionName: fnName, arn: arnOrName, fnName };
+  return { functionName: fnName, arn: unwrapped, fnName };
 }
 
 function buildAuthorizer(
@@ -116,13 +120,19 @@ export function assembleRawApiResources(parser: CloudFormationParser, input: Ass
   const lambdas = mapByLogicalId(resources.filter((r): r is LambdaResource => r.type === 'lambda'));
   const permissions = resources.filter((r): r is LambdaPermissionResource => r.type === 'lambda-permission');
 
-  const ctx: ArnResolutionContext = { region, accountId: ACCOUNT_ID, partition: PARTITION, lambdas, exports, warnings };
+  const ctx: ArnResolutionContext = { region, accountId: ACCOUNT_ID, partition: PARTITION, lambdas, apis, exports, warnings };
 
-  // Pre-reduce each apigateway-principal permission to (grantedFnName, sourceArn).
+  // Pre-reduce each apigateway-principal permission to (grantedTarget, sourceArn).
+  // FunctionName is NOT reliably an ARN: CloudFormation's `Ref` on a Lambda
+  // yields the function NAME, and templates also use a bare name or the
+  // apigateway invocation URI. Running the grant through the very same
+  // resolveTarget() the integration target uses normalizes BOTH sides to the
+  // same (fnName, local short name) pair, so the match below compares like with
+  // like instead of demanding two identical ARNs.
   const apigwGrants = permissions
     .filter(p => p.principal === APIGW_PRINCIPAL)
     .map(p => ({
-      fnName: functionNameFromArn(parser.resolveArnLike(p.functionRef, ctx).value),
+      target: resolveTarget(parser.resolveArnLike(p.functionRef, ctx).value, localFunctions),
       sourceArn: parser.resolveArnLike(p.sourceArn, ctx).value,
     }));
 
@@ -175,7 +185,9 @@ export function assembleRawApiResources(parser: CloudFormationParser, input: Ass
     }
 
     let sourceArn: string | undefined;
-    const grant = apigwGrants.find(g => g.fnName === target.fnName);
+    // Match by resolved function NAME or by local short name — either side may
+    // have arrived as an ARN, a Ref-resolved name or a bare name.
+    const grant = apigwGrants.find(g => g.target.fnName === target.fnName || g.target.functionName === target.functionName);
     if (grant) {
       sourceArn = grant.sourceArn;
     } else {

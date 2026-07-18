@@ -1,5 +1,5 @@
 import { DynamoDBClient, CreateTableCommand, ListTablesCommand, DeleteTableCommand, DescribeTableCommand, UpdateTimeToLiveCommand } from '@aws-sdk/client-dynamodb';
-import { SQSClient, CreateQueueCommand, ListQueuesCommand, GetQueueAttributesCommand, DeleteQueueCommand, GetQueueUrlCommand } from '@aws-sdk/client-sqs';
+import { SQSClient, CreateQueueCommand, ListQueuesCommand, GetQueueAttributesCommand, SetQueueAttributesCommand, DeleteQueueCommand, GetQueueUrlCommand } from '@aws-sdk/client-sqs';
 import { SNSClient, CreateTopicCommand, ListTopicsCommand, DeleteTopicCommand } from '@aws-sdk/client-sns';
 import {
   S3Client,
@@ -336,6 +336,10 @@ export class ResourceProvisioner {
           attributes.ContentBasedDeduplication = 'true';
         }
       }
+      const redrivePolicy = this.buildRedrivePolicy(resource);
+      if (redrivePolicy) {
+        attributes.RedrivePolicy = redrivePolicy;
+      }
 
       await this.sqsClient.send(
         new CreateQueueCommand({
@@ -347,9 +351,53 @@ export class ResourceProvisioner {
     } catch (error: any) {
       if (error.name === 'QueueAlreadyExists') {
         console.log(`  ⚠ SQS queue already exists: ${resource.name}`);
+        // CreateQueue cannot change the attributes of an existing queue, so a
+        // RedrivePolicy added to the template after the queue was first
+        // provisioned would silently never take effect. Push it separately.
+        await this.applyRedrivePolicy(resource);
       } else {
         throw error;
       }
+    }
+  }
+
+  // RedrivePolicy travels to SQS as a JSON *string* attribute. The dead-letter
+  // ARN is deterministic (AWS requires the DLQ in the same account and region as
+  // its source queue), so it is resolved from the template's logical-id map
+  // rather than from the live queue: a DLQ is frequently declared AFTER the
+  // queue that points at it and would not exist yet at this point.
+  private buildRedrivePolicy(resource: SQSResource): string | undefined {
+    const policy = resource.redrivePolicy;
+    if (!policy) return undefined;
+
+    let deadLetterTargetArn = policy.deadLetterTargetRef;
+    if (!deadLetterTargetArn.startsWith('arn:')) {
+      const target = this.resourcesByLogicalId.get(deadLetterTargetArn.split('::')[0]);
+      if (!target || target.type !== 'sqs') {
+        // Non-fatal: provision the queue without redrive rather than aborting.
+        console.warn(
+          `  ⚠ RedrivePolicy on ${resource.name} targets "${policy.deadLetterTargetRef}", which is not an SQS queue in this template — skipped`,
+        );
+        return undefined;
+      }
+      deadLetterTargetArn = `arn:aws:sqs:${this.currentRegion}:000000000000:${target.name}`;
+    }
+    return JSON.stringify({ deadLetterTargetArn, maxReceiveCount: policy.maxReceiveCount });
+  }
+
+  private async applyRedrivePolicy(resource: SQSResource): Promise<void> {
+    const redrivePolicy = this.buildRedrivePolicy(resource);
+    if (!redrivePolicy) return;
+    try {
+      const { QueueUrl } = await this.sqsClient.send(
+        new GetQueueUrlCommand({ QueueName: resource.name }),
+      );
+      await this.sqsClient.send(
+        new SetQueueAttributesCommand({ QueueUrl, Attributes: { RedrivePolicy: redrivePolicy } }),
+      );
+      console.log(`  ✓ Applied RedrivePolicy to existing queue: ${resource.name}`);
+    } catch (error: any) {
+      console.warn(`  ⚠ Failed to apply RedrivePolicy to ${resource.name}: ${error?.message || error}`);
     }
   }
 

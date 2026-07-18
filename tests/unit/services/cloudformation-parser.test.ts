@@ -267,6 +267,38 @@ describe('parseSQS', () => {
     } as never) as SQSResource[];
     expect(res.name).toBe('Q');
     expect(res.visibilityTimeout).toBeUndefined();
+    expect(res.redrivePolicy).toBeUndefined();
+  });
+
+  const withRedrive = (RedrivePolicy: unknown): SQSResource =>
+    (parser.parse({
+      Resources: { Q: { Type: 'AWS::SQS::Queue', Properties: { QueueName: 'q', RedrivePolicy } } },
+    } as never) as SQSResource[])[0];
+
+  it('carries RedrivePolicy with an Fn::GetAtt dead-letter target', () => {
+    expect(
+      withRedrive({ deadLetterTargetArn: { 'Fn::GetAtt': ['OrdersDlq', 'Arn'] }, maxReceiveCount: 3 })
+        .redrivePolicy,
+    ).toEqual({ deadLetterTargetRef: 'OrdersDlq::Arn', maxReceiveCount: 3 });
+  });
+
+  it('carries RedrivePolicy with a literal ARN and a stringified maxReceiveCount', () => {
+    expect(
+      withRedrive({ deadLetterTargetArn: 'arn:aws:sqs:us-east-1:000000000000:dlq', maxReceiveCount: '2' })
+        .redrivePolicy,
+    ).toEqual({ deadLetterTargetRef: 'arn:aws:sqs:us-east-1:000000000000:dlq', maxReceiveCount: 2 });
+  });
+
+  it('drops a RedrivePolicy it cannot make sense of', () => {
+    expect(withRedrive(undefined).redrivePolicy).toBeUndefined();
+    expect(withRedrive('a string').redrivePolicy).toBeUndefined();
+    expect(withRedrive({ maxReceiveCount: 3 }).redrivePolicy).toBeUndefined();
+    // Ref on a queue yields its URL, not an ARN — extractArn refuses it.
+    expect(withRedrive({ deadLetterTargetArn: { Ref: 'Dlq' }, maxReceiveCount: 3 }).redrivePolicy)
+      .toBeUndefined();
+    expect(withRedrive({ deadLetterTargetArn: 'arn:x' }).redrivePolicy).toBeUndefined();
+    expect(withRedrive({ deadLetterTargetArn: 'arn:x', maxReceiveCount: 0 }).redrivePolicy)
+      .toBeUndefined();
   });
 });
 
@@ -1222,6 +1254,28 @@ describe('parseApiRoute (AWS::ApiGatewayV2::Route)', () => {
     // Fn::Join whose last part is neither a string nor a {Ref}.
     expect(parseTarget({ 'Fn::Join': ['/', ['integrations', { 'Fn::Sub': 'x' }]] })).toBeUndefined();
   });
+
+  // The idiom a hand-written `resources:` block emits, and the one the
+  // Serverless Framework passes straight through into the compiled template.
+  // Before this was handled, integrationRef stayed undefined and the assembler
+  // skipped the route with `no ::Integration for Target "(none)"`.
+  it('parses the Fn::Sub Target idiom: !Sub "integrations/${LogicalId}"', () => {
+    const parseTarget = (Target: unknown) =>
+      (parser.parse({
+        Resources: { R: { Type: 'AWS::ApiGatewayV2::Route', Properties: { RouteKey: 'GET /x', Target } } },
+      } as never) as ApiRouteResource[])[0].integrationRef;
+
+    expect(parseTarget({ 'Fn::Sub': 'integrations/${SpacesIntegration}' })).toBe('SpacesIntegration');
+    // Whitespace inside the token and around the value is tolerated.
+    expect(parseTarget({ 'Fn::Sub': ' integrations/${ SpacesIntegration } ' })).toBe('SpacesIntegration');
+    // Fn::Sub's list form: [template, vars] — the template still comes first.
+    expect(parseTarget({ 'Fn::Sub': ['integrations/${SpacesIntegration}', {}] })).toBe('SpacesIntegration');
+    // An already-substituted literal under Fn::Sub works the same way.
+    expect(parseTarget({ 'Fn::Sub': 'integrations/Int9' })).toBe('Int9');
+    // A non-string template (or an empty list) names nothing.
+    expect(parseTarget({ 'Fn::Sub': [] })).toBeUndefined();
+    expect(parseTarget({ 'Fn::Sub': { bad: true } })).toBeUndefined();
+  });
 });
 
 describe('parseApiAuthorizer (AWS::ApiGatewayV2::Authorizer)', () => {
@@ -1360,6 +1414,30 @@ describe('resolveArnLike (intrinsic → ARN reducer)', () => {
     expect(parser.resolveArnLike({ 'Fn::GetAtt': ['Table', 'StreamArn'] }, ctxWith({ lambdas }))).toEqual({ value: 'Table.StreamArn', resolved: false });
     // String short-form Fn::GetAtt.
     expect(parser.resolveArnLike({ 'Fn::GetAtt': 'Table.Arn' }, ctxWith({ lambdas }))).toEqual({ value: 'Table.Arn', resolved: false });
+  });
+
+  // The Serverless Framework compiles a Permission's SourceArn as an Fn::Join
+  // over PSEUDO-PARAMETER Refs, not an Fn::Sub — so Ref has to reduce them too,
+  // otherwise the recorded ARN reads "arn:AWS::Partition:execute-api:...".
+  it('resolves Ref to the AWS pseudo-parameters', () => {
+    expect(parser.resolveArnLike({ Ref: 'AWS::Region' }, ctxWith())).toEqual({ value: 'sa-east-1', resolved: true });
+    expect(parser.resolveArnLike({ Ref: 'AWS::AccountId' }, ctxWith())).toEqual({ value: '000000000000', resolved: true });
+    expect(parser.resolveArnLike({ Ref: 'AWS::Partition' }, ctxWith())).toEqual({ value: 'aws', resolved: true });
+  });
+
+  // `${HttpApi}` / `{Ref: HttpApi}` names the framework's ::Api. AWS substitutes
+  // the generated API id; locally the API's name is the stable stand-in, and it
+  // only ever feeds the advisory SourceArn.
+  it('resolves Ref/Fn::Sub tokens naming a same-template ::Api to the API name', () => {
+    const apis = new Map([['HttpApi', { type: 'apigw-api', logicalId: 'HttpApi', name: 'dev-users-service', cors: true } as ApiResource]]);
+    expect(parser.resolveArnLike({ Ref: 'HttpApi' }, ctxWith({ lambdas, apis }))).toEqual({ value: 'dev-users-service', resolved: true });
+    expect(parser.resolveArnLike(
+      { 'Fn::Sub': 'arn:aws:execute-api:${AWS::Region}:${AWS::AccountId}:${HttpApi}/*' },
+      ctxWith({ lambdas, apis }),
+    )).toEqual({ value: 'arn:aws:execute-api:sa-east-1:000000000000:dev-users-service/*', resolved: true });
+    // A logical id that is neither a Lambda nor an ::Api still falls through.
+    expect(parser.resolveArnLike({ Ref: 'Ghost' }, ctxWith({ lambdas, apis }))).toEqual({ value: 'Ghost', resolved: false });
+    expect(parser.resolveArnLike({ 'Fn::Sub': '${Ghost}' }, ctxWith({ lambdas, apis }))).toEqual({ value: '${Ghost}', resolved: false });
   });
 
   it('resolves Fn::Sub with AWS pseudo-params, a lambda token, and a vars map', () => {

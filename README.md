@@ -41,9 +41,9 @@ LSS features come in two layers:
   - `help` — every command, flag and a config template
 - **Orchestration & provisioning**
   - Service registration API (`POST /api/services/register`) — the plugin reports only *where* the service lives
-  - CloudFormation parsing from `sls package` → auto-provisions tables, queues, topics, buckets, EventBridge buses/rules and OpenSearch collections
+  - CloudFormation parsing from `sls package` → auto-provisions tables, queues (incl. `RedrivePolicy`), topics, buckets (incl. `CorsConfiguration`), secrets, EventBridge buses/rules, raw ApiGatewayV2 routes and OpenSearch collections
   - `autoPackage` — runs `sls package` on demand when the template is missing
-  - Automatic event source mappings: SQS / DynamoDB streams / S3 notifications / EventBridge rules → Lambda
+  - Automatic event source mappings: SQS / DynamoDB streams / S3 notifications / EventBridge rules → Lambda — with AWS-faithful failure semantics (`FilterCriteria` enforced, `ReportBatchItemFailures` partial batches, `maximumRetryAttempts` incl. the `-1` "until the record ages out" default)
   - Per-instance isolation — `stateDir` + port-scoped PID/log paths let many LSS instances coexist (one per project)
   - Config: `lss.config.json` / `.lssrc` + env overrides (`LSS_*`); public-safe `GET /api/config` snapshot (never leaks the auth token)
 - **Lambda runtime & API Gateway emulation** (serverless-offline replacement — same `30xx`/`130xx` ports)
@@ -53,6 +53,7 @@ LSS features come in two layers:
   - Lambda Invoke API on `130xx` (`X-Amz-Invocation-Type` RequestResponse/Event/DryRun, `X-Amz-Function-Error`)
   - API Gateway proxy on `30xx`: route precedence (literal > `{param}` > `{proxy+}` > `$default`, method > ANY), payload v1/v2, CORS preflight, `port-conflict` status
   - Lambda authorizers: REST `token`/`request`, HTTP API `request` (simple responses), identity-source extraction, TTL cache + cache-clear, cross-service resolution by ARN
+  - Raw `AWS::ApiGatewayV2::*` routes from CFN `resources:` — on their own `::Api` or the framework's `HttpApi`; `Target`/`IntegrationUri`/`AuthorizerUri`/`SourceArn` reduced through `Fn::Sub` (incl. `${Id.Arn}`), `Fn::Join`, `Fn::GetAtt`, `Fn::ImportValue` and the apigateway invocation-URI wrapper; de-duplicated against `httpApi:` events
   - Hot reload: source changes restart the worker; `serverless.yml` changes re-package + re-register
 - **Explorers & testing primitives** (HTTP API + dashboard)
   - **Queues** (`/api/queues`): list + metrics (available/inFlight/processed/delayed), send/receive/delete/purge (FIFO group/dedup), `reset-processed`, `await-idle` (block until drained), `hold`/`captured`/`release` (capture-and-replay)
@@ -69,6 +70,7 @@ LSS features come in two layers:
 - **Programmatic client (`LssClient`)** — the CLI/dashboard surface from code: HTTP namespaces `seeds`, `queues`, `dynamo`, `buckets`, `resources`, `services`, `lambdas`, `apis`, `config`, `health` + `lifecycle` (`start`/`stop`/`status`/`logs`/`waitUntilReady`, shells out to the CLI)
 - **DynamoDB dev proxy** — optional reverse proxy on `:8000` (`enableDynamoProxy`) forwarding to the active engine, for tooling that expects DynamoDB on the standard port
 - **DynamoDB seeds** — `seeds/{tableName}.json` fixtures auto-applied on table creation, re-applied via `lss seed` or the dashboard
+- **Secret seeds** — `seeds/secrets/{name}.json` fixtures (plus an optional `secrets:` config map) created on boot *before* services are reactivated, so a handler's first `GetSecretValue` finds an `AWSCURRENT` version with no bootstrap step; idempotent (an existing secret is never clobbered) and non-fatal
 
 ### 🆓 Engine: LocalStack Free (community image, Docker)
 
@@ -111,11 +113,11 @@ migration story, and [docs/SELF_ENGINE.md](docs/SELF_ENGINE.md) for the full cov
   - **Streams** delivered in-process (TRIM_HORIZON/LATEST, retry-then-advance, OnFailure SQS destination)
   - Lazy **TTL** expiry; AWS error names the provisioner relies on
   - Works unchanged with platform **seeds**, the DynamoDB explorer and the dev proxy
-- **SQS** — CreateQueue (idempotent), send/receive(+batch)/delete/purge, ChangeMessageVisibility; FIFO groups/dedup, event-driven long poll, visibility redelivery, live counters, MD5 digests, `x-amzn-query-error` compat header (`RedrivePolicy` round-trips but DLQ redrive is not enforced)
+- **SQS** — CreateQueue (idempotent), send/receive(+batch)/delete/purge, ChangeMessageVisibility; FIFO groups/dedup, event-driven long poll, visibility redelivery, **queue-level redrive** (`RedrivePolicy` → DLQ when `ApproximateReceiveCount` exceeds `maxReceiveCount`, keeping the `MessageId`/body/MD5s and unblocking the FIFO `MessageGroupId`), live counters, MD5 digests, `x-amzn-query-error` compat header
 - **S3** — buckets (create/head/delete/list, location, versioning flag), ListObjectsV2 (prefix/delimiter/pagination/encoding), PutObject (aws-chunked), **presigned POST browser uploads** (`multipart/form-data`, `${filename}`, `success_action_status`/`redirect`, `x-amz-meta-*`), **presigned GET/HEAD `response-*` header overrides** (content-disposition/type/…), **CORS** (`Put`/`Get`/`DeleteBucketCors`, preflight `OPTIONS`, `Access-Control-Allow-Origin` on responses — matching rule or dev-permissive default), GetObject (Range), HeadObject, DeleteObject(s), CopyObject, notification config — bodies streamed to disk, never held in heap
 - **EventBridge** — buses/rules/targets, PutEvents per-entry results, pattern matcher (exact, array-OR, `prefix`, `exists`, nested), rule/schedule targets to **Lambda or SQS** (FIFO `MessageGroupId`), schedules (`rate()` + 6-field cron) from one timer wheel
 - **OpenSearch Serverless** — `aoss` control plane (Create/BatchGet/List/DeleteCollection, deterministic ids, `collectionEndpoint`) + REST data plane under `/_aoss/<collection>`: index & document CRUD with versioning, `_bulk` NDJSON, `_search`/`_count` (match/term/terms/range/prefix/wildcard/exists/ids/bool + sort, `_source` filtering, `?q=`), `terms`+metric aggregations, `_mapping`, `_refresh`, `_cat/indices`
-- **Secrets Manager** — Create/Get/Put/Update/Describe/Delete/Restore/ListSecrets, Tag/Untag, GetRandomPassword; real `AWSCURRENT`/`AWSPREVIOUS` staging, `SecretString`/`SecretBinary`, `ClientRequestToken` idempotency, per-region scoping (values persisted, not encrypted; create via SDK — CFN provisioning pending)
+- **Secrets Manager** — Create/Get/Put/Update/Describe/Delete/Restore/ListSecrets, Tag/Untag, GetRandomPassword; real `AWSCURRENT`/`AWSPREVIOUS` staging, `SecretString`/`SecretBinary`, `ClientRequestToken` idempotency, per-region scoping (values persisted, not encrypted); secrets are staged before the first read from CFN `AWS::SecretsManager::Secret` (with `GenerateSecretString` expansion) and from boot seeds — `seeds/secrets/<name>.json` plus the `secrets:` config map
 - **SNS** (minimal) — CreateTopic, ListTopics, DeleteTopic, GetTopicAttributes, Publish (logged + counted, no fan-out)
 - **STS** — GetCallerIdentity
 - **Lambda control plane** — proxy absorption as metadata (`INVOKE_URL` kept as HTTP fallback), event source mapping lifecycle (`Enabled` toggle = QueueInspector hold/release), Invoke passthrough

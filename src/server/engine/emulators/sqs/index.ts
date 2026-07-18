@@ -15,8 +15,13 @@ import type {
   TargetEmulator,
 } from '../../types.js';
 import type { CatalogStore } from '../../store/store-types.js';
-import { SqsQueue } from './queue.js';
-import type { SendMessageOutcome, SerializedQueueMessages, StoredMessage } from './queue.js';
+import { parseRedrivePolicy, SqsQueue } from './queue.js';
+import type {
+  RedriveTarget,
+  SendMessageOutcome,
+  SerializedQueueMessages,
+  StoredMessage,
+} from './queue.js';
 import { md5OfMessageAttributes } from './md5.js';
 import type { SqsMessageAttributeValue } from './md5.js';
 
@@ -161,6 +166,10 @@ export class SqsEmulator implements TargetEmulator {
   private readonly catalogs = new Map<string, CatalogStore<QueueRecord>>();
   // Live message state by `${region}/${queueName}`.
   private readonly runtimes = new Map<string, SqsQueue>();
+  // Source queues already warned about an unresolvable RedrivePolicy target —
+  // the check runs on every redelivery, and a poison message would otherwise
+  // reprint the same warning every visibility timeout.
+  private readonly redriveWarned = new Set<string>();
 
   constructor(ctx: EngineContext) {
     this.ctx = ctx;
@@ -206,11 +215,11 @@ export class SqsEmulator implements TargetEmulator {
   // ------------------------------------------------------------------
 
   queueExists(region: string, queueName: string): boolean {
-    return this.catalogs.get(region)?.get(queueName) !== undefined;
+    return this.queueRecord(region, queueName) !== undefined;
   }
 
   hasVisibleMessages(region: string, queueName: string): boolean {
-    const record = this.catalogs.get(region)?.get(queueName);
+    const record = this.queueRecord(region, queueName);
     const runtime = this.runtimes.get(`${region}/${queueName}`);
     if (!record || !runtime) return false;
     return runtime.hasDeliverable(this.attrMs(record, 'MessageRetentionPeriod'));
@@ -219,7 +228,7 @@ export class SqsEmulator implements TargetEmulator {
   // Marks up to `max` messages in-flight with the queue's VisibilityTimeout
   // and returns them shaped for the Lambda `Records` payload.
   receiveForDelivery(region: string, queueName: string, max: number): DeliveredMessage[] {
-    const record = this.catalogs.get(region)?.get(queueName);
+    const record = this.queueRecord(region, queueName);
     if (!record) return [];
     const runtime = this.runtimeFor(region, record);
     const messages = runtime.receive({
@@ -651,7 +660,55 @@ export class SqsEmulator implements TargetEmulator {
     return new SqsQueue(queueName, {
       fifo,
       onVisible: () => this.ctx.bus.emit('sqs:message-visible', { region, queueName }),
+      redrive: () => this.resolveRedrive(region, queueName),
     });
+  }
+
+  // Queue metadata for a region this emulator has already loaded. Undefined for
+  // a region no wire call (or ensureRegionLoaded) has touched yet.
+  private queueRecord(region: string, queueName: string): QueueRecord | undefined {
+    return this.catalogs.get(region)?.get(queueName);
+  }
+
+  // Queue-level redrive: resolve `queueName`'s RedrivePolicy into a live
+  // dead-letter queue. Re-resolved on every redelivery (see RedriveResolver) —
+  // the DLQ is often provisioned AFTER the queue pointing at it, and
+  // SetQueueAttributes can change the policy at any time.
+  //
+  // Deliberately NOT implemented (they change nothing about how a failing
+  // consumer behaves locally, which is what this emulates):
+  //   - RedriveAllowPolicy — which source queues a DLQ accepts messages from.
+  //   - The manual redrive API — StartMessageMoveTask / ListMessageMoveTasks /
+  //     CancelMessageMoveTask (draining a DLQ back into its source).
+  private resolveRedrive(region: string, queueName: string): RedriveTarget | undefined {
+    const policy = parseRedrivePolicy(
+      this.queueRecord(region, queueName)?.attributes.RedrivePolicy,
+    );
+    if (!policy) return undefined;
+
+    // AWS requires the dead-letter queue to live in the same account and region
+    // as its source queue, so only the queue NAME in deadLetterTargetArn is
+    // meaningful here — reuse the emulator's one ARN parser.
+    const dlqName = queueNameFromArn(policy.deadLetterTargetArn);
+    const dlqRecord = this.queueRecord(region, dlqName);
+    if (!dlqRecord) {
+      // Non-fatal, like every other provisioning gap: warn once and leave the
+      // queue without redrive (messages keep redelivering until retention).
+      const key = `${region}/${queueName}`;
+      if (!this.redriveWarned.has(key)) {
+        this.redriveWarned.add(key);
+        console.warn(
+          `[engine-sqs] RedrivePolicy on queue "${queueName}" targets unknown queue "${dlqName}" — redrive disabled`,
+        );
+      }
+      return undefined;
+    }
+
+    const dlq = this.runtimeFor(region, dlqRecord);
+    return {
+      maxReceiveCount: policy.maxReceiveCount,
+      move: message => dlq.acceptRedriven(message),
+    };
   }
 
   // Resolve `input.QueueUrl` (last path segment is the queue name) to its

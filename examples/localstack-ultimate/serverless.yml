@@ -270,9 +270,10 @@ resources:
 
     # VisibilityTimeout is deliberately short (10s) so the DLQ demo resolves in
     # ~30s instead of minutes: a poison message is re-received every 10s and
-    # redriven to the DLQ after the 3rd receive. NOTE: LSS's CloudFormation
-    # parser does not carry RedrivePolicy yet, so `npm run offline` applies it
-    # to the live queue via scripts/wire-dlq.js right after registration.
+    # redriven to the DLQ after the 3rd receive. LSS's CloudFormation parser now
+    # carries RedrivePolicy through to CreateQueue, so `npm run offline`'s
+    # scripts/wire-dlq.js step is only a no-op safety net (it re-applies the same
+    # policy to a queue provisioned by an older LSS).
     OrderProcessingQueue:
       Type: AWS::SQS::Queue
       Properties:

@@ -54,22 +54,21 @@ serverless-offline).
 
 Anything not listed answers with an explicit AWS-shaped error naming this file
 — or is forwarded verbatim to `fallbackEndpoint` when configured. Unknown
-operations never silently succeed. Two known divergences are the exception:
-SQS `RedrivePolicy` (accepted but not enforced) and S3 object ACL/policy
-sub-resources (treated as plain object operations) — see
+operations never silently succeed. One known divergence is the exception: S3
+object ACL/policy sub-resources (treated as plain object operations) — see
 [Known divergences from AWS](#known-divergences-from-aws).
 
 | Service | Implemented (v1) | Explicit error until the hardening phase |
 |---|---|---|
 | DynamoDB | CreateTable, DescribeTable, DeleteTable, ListTables, Update/DescribeTimeToLive, Put/Get/Delete/UpdateItem, Query, Scan, BatchGetItem, BatchWriteItem, TransactWriteItems/TransactGetItems (all-or-nothing, `CancellationReasons` with `ReturnValuesOnConditionCheckFailure`, `ClientRequestToken` idempotency, stream records for committed writes) — full expression language (KeyCondition, Condition, Filter, Update, Projection), GSI/LSI with projection + sparse semantics, streams (in-process), lazy TTL, decimal-exact `N` arithmetic | UpdateTable, PartiQL, legacy parameters (`KeyConditions`, `Expected`, …), Streams wire API |
-| SQS | CreateQueue (idempotent), GetQueueUrl, Get/SetQueueAttributes (live counters), ListQueues, DeleteQueue, SendMessage(+Batch), ReceiveMessage (event-driven long poll), DeleteMessage(+Batch), PurgeQueue, ChangeMessageVisibility — FIFO groups/dedup, visibility redelivery, `x-amzn-query-error` compat header, MD5 digests. RedrivePolicy is accepted and round-trips through Get/SetQueueAttributes, but DLQ redrive is NOT enforced — failed messages redeliver via visibility timeout | Legacy Query protocol (aws-sdk v2 / old boto3 — loud error suggests `fallbackEndpoint`), tags |
-| S3 | Create/Head/Delete bucket, ListBuckets, GetBucketLocation, versioning flag, notification configuration (incl. legacy `CloudFunctionConfiguration` XML), ListObjectsV2 (prefix/delimiter/pagination/encoding-type), PutObject (aws-chunked decoded), **presigned POST (browser form upload: multipart/form-data, `${filename}` substitution, `success_action_status`/`success_action_redirect`, `x-amz-meta-*` fields)**, **CORS (`Put`/`Get`/`DeleteBucketCors`, preflight `OPTIONS`, `Access-Control-Allow-Origin` on responses — honors a matching bucket rule, else a dev-permissive default so browser uploads work out of the box)**, GetObject (Range, **`response-*` header overrides on presigned GET/HEAD — content-disposition/type/encoding/language/cache-control/expires**), HeadObject, DeleteObject(s), CopyObject — bodies streamed to disk blobs, never held in memory | Multipart uploads, version stacks. Object ACL/policy sub-resources (`?acl`, `?policy`) are **not** recognized — requests dispatch on HTTP method alone and behave as plain object operations (PutObjectAcl overwrites the object body): a known divergence, not an explicit error |
+| SQS | CreateQueue (idempotent), GetQueueUrl, Get/SetQueueAttributes (live counters), ListQueues, DeleteQueue, SendMessage(+Batch), ReceiveMessage (event-driven long poll), DeleteMessage(+Batch), PurgeQueue, ChangeMessageVisibility — FIFO groups/dedup, visibility redelivery, `x-amzn-query-error` compat header, MD5 digests, **queue-level redrive**: a `RedrivePolicy` (`{deadLetterTargetArn, maxReceiveCount}`) moves a message to its DLQ once `ApproximateReceiveCount` exceeds `maxReceiveCount`, preserving `MessageId`/body/`MessageAttributes`/MD5s and releasing the FIFO `MessageGroupId` | Legacy Query protocol (aws-sdk v2 / old boto3 — loud error suggests `fallbackEndpoint`), `RedriveAllowPolicy`, the manual redrive API (`StartMessageMoveTask`/`ListMessageMoveTasks`/`CancelMessageMoveTask`), tags |
+| S3 | Create/Head/Delete bucket, ListBuckets, GetBucketLocation, versioning flag, notification configuration (incl. legacy `CloudFunctionConfiguration` XML), ListObjectsV2 (prefix/delimiter/pagination/encoding-type), PutObject (aws-chunked decoded), **presigned POST (browser form upload: multipart/form-data, `${filename}` substitution, `success_action_status`/`success_action_redirect`, `x-amz-meta-*` fields)**, **CORS (`Put`/`Get`/`DeleteBucketCors`, preflight `OPTIONS`, `Access-Control-Allow-Origin` on responses — honors a matching bucket rule, else a dev-permissive default so browser uploads work out of the box; a bucket's CloudFormation `CorsConfiguration.CorsRules[]` is applied with `PutBucketCors` at create time, so the declared rules are live on the first boot instead of needing a bootstrap call)**, GetObject (Range, **`response-*` header overrides on presigned GET/HEAD — content-disposition/type/encoding/language/cache-control/expires**), HeadObject, DeleteObject(s), CopyObject — bodies streamed to disk blobs, never held in memory | Multipart uploads, version stacks. Object ACL/policy sub-resources (`?acl`, `?policy`) are **not** recognized — requests dispatch on HTTP method alone and behave as plain object operations (PutObjectAcl overwrites the object body): a known divergence, not an explicit error |
 | EventBridge | Create/Delete/DescribeEventBus, ListEventBuses, PutRule (pattern validation), DeleteRule, Enable/DisableRule, Put/RemoveTargets, ListRules, ListTargetsByRule, PutEvents (per-entry results, pattern matching: exact, array-OR, `prefix`, `exists`, nested) | `anything-but`, `numeric`, `suffix`, `wildcard`, `cidr` pattern operators (rejected at PutRule), Archives |
 | Lambda (control plane) | CreateFunction (metadata absorption), GetFunction, ListFunctions, UpdateFunctionConfiguration, DeleteFunction, Add/RemovePermission, Create/Get/List/Update/DeleteEventSourceMapping (Enabled toggle = QueueInspector hold/release), Invoke (in-process via the LSS runtime; `X-Amz-Invocation-Type` honored) | Versions/aliases, concurrency APIs |
 | OpenSearch Serverless | Control plane (`aoss`): CreateCollection (deterministic ids, ACTIVE immediately), BatchGetCollection (hands out the local `collectionEndpoint`), ListCollections, DeleteCollection (id or name). Data plane under `<engine>/_aoss/<collection>`: index create/get/delete/HEAD, `_mapping` get/merge, `_doc`/`_create`/`_update` (deep merge, `doc_as_upsert`/`upsert`) with versioning, auto-create on first write, `_bulk` NDJSON with per-item results, `_search`/`_count` (`match`, `match_phrase`, `multi_match`, `term`, `terms`, `range`, `prefix`, `wildcard`, `exists`, `ids`, `bool` + `minimum_should_match`; `sort`, `from`/`size`, `_source` filtering, `?q=`), aggregations (`terms`, `avg`, `sum`, `min`, `max`, `value_count`), `_refresh`, `_cat/indices` | Security/access/lifecycle policy APIs, VPC endpoints, scripted updates, `_mget`, scroll/PIT, sub-aggregations, relevance scoring (`_score` is a constant 1), analyzers/k-NN — all rejected with an explicit OpenSearch-shaped error |
 | SNS | CreateTopic, ListTopics, DeleteTopic, GetTopicAttributes, Publish (logged + counted, no fan-out) | Subscriptions and delivery |
 | STS | GetCallerIdentity | Everything else |
-| Secrets Manager | CreateSecret, GetSecretValue, PutSecretValue, UpdateSecret, DescribeSecret, DeleteSecret (recovery window + `ForceDeleteWithoutRecovery`), RestoreSecret, ListSecrets, TagResource/UntagResource, GetRandomPassword — real `AWSCURRENT`/`AWSPREVIOUS` version staging, `SecretString`/`SecretBinary`, `ClientRequestToken` idempotency, per-region scoping. Values persist in a catalog (not encrypted locally). Browsable in the dashboard's **Secrets** tab (list, version stages, reveal value). Retires the LocalStack Secrets Manager the engine used to proxy through `fallbackEndpoint` | Rotation scheduling/Lambda, replication, KMS encryption (`KmsKeyId` accepted and ignored), resource policies. CloudFormation `AWS::SecretsManager::Secret` is not yet provisioned on registration — create secrets via the SDK (`CreateSecret`) |
+| Secrets Manager | CreateSecret, GetSecretValue, PutSecretValue, UpdateSecret, DescribeSecret, DeleteSecret (recovery window + `ForceDeleteWithoutRecovery`), RestoreSecret, ListSecrets, TagResource/UntagResource, GetRandomPassword — real `AWSCURRENT`/`AWSPREVIOUS` version staging, `SecretString`/`SecretBinary`, `ClientRequestToken` idempotency, per-region scoping. Values persist in a catalog (not encrypted locally). Browsable in the dashboard's **Secrets** tab (list, version stages, reveal value). Retires the LocalStack Secrets Manager the engine used to proxy through `fallbackEndpoint`. Secrets are populated before the first read by two boot paths — CloudFormation `AWS::SecretsManager::Secret` provisioned at registration, and **boot seeds** (see below) | Rotation scheduling/Lambda, replication, KMS encryption (`KmsKeyId` accepted and ignored), resource policies |
 
 ### Eventing (delivered in-process to the LSS Lambda runtime)
 
@@ -79,12 +78,62 @@ sub-resources (treated as plain object operations) — see
 - **DynamoDB Streams → Lambda**: single implicit shard (single-writer order),
   TRIM_HORIZON/LATEST, retry-then-advance with optional OnFailure SQS
   destination (`DDBStreamBatchInfo` envelope).
+- **Event source mapping semantics** (both stream and SQS mappings):
+  - `FilterCriteria` is **enforced**, not just stored: every `Filters[].Pattern`
+    is a JSON-encoded EventBridge-style content filter, patterns are OR'd and
+    sibling keys inside one pattern AND'd, reusing the engine's own pattern
+    matcher. Absent or empty criteria filter nothing; structurally invalid
+    criteria are rejected at write time (`InvalidArgumentException` — non-object
+    `Filters`, more than the AWS limit of 5 patterns, an unparseable `Pattern`,
+    an unsupported operator). Filtered-out **stream** records still advance the
+    cursor, so they are dropped once and never reappear; filtered-out **SQS**
+    messages leave the batch before the handler is invoked.
+  - `maximumRetryAttempts` follows the AWS default: omitted or `-1` retries the
+    failing batch **until the record ages out of the stream** (there is no
+    5-attempt cap), a positive N means N retries. Whichever ends the loop is
+    logged and carried as `RetryAttemptsExhausted` / `RecordAgeExpired` on the
+    OnFailure envelope.
+  - `ReportBatchItemFailures` (declared via `FunctionResponseTypes`) is honored:
+    a **stream** batch checkpoints just before the *earliest* still-failing
+    record and only that suffix is retried and eventually sent to the OnFailure
+    destination (an empty `batchItemFailures` list commits the whole batch; a
+    malformed response retries it like a thrown handler; the attempt budget is
+    not reset when the suffix shrinks). For **SQS**, only the receipt handles
+    *not* reported as failures are deleted, so the reported ones redeliver on
+    their visibility timeout instead of the batch being dropped or replayed
+    whole.
 - **S3 notifications**: `s3:ObjectCreated:*` globs, prefix/suffix filters,
   `eventVersion 2.1` records.
 - **EventBridge**: rule and schedule targets deliver to **Lambda** (invoke) or
   **SQS** (enqueue the resolved event as a message — `SqsParameters.MessageGroupId`
   honored for FIFO targets), with `Input`/`InputPath`; schedules (`rate(...)` and
   6-field cron) fire from a single timer wheel.
+
+### Secrets on boot
+
+Two paths make sure a secret **exists with an `AWSCURRENT` version** before a
+handler's first `GetSecretValue`, so nothing has to run a bootstrap
+`CreateSecret` first:
+
+- **CloudFormation** — `AWS::SecretsManager::Secret` declared in `resources:` is
+  created at service registration. `GenerateSecretString` is expanded the way
+  CloudFormation expands it: `GetRandomPassword` with the real AWS defaults
+  (`PasswordLength` 32, every character class, `RequireEachIncludedType` true),
+  then the generated value injected into `SecretStringTemplate` at
+  `GenerateStringKey` when both are given.
+- **Boot seeds** — for secrets no template declares: `seeds/secrets/<name>.json`
+  files under `seedsDir` (walked recursively, so nested directories map to
+  `/`-separated names like `billing/receipt-signing-key`) merged with an
+  optional `secrets:` map in `lss.config.json`, the config map winning a name
+  collision with a warning. A value is either the `SecretString` itself (a bare
+  string, or a bare JSON object that *is* the payload) or a descriptor with
+  `secretString` / `generateSecretString` plus `description` / `kmsKeyId` /
+  `tags`. Seeds are applied **before cached services are reactivated**, so even
+  a handler fired by a relay during rehydrate finds its secret already staged.
+
+Both paths share one value resolver, are idempotent (an existing active secret
+is skipped, never clobbered; one scheduled for deletion is warned and skipped)
+and non-fatal (a failure warns and boot continues).
 
 ## Storage & footprint
 
@@ -107,9 +156,11 @@ run `lss seed`. Worst case, delete `dataDir` and start clean.
   from the base table (correct semantics, dev-scale performance).
 - SQS legacy Query protocol (pre-JSON SDKs) is not served natively — use
   `fallbackEndpoint`.
-- SQS: `RedrivePolicy` is accepted and round-trips through
-  Get/SetQueueAttributes, but DLQ redrive is NOT enforced — failed messages
-  redeliver via visibility timeout.
+- SQS: queue-level redrive is enforced, but the DLQ must live in the same
+  account/region (only the queue name in `deadLetterTargetArn` is read).
+  `RedriveAllowPolicy` is stored and returned, never enforced, and the manual
+  redrive API (`StartMessageMoveTask` and friends) is not implemented — drain a
+  DLQ with ReceiveMessage/SendMessage instead.
 - S3: object ACL/policy sub-resources (`?acl`, `?policy`) are not recognized —
   requests dispatch on HTTP method alone and behave as plain object operations
   (a PutObjectAcl overwrites the object body).

@@ -764,6 +764,127 @@ describe('SqsEmulator', () => {
     });
   });
 
+  describe('RedrivePolicy → DLQ', () => {
+    const policyFor = (queueName: string, maxReceiveCount: number) =>
+      JSON.stringify({
+        deadLetterTargetArn: `arn:aws:sqs:us-east-1:000000000000:${queueName}`,
+        maxReceiveCount,
+      });
+
+    // VisibilityTimeout 0 makes every failed delivery expire on the next tick,
+    // so a redrive is observable in milliseconds instead of seconds.
+    const receiveOnce = async (url: string) => {
+      const res = await call('ReceiveMessage', { QueueUrl: url, AttributeNames: ['All'] });
+      await sleep(20); // let the visibility timer fire
+      return res.Messages?.[0];
+    };
+
+    test('moves the message to the DLQ once ApproximateReceiveCount exceeds maxReceiveCount', async () => {
+      const dlqUrl = await createQueue('orders-dlq');
+      const url = await createQueue('orders', {
+        VisibilityTimeout: '0',
+        RedrivePolicy: policyFor('orders-dlq', 2),
+      });
+      const sent = await call('SendMessage', {
+        QueueUrl: url,
+        MessageBody: 'poison',
+        MessageAttributes: { Color: { DataType: 'String', StringValue: 'gray' } },
+      });
+
+      const first = await receiveOnce(url);
+      expect(first.Attributes.ApproximateReceiveCount).toBe('1');
+      const second = await receiveOnce(url);
+      expect(second.Attributes.ApproximateReceiveCount).toBe('2');
+
+      // Delivered exactly twice: the source queue is now empty…
+      expect(await receiveOnce(url)).toBeUndefined();
+      // …and the message is on the DLQ with its identity intact.
+      const moved = await call('ReceiveMessage', {
+        QueueUrl: dlqUrl,
+        AttributeNames: ['All'],
+        MessageAttributeNames: ['All'],
+      });
+      expect(moved.Messages).toHaveLength(1);
+      expect(moved.Messages[0].MessageId).toBe(sent.MessageId);
+      expect(moved.Messages[0].Body).toBe('poison');
+      expect(moved.Messages[0].MD5OfBody).toBe(sent.MD5OfMessageBody);
+      expect(moved.Messages[0].MD5OfMessageAttributes).toBe(sent.MD5OfMessageAttributes);
+      expect(moved.Messages[0].MessageAttributes.Color.StringValue).toBe('gray');
+      // The DLQ counts its own deliveries.
+      expect(moved.Messages[0].Attributes.ApproximateReceiveCount).toBe('1');
+    });
+
+    test('the policy is re-read per redelivery: SetQueueAttributes wires a DLQ created later', async () => {
+      const url = await createQueue('late', { VisibilityTimeout: '0' });
+      await call('SendMessage', { QueueUrl: url, MessageBody: 'x' });
+      expect(await receiveOnce(url)).toBeDefined();
+
+      // Neither the DLQ nor the policy existed during the first delivery.
+      const dlqUrl = await createQueue('late-dlq');
+      await call('SetQueueAttributes', {
+        QueueUrl: url,
+        Attributes: { RedrivePolicy: policyFor('late-dlq', 1) },
+      });
+
+      // The next delivery exceeds the freshly-attached threshold and moves.
+      expect((await receiveOnce(url)).Attributes.ApproximateReceiveCount).toBe('2');
+      expect(await receiveOnce(url)).toBeUndefined();
+      const moved = await call('ReceiveMessage', { QueueUrl: dlqUrl });
+      expect(moved.Messages).toHaveLength(1);
+      expect(moved.Messages[0].Body).toBe('x');
+    });
+
+    test('an unresolvable dead-letter target warns ONCE and keeps redelivering', async () => {
+      const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+      const url = await createQueue('orphan', {
+        VisibilityTimeout: '0',
+        RedrivePolicy: policyFor('missing-dlq', 1),
+      });
+      await call('SendMessage', { QueueUrl: url, MessageBody: 'x' });
+
+      expect((await receiveOnce(url)).Attributes.ApproximateReceiveCount).toBe('1');
+      expect((await receiveOnce(url)).Attributes.ApproximateReceiveCount).toBe('2');
+      // Non-fatal: the queue keeps working, and the warning is not repeated on
+      // every visibility timeout.
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(warn.mock.calls[0][0]).toContain('missing-dlq');
+      warn.mockRestore();
+    });
+
+    test('a malformed policy is ignored (the queue keeps redelivering)', async () => {
+      const url = await createQueue('bad-policy', {
+        VisibilityTimeout: '0',
+        RedrivePolicy: 'not-json',
+      });
+      await call('SendMessage', { QueueUrl: url, MessageBody: 'x' });
+      expect((await receiveOnce(url)).Attributes.ApproximateReceiveCount).toBe('1');
+      expect((await receiveOnce(url)).Attributes.ApproximateReceiveCount).toBe('2');
+    });
+
+    test('a queue whose catalog record vanished mid-flight redelivers instead of redriving', async () => {
+      const store = new FakeStore();
+      ctx = makeCtx(store);
+      emulator = new SqsEmulator(ctx);
+      const dlqUrl = await createQueue('ghost-dlq');
+      const url = await createQueue('ghost', {
+        VisibilityTimeout: '0',
+        RedrivePolicy: policyFor('ghost-dlq', 1),
+      });
+      await call('SendMessage', { QueueUrl: url, MessageBody: 'x' });
+      await call('ReceiveMessage', { QueueUrl: url });
+
+      // Drop the record behind the emulator's back (DeleteQueue would also
+      // dispose the runtime): the live runtime is now policy-less.
+      store.catalog('sqs/us-east-1/queues').delete('ghost');
+      await sleep(20);
+
+      const dlq = await call('GetQueueAttributes', { QueueUrl: dlqUrl, AttributeNames: ['All'] });
+      expect(dlq.Attributes.ApproximateNumberOfMessages).toBe('0');
+      const state = emulator.serializeMessages().queues.find(q => q.queueName === 'ghost');
+      expect(state?.state.messages).toHaveLength(1);
+    });
+  });
+
   describe('persistence seams', () => {
     test('queue attributes survive into a new emulator over the same store', async () => {
       const store = new FakeStore();

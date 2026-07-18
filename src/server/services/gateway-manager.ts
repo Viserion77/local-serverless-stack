@@ -8,6 +8,7 @@ import http from 'http';
 import { FunctionRegistry, ServiceEntry } from './function-registry.js';
 import { LambdaRuntimeManager } from './lambda-runtime-manager.js';
 import { AuthorizerService } from './authorizer-service.js';
+import { LAMBDA_INVOKE_PATH } from './lambda-invoke-uri.js';
 import {
   IncomingRequest,
   matchRoute,
@@ -36,8 +37,6 @@ interface ServiceListeners {
   // never outlives its service.
   rebindTimers: Set<NodeJS.Timeout>;
 }
-
-const INVOKE_PATH = /^\/2015-03-31\/functions\/([^/]+)\/invocations\/?$/;
 
 export class GatewayManager {
   private static instance: GatewayManager;
@@ -331,7 +330,7 @@ export class GatewayManager {
   private async handleInvokeRequest(serviceName: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     try {
       const request = await this.readRequest(req);
-      const match = INVOKE_PATH.exec(request.path);
+      const match = LAMBDA_INVOKE_PATH.exec(request.path);
       if (!match || request.method.toUpperCase() !== 'POST') {
         res.writeHead(404, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ Message: `Unsupported path: ${request.path}` }));

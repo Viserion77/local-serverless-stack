@@ -94,8 +94,8 @@ npm run lss:start
 #    LSS (3111), which provisions every CloudFormation resource into the Pro
 #    LocalStack on 4571 and wires the S3 -> onUpload notification, the
 #    EventBridge bus/rules and the SQS event source mapping. In between, the
-#    script applies the queue's RedrivePolicy via scripts/wire-dlq.js (LSS's
-#    CloudFormation parser doesn't carry that attribute yet).
+#    script re-applies the queue's RedrivePolicy via scripts/wire-dlq.js — a
+#    no-op safety net now that LSS carries that attribute from the template.
 npm run offline
 ```
 

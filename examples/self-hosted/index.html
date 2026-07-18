@@ -133,6 +133,18 @@ const CONFIG = {
         { name: 'Delete product', method: 'DELETE', url: 'http://localhost:3634/products/{{productId}}' },
       ],
     },
+    {
+      title: 'Poison order → DLQ redrive',
+      desc: 'POST an order with a non-billable total: processOrder throws, SQS redelivers it every 5 s (short VisibilityTimeout) and, once ApproximateReceiveCount exceeds maxReceiveCount (2), the self engine moves it to orders-to-process-dlq with the same MessageId. The flow waits ~13 s, then peeks both queues through the LSS API; they are also visible in the dashboard\'s Queues tab.',
+      steps: [
+        { name: 'Create poison order (total: -1)', method: 'POST', url: 'http://localhost:3631/orders',
+          body: { customerId: 'u-poison', total: -1 },
+          extract: { poisonOrderId: 'id' }, pause: 13000 },
+        { name: 'peek DLQ (message count > 0 after redrive)', method: 'GET', url: 'http://localhost:3140/api/queues/orders-to-process-dlq' },
+        { name: 'peek source queue (drained)', method: 'GET', url: 'http://localhost:3140/api/queues/orders-to-process' },
+        { name: 'No receipt was written for it', method: 'GET', url: 'http://localhost:3632/receipts' },
+      ],
+    },
   ],
 };
 // ---------------------------------------------------------------------------

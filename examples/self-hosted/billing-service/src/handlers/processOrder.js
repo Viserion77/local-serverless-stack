@@ -7,6 +7,15 @@ const { s3, eventBridge } = require('./aws');
 exports.handler = async (event) => {
   for (const record of event.Records || []) {
     const order = JSON.parse(record.body);
+
+    // Poison-message demo: an order that cannot be billed fails forever. The
+    // throw leaves the whole batch on the queue, so SQS redelivers it until
+    // ApproximateReceiveCount exceeds the queue's maxReceiveCount (2) and the
+    // self engine moves it to orders-to-process-dlq — no infinite retry loop.
+    if (!(order.total > 0)) {
+      throw new Error(`order ${order.id} has a non-billable total (${order.total})`);
+    }
+
     const receiptKey = `receipts/${order.id}.json`;
 
     await s3.send(new PutObjectCommand({

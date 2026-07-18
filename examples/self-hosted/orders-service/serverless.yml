@@ -61,4 +61,23 @@ resources:
       Type: AWS::SQS::Queue
       Properties:
         QueueName: orders-to-process
-        VisibilityTimeout: 30
+        # Short visibility so a failing consumer retries (and gives up) fast
+        # enough to watch in a demo — AWS's default is 30 s.
+        VisibilityTimeout: 5
+        # Queue-level redrive, enforced by the self engine: an order that
+        # billing-service keeps rejecting is delivered twice and then moved to
+        # the DLQ instead of blocking/vanishing. The DLQ is declared BELOW this
+        # queue on purpose — LSS resolves the Fn::GetAtt from the template, so
+        # declaration order does not matter.
+        RedrivePolicy:
+          deadLetterTargetArn:
+            Fn::GetAtt: [OrdersToProcessDlq, Arn]
+          maxReceiveCount: 2
+
+    OrdersToProcessDlq:
+      Type: AWS::SQS::Queue
+      Properties:
+        QueueName: orders-to-process-dlq
+        # Poison messages are kept for a day so they can be inspected in the
+        # dashboard's Queues tab (AWS's default is 4 days).
+        MessageRetentionPeriod: 86400

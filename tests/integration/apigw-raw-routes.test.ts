@@ -142,8 +142,29 @@ suite('raw cross-stack ApiGatewayV2 routes (integration)', () => {
     const users = data.find((s: any) => s.service === 'users-service');
     // Its three httpApi events, not six: the serverless-compiled ::Route mirrors
     // of the same (method, path) pairs are skipped in favor of the state routes.
+    // The two genuinely-raw /api/identity/spaces routes — declared under
+    // `resources:` on the framework's OWN HttpApi — are the only additions.
     const paths = users.routes.map((r: any) => `${r.method} ${r.path}`).sort();
-    expect(paths).toEqual(['GET /users', 'GET /users/{id}', 'POST /users']);
-    expect(users.routes.every((r: any) => !r.raw)).toBe(true);
+    expect(paths).toEqual([
+      'GET /api/identity/spaces',
+      'GET /users',
+      'GET /users/{id}',
+      'POST /api/identity/spaces',
+      'POST /users',
+    ]);
+    expect(users.routes.filter((r: any) => r.raw).map((r: any) => r.path))
+      .toEqual(['/api/identity/spaces', '/api/identity/spaces']);
+  });
+
+  it('serves a raw route declared on the framework\'s own HttpApi (the !Sub idiom)', async () => {
+    // Target: !Sub 'integrations/${SpacesIntegration}' and an AuthorizerUri that
+    // is the apigateway invocation-URI wrapper, not a bare Lambda ARN.
+    const res = await fetch('http://localhost:3610/api/identity/spaces', {
+      headers: { authorization: 'Bearer lss-secret' },
+    });
+    expect(res.status).toBe(200);
+    // Unauthenticated it is the raw route's own authorizer that rejects it.
+    const denied = await fetch('http://localhost:3610/api/identity/spaces');
+    expect(denied.status).toBe(401);
   });
 });

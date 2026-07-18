@@ -56,6 +56,16 @@ export interface SQSResource {
   messageRetentionPeriod?: number;
   fifoQueue?: boolean;
   contentBasedDeduplication?: boolean;
+  // Queue-level redrive. `deadLetterTargetRef` is either a literal queue ARN or
+  // a CFN reference (`Fn::GetAtt` reduced to "<LogicalId>::Arn") to another
+  // AWS::SQS::Queue in the same template — the provisioner turns it into a real
+  // ARN and serializes the pair into the RedrivePolicy queue attribute.
+  redrivePolicy?: SQSRedrivePolicy;
+}
+
+export interface SQSRedrivePolicy {
+  deadLetterTargetRef: string;
+  maxReceiveCount: number;
 }
 
 export interface SNSResource {
@@ -273,6 +283,9 @@ export interface ArnResolutionContext {
   accountId: string;
   partition: string;
   lambdas: Map<string, LambdaResource>;
+  // Same-template ::Api logical ids, so a `{Ref: HttpApi}` / `${HttpApi}` inside
+  // a Permission SourceArn reduces instead of leaking a raw token.
+  apis?: Map<string, ApiResource>;
   exports?: Map<string, string>;
   warnings?: string[];
 }
@@ -410,7 +423,26 @@ export class CloudFormationParser {
       messageRetentionPeriod: props.MessageRetentionPeriod as number | undefined,
       fifoQueue: props.FifoQueue as boolean | undefined,
       contentBasedDeduplication: props.ContentBasedDeduplication as boolean | undefined,
+      redrivePolicy: this.parseRedrivePolicy(props.RedrivePolicy),
     };
+  }
+
+  // AWS::SQS::Queue.RedrivePolicy is an OBJECT in CloudFormation (the SQS API
+  // takes the same thing as a JSON *string* attribute — the provisioner does
+  // that conversion). Its deadLetterTargetArn is almost always an intrinsic:
+  // `Fn::GetAtt: [OrdersDlq, Arn]`, which extractArn reduces to "OrdersDlq::Arn"
+  // for the provisioner's logical-id resolver. A policy we cannot make sense of
+  // is dropped rather than half-carried — the queue is still provisioned, just
+  // without redrive.
+  private parseRedrivePolicy(raw: unknown): SQSRedrivePolicy | undefined {
+    if (!raw || typeof raw !== 'object') return undefined;
+    const policy = raw as Record<string, unknown>;
+    const deadLetterTargetRef = this.extractArn(policy.deadLetterTargetArn);
+    const maxReceiveCount = Math.trunc(Number(policy.maxReceiveCount));
+    if (!deadLetterTargetRef || !Number.isFinite(maxReceiveCount) || maxReceiveCount < 1) {
+      return undefined;
+    }
+    return { deadLetterTargetRef, maxReceiveCount };
   }
 
   private parseSNS(key: string, resource: CloudFormationResource): SNSResource {
@@ -739,14 +771,24 @@ export class CloudFormationParser {
     return trimmed.startsWith('/') ? trimmed : `/${trimmed}`;
   }
 
-  // Target is a literal 'integrations/<IntegrationLogicalId>' or
-  // Fn::Join['/', ['integrations', {Ref: <IntegrationLogicalId>}]] → the id.
+  // Target names the ::Integration in one of three shapes:
+  //   'integrations/<IntegrationLogicalId>'                        (literal)
+  //   Fn::Join['/', ['integrations', {Ref: <IntegrationLogicalId>}]]
+  //   Fn::Sub 'integrations/${<IntegrationLogicalId>}'
+  // The Fn::Join form is what the Serverless Framework compiles for an
+  // `httpApi:` event; the Fn::Sub form is what a hand-written `resources:`
+  // block emits (`Target: !Sub 'integrations/${MyIntegration}'`) and is by far
+  // the most common idiom in real serverless.yml files — missing it left
+  // integrationRef undefined and silently skipped every such route.
   private parseIntegrationRef(target: unknown): string | undefined {
-    if (typeof target === 'string') {
-      const match = /^integrations\/(.+)$/.exec(target);
-      return match ? match[1] : undefined;
-    }
+    if (typeof target === 'string') return this.integrationIdFromTarget(target);
     if (target && typeof target === 'object') {
+      const sub = (target as Record<string, unknown>)['Fn::Sub'];
+      if (sub !== undefined) {
+        // Fn::Sub's list form is [template, vars] — the template comes first.
+        const template = Array.isArray(sub) ? sub[0] : sub;
+        return typeof template === 'string' ? this.integrationIdFromTarget(template) : undefined;
+      }
       const join = (target as Record<string, unknown>)['Fn::Join'];
       if (Array.isArray(join) && Array.isArray(join[1])) {
         const parts = join[1] as unknown[];
@@ -758,6 +800,16 @@ export class CloudFormationParser {
       }
     }
     return undefined;
+  }
+
+  // 'integrations/<id>' → <id>, unwrapping a lone Fn::Sub token so
+  // 'integrations/${MyIntegration}' yields 'MyIntegration' too.
+  private integrationIdFromTarget(target: string): string | undefined {
+    const match = /^integrations\/(.+)$/.exec(target.trim());
+    if (!match) return undefined;
+    const id = match[1].trim();
+    const token = /^\$\{([^}]+)\}$/.exec(id);
+    return token ? token[1].trim() : id;
   }
 
   // General intrinsic → ARN-like reducer for IntegrationUri/AuthorizerUri/
@@ -772,8 +824,17 @@ export class CloudFormationParser {
 
     if ('Ref' in obj) {
       const id = String(obj.Ref);
+      // {"Ref": "AWS::Region"} & friends: the Serverless Framework compiles
+      // SourceArn/AuthorizerUri as an Fn::Join over pseudo-parameter Refs, so
+      // these must reduce here too — not only inside Fn::Sub's ${} tokens.
+      const pseudo = this.pseudoParam(id, ctx);
+      if (pseudo !== undefined) return { value: pseudo, resolved: true };
       const lambda = ctx.lambdas.get(id);
       if (lambda) return { value: this.lambdaArn(lambda, ctx), resolved: true };
+      // A Ref to an ::Api yields its API id in AWS; locally the closest stable
+      // stand-in is the API's name (this only ever feeds the advisory SourceArn).
+      const api = ctx.apis?.get(id);
+      if (api) return { value: api.name, resolved: true };
       return { value: id, resolved: false };
     }
 
@@ -822,15 +883,29 @@ export class CloudFormationParser {
 
     const value = template.replace(/\$\{([^}]+)\}/g, (_match, token: string) => {
       const key = token.trim();
-      if (key === 'AWS::Region') return ctx.region;
-      if (key === 'AWS::AccountId') return ctx.accountId;
-      if (key === 'AWS::Partition') return ctx.partition;
+      const pseudo = this.pseudoParam(key, ctx);
+      if (pseudo !== undefined) return pseudo;
       if (key in vars) return this.resolveArnLike(vars[key], ctx).value;
+      // Both `${LogicalId}` and the GetAtt-style `${LogicalId.Arn}` name the
+      // same Lambda — the attribute suffix is dropped because a Lambda ARN is
+      // the only attribute LSS resolves.
       const lambda = ctx.lambdas.get(key.split('.')[0]);
       if (lambda) return this.lambdaArn(lambda, ctx);
+      // `${HttpApi}` in a Permission SourceArn refers to the framework's ::Api.
+      const api = ctx.apis?.get(key.split('.')[0]);
+      if (api) return api.name;
       return `\${${token}}`;
     });
     return { value, resolved: !value.includes('${') };
+  }
+
+  // The CloudFormation pseudo-parameters LSS can answer, shared by Ref and
+  // Fn::Sub. `undefined` means "not a pseudo-parameter" (a real logical id).
+  private pseudoParam(key: string, ctx: ArnResolutionContext): string | undefined {
+    if (key === 'AWS::Region') return ctx.region;
+    if (key === 'AWS::AccountId') return ctx.accountId;
+    if (key === 'AWS::Partition') return ctx.partition;
+    return undefined;
   }
 
   private lambdaArn(lambda: LambdaResource, ctx: ArnResolutionContext): string {

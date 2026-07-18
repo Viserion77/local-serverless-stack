@@ -1,7 +1,8 @@
 // Applies the RedrivePolicy declared in serverless.yml to the LIVE LocalStack
-// queue. LSS provisions both queues from the CloudFormation template, but its
-// parser does not carry the RedrivePolicy attribute yet — without this step a
-// poison message would retry forever instead of landing in the DLQ.
+// queue. LSS now carries RedrivePolicy from the CloudFormation template into
+// CreateQueue, so this is a no-op safety net: it re-applies the same policy,
+// which matters only for a queue provisioned by an older LSS (CreateQueue
+// cannot change the attributes of a queue that already exists).
 // `npm run offline` runs this right after `serverless package` (which
 // registers the service and provisions the queues); it is also available
 // standalone as `npm run dlq:wire`.

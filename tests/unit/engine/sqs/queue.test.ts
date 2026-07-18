@@ -1,4 +1,5 @@
-import { SqsQueue } from '../../../../src/server/engine/emulators/sqs/queue.js';
+import { parseRedrivePolicy, SqsQueue } from '../../../../src/server/engine/emulators/sqs/queue.js';
+import type { SqsQueueOptions, StoredMessage } from '../../../../src/server/engine/emulators/sqs/queue.js';
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -206,6 +207,198 @@ describe('SqsQueue state machine', () => {
       expect(BigInt(second.sequenceNumber as string)).toBeGreaterThan(
         BigInt(first.sequenceNumber as string),
       );
+    });
+  });
+
+  describe('redrive (RedrivePolicy → DLQ)', () => {
+    // A queue whose RedrivePolicy resolves to `dlq` — what the emulator hands
+    // the queue once it has turned deadLetterTargetArn into a live queue.
+    const withDlq = (
+      name: string,
+      dlq: SqsQueue,
+      maxReceiveCount: number,
+      options: SqsQueueOptions = {},
+    ) =>
+      new SqsQueue(name, {
+        ...options,
+        redrive: () => ({
+          maxReceiveCount,
+          move: (message: StoredMessage) => dlq.acceptRedriven(message),
+        }),
+      });
+
+    const ATTRIBUTES = { trace: { DataType: 'String', StringValue: 'abc' } };
+
+    test('maxReceiveCount: 2 delivers the message exactly twice, then moves it to the DLQ', async () => {
+      const dlqVisible = jest.fn();
+      const dlq = new SqsQueue('orders-dlq', { onVisible: dlqVisible });
+      const queue = withDlq('orders', dlq, 2);
+
+      const sent = queue.send({ body: 'poison', delayMs: 0, messageAttributes: ATTRIBUTES });
+
+      // Delivery 1 — one failure is not enough to exceed maxReceiveCount.
+      const [first] = recv(queue, 1, 40);
+      expect(first.receiveCount).toBe(1);
+      await sleep(140);
+      expect(queue.counters(RETENTION)).toEqual({ available: 1, inFlight: 0, delayed: 0 });
+      expect(dlq.counters(RETENTION).available).toBe(0);
+
+      // Delivery 2 — the LAST one the consumer gets.
+      const [second] = recv(queue, 1, 40);
+      expect(second.receiveCount).toBe(2);
+      expect(second.messageId).toBe(sent.messageId);
+      await sleep(140);
+
+      // The third delivery attempt is redirected to the DLQ instead.
+      expect(queue.counters(RETENTION)).toEqual({ available: 0, inFlight: 0, delayed: 0 });
+      expect(dlq.counters(RETENTION).available).toBe(1);
+      expect(dlqVisible).toHaveBeenCalled();
+
+      const [moved] = recv(dlq, 1);
+      // Identity survives the move…
+      expect(moved.messageId).toBe(sent.messageId);
+      expect(moved.body).toBe('poison');
+      expect(moved.md5OfBody).toBe(sent.md5OfBody);
+      expect(moved.md5OfMessageAttributes).toBe(sent.md5OfMessageAttributes);
+      expect(moved.messageAttributes).toEqual(ATTRIBUTES);
+      // …retention still counts from the original enqueue…
+      expect(moved.sentTimestamp).toBe(first.sentTimestamp);
+      // …but delivery bookkeeping is per-queue: this is its 1st DLQ receive.
+      expect(moved.receiveCount).toBe(1);
+      expect(moved.sequenceNumber).toBeUndefined();
+    });
+
+    test('a message deleted before the threshold never reaches the DLQ', async () => {
+      const dlq = new SqsQueue('orders-dlq');
+      const queue = withDlq('orders', dlq, 2);
+      queue.send({ body: 'ok', delayMs: 0 });
+
+      const [first] = recv(queue, 1, 40);
+      await sleep(140); // redelivered, still under the threshold
+      const [second] = recv(queue, 1, 40);
+      expect(second.receiveCount).toBe(2);
+      expect(queue.deleteMessage(second.receiptHandle as string)).toBe('deleted');
+      await sleep(140);
+      expect(dlq.counters(RETENTION).available).toBe(0);
+      expect(first.messageId).toBe(second.messageId);
+    });
+
+    test('without a policy the message keeps redelivering (default resolver)', async () => {
+      const queue = new SqsQueue('orders');
+      queue.send({ body: 'x', delayMs: 0 });
+      recv(queue, 1, 40);
+      await sleep(140);
+      recv(queue, 1, 40);
+      await sleep(140);
+      expect(queue.counters(RETENTION).available).toBe(1);
+    });
+
+    test('FIFO: moving the poison message unblocks its MessageGroupId', async () => {
+      const onVisible = jest.fn();
+      const dlq = new SqsQueue('orders-dlq.fifo');
+      const queue = withDlq('orders.fifo', dlq, 1, { onVisible });
+
+      queue.send({ body: 'A1', delayMs: 0, messageGroupId: 'A', messageDeduplicationId: 'd1' });
+      queue.send({ body: 'A2', delayMs: 0, messageGroupId: 'A', messageDeduplicationId: 'd2' });
+
+      const [a1] = recv(queue, 1, 40);
+      expect(a1.body).toBe('A1');
+      // Group A is locked behind the poison message: A2 cannot be delivered.
+      expect(queue.hasDeliverable(RETENTION)).toBe(false);
+      onVisible.mockClear();
+
+      await sleep(140);
+
+      // A1 exceeded maxReceiveCount and left for the DLQ — the group is free.
+      expect(dlq.counters(RETENTION).available).toBe(1);
+      expect(queue.hasDeliverable(RETENTION)).toBe(true);
+      // The unlock woke pollers parked on this queue (the stall failure mode).
+      expect(onVisible).toHaveBeenCalled();
+      expect(recv(queue, 1).map(message => message.body)).toEqual(['A2']);
+
+      // The DLQ is FIFO too, so it issues its own SequenceNumber and keeps the
+      // group id (an operator draining the DLQ sees where it came from).
+      const [moved] = recv(dlq, 1);
+      expect(moved.body).toBe('A1');
+      expect(moved.messageGroupId).toBe('A');
+      expect(moved.sequenceNumber).toBeTruthy();
+      // Numbering is the DLQ's own, continuing from ITS counter.
+      const next = dlq.send({ body: 'later', delayMs: 0, messageGroupId: 'A', messageDeduplicationId: 'dz' });
+      expect(BigInt(next.sequenceNumber as string)).toBeGreaterThan(
+        BigInt(moved.sequenceNumber as string),
+      );
+    });
+
+    test('FIFO: the DLQ accepts the move even inside its dedup window', () => {
+      const dlq = new SqsQueue('orders-dlq.fifo');
+      const queue = withDlq('orders.fifo', dlq, 1);
+      // Same dedup id already used on the DLQ: a normal send would be dropped,
+      // a redrive must not be.
+      dlq.send({ body: 'A1', delayMs: 0, messageGroupId: 'A', messageDeduplicationId: 'd1' });
+
+      queue.send({ body: 'A1', delayMs: 0, messageGroupId: 'A', messageDeduplicationId: 'd1' });
+      const [a1] = recv(queue, 1);
+      expect(queue.changeVisibility(a1.receiptHandle as string, 0)).toBe('changed');
+      expect(dlq.counters(RETENTION).available).toBe(2);
+    });
+
+    test('changeVisibility(0) redrives an exhausted message instead of requeuing it', () => {
+      const dlq = new SqsQueue('orders-dlq');
+      const queue = withDlq('orders', dlq, 1);
+      const sent = queue.send({ body: 'poison', delayMs: 0 });
+
+      const [message] = recv(queue, 1);
+      expect(queue.changeVisibility(message.receiptHandle as string, 0)).toBe('changed');
+      expect(queue.counters(RETENTION)).toEqual({ available: 0, inFlight: 0, delayed: 0 });
+      expect(recv(dlq, 1)[0].messageId).toBe(sent.messageId);
+    });
+
+    test('changeVisibility(0) below the threshold still requeues normally', () => {
+      const dlq = new SqsQueue('orders-dlq');
+      const queue = withDlq('orders', dlq, 2);
+      queue.send({ body: 'retry-me', delayMs: 0 });
+
+      const [message] = recv(queue, 1);
+      expect(queue.changeVisibility(message.receiptHandle as string, 0)).toBe('changed');
+      expect(queue.counters(RETENTION).available).toBe(1);
+      expect(dlq.counters(RETENTION).available).toBe(0);
+    });
+
+    test('a resolver that stops resolving (DLQ deleted) falls back to redelivery', async () => {
+      const dlq = new SqsQueue('orders-dlq');
+      const queue = new SqsQueue('orders', { redrive: () => undefined });
+      queue.send({ body: 'x', delayMs: 0 });
+      recv(queue, 1, 40);
+      await sleep(140);
+      expect(queue.counters(RETENTION).available).toBe(1);
+      expect(dlq.counters(RETENTION).available).toBe(0);
+    });
+  });
+
+  describe('parseRedrivePolicy', () => {
+    test('decodes the JSON string attribute', () => {
+      expect(
+        parseRedrivePolicy('{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:000000000000:dlq","maxReceiveCount":3}'),
+      ).toEqual({ deadLetterTargetArn: 'arn:aws:sqs:us-east-1:000000000000:dlq', maxReceiveCount: 3 });
+    });
+
+    test('accepts maxReceiveCount as a numeric string (console/CDK shape)', () => {
+      expect(parseRedrivePolicy('{"deadLetterTargetArn":"arn:x:dlq","maxReceiveCount":"5"}')).toEqual({
+        deadLetterTargetArn: 'arn:x:dlq',
+        maxReceiveCount: 5,
+      });
+    });
+
+    test('anything unusable yields undefined (redrive stays off, never throws)', () => {
+      expect(parseRedrivePolicy(undefined)).toBeUndefined();
+      expect(parseRedrivePolicy('')).toBeUndefined();
+      expect(parseRedrivePolicy('not json')).toBeUndefined();
+      expect(parseRedrivePolicy('"a string"')).toBeUndefined();
+      expect(parseRedrivePolicy('null')).toBeUndefined();
+      expect(parseRedrivePolicy('{"maxReceiveCount":3}')).toBeUndefined();
+      expect(parseRedrivePolicy('{"deadLetterTargetArn":"arn:x:dlq"}')).toBeUndefined();
+      expect(parseRedrivePolicy('{"deadLetterTargetArn":"arn:x:dlq","maxReceiveCount":0}')).toBeUndefined();
+      expect(parseRedrivePolicy('{"deadLetterTargetArn":42,"maxReceiveCount":3}')).toBeUndefined();
     });
   });
 

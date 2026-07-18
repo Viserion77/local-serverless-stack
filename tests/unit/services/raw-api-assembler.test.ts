@@ -173,6 +173,40 @@ describe('cross-stack raw route (the gateway-stack shape)', () => {
     expect(routes[0].functionArn).toBe('arn:aws:lambda:sa-east-1:000000000000:function:gw-dev-handler');
   });
 
+  // AWS addresses a Lambda integration/authorizer target through an apigateway
+  // "invocation URI" that wraps the ARN — NOT a bare Lambda ARN. Both the
+  // Serverless-compiled Fn::Join and the hand-written !Sub reduce to it.
+  it('unwraps an apigateway invocation-URI IntegrationUri down to the inner Lambda ARN', () => {
+    const { routes, warnings } = assemble([
+      integration('Int', {
+        integrationUri: { 'Fn::Sub': `arn:aws:apigateway:\${AWS::Region}:lambda:path/2015-03-31/functions/${LIST_USERS_ARN}/invocations` },
+      }),
+      route('R'),
+      permission('Perm'),
+    ]);
+    expect(routes[0].functionName).toBe('users-service-dev-listUsers');
+    expect(routes[0].functionArn).toBe(LIST_USERS_ARN);
+    expect(warnings).toEqual([]);
+  });
+
+  it('unwraps an apigateway invocation-URI AuthorizerUri down to the inner Lambda ARN', () => {
+    const { authorizers } = assemble([
+      integration('Int'),
+      route('R', { authorizationType: 'CUSTOM', authorizerRef: 'Auth' }),
+      authorizer('Auth', {
+        // The exact Fn::Join the framework compiles for a REQUEST authorizer.
+        authorizerUri: {
+          'Fn::Join': ['', [
+            'arn:', { Ref: 'AWS::Partition' }, ':apigateway:', { Ref: 'AWS::Region' },
+            ':lambda:path/2015-03-31/functions/', AUTHORIZER_ARN, '/invocations',
+          ]],
+        },
+      }),
+      permission('Perm'),
+    ]);
+    expect(authorizers[0].arn).toBe(AUTHORIZER_ARN);
+  });
+
   it('resolves an Fn::ImportValue IntegrationUri against the cross-stack export map', () => {
     const exports = new Map([['users-service-dev-listUsers-arn', LIST_USERS_ARN]]);
     const { routes } = assemble(
@@ -404,6 +438,47 @@ describe('AWS::Lambda::Permission (advisory invoke grant)', () => {
     ]);
     expect(routes[0].sourceArn).toBeUndefined();
     expect(warnings).toHaveLength(1);
+  });
+
+  // CloudFormation's `Ref` on a Lambda yields the function NAME, so a grant and
+  // an integration target routinely arrive in different shapes (name vs ARN vs
+  // local short name). Normalizing BOTH through resolveTarget is what stops the
+  // false "no matching apigateway permission" warning.
+  it('matches a {Ref: LogicalId} grant (a NAME) against an ARN integration target', () => {
+    const { routes, warnings } = assemble([
+      lambdaResource('ListUsersLambdaFunction', 'users-service-dev-listUsers'),
+      integration('Int'), // IntegrationUri is the full ARN
+      route('R'),
+      permission('Perm', { functionRef: { Ref: 'ListUsersLambdaFunction' } }),
+    ]);
+    expect(routes[0].sourceArn).toBe(SOURCE_ARN);
+    expect(warnings).toEqual([]);
+  });
+
+  it('matches a grant on the local SHORT name against a target resolved from the full name', () => {
+    // The integration names the function by its short name while the grant Refs
+    // the Lambda (→ full name): same function, two different spellings.
+    const { routes, warnings } = assemble(
+      [
+        lambdaResource('ListUsersLambdaFunction', 'users-service-dev-listUsers'),
+        integration('Int', { integrationUri: 'listUsers' }),
+        route('R'),
+        permission('Perm', { functionRef: { Ref: 'ListUsersLambdaFunction' } }),
+      ],
+      { localFunctions: [fn('listUsers', 'users-service-dev-listUsers')] },
+    );
+    expect(routes[0].sourceArn).toBe(SOURCE_ARN);
+    expect(warnings).toEqual([]);
+  });
+
+  it('still warns when a {Ref} grant names a logical id the template does not declare', () => {
+    const { routes, warnings } = assemble([
+      integration('Int'),
+      route('R'),
+      permission('Perm', { functionRef: { Ref: 'GhostLambdaFunction' } }),
+    ]);
+    expect(routes[0].sourceArn).toBeUndefined();
+    expect(warnings[0]).toContain('no AWS::Lambda::Permission');
   });
 
   it('records the SourceArn when the grant matches, resolving Fn::Sub pseudo-params', () => {

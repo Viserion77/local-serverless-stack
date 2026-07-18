@@ -95,6 +95,51 @@ export interface SqsQueueOptions {
   // long-polls are woken internally on the same transitions.
   onVisible?: () => void;
   dedupWindowMs?: number;
+  // Queue-level redrive (the RedrivePolicy attribute). See RedriveResolver.
+  redrive?: RedriveResolver;
+}
+
+// The queue's RedrivePolicy attribute, already decoded from its JSON string.
+export interface RedrivePolicy {
+  deadLetterTargetArn: string;
+  maxReceiveCount: number;
+}
+
+// What a queue needs in order to redrive: the threshold plus a way to hand the
+// poison message over. The DLQ lookup lives in the emulator (only it knows the
+// catalog); the queue owns the "has it failed enough times?" decision.
+export interface RedriveTarget {
+  maxReceiveCount: number;
+  move: (message: StoredMessage) => void;
+}
+
+// Re-resolved on EVERY redelivery rather than cached: the dead-letter queue is
+// frequently declared AFTER the queue that points at it (CloudFormation
+// template order), and SetQueueAttributes can add or replace the policy at any
+// time. Returning undefined means "no redrive" — a missing policy, a malformed
+// one, or a DLQ that cannot be resolved.
+export type RedriveResolver = () => RedriveTarget | undefined;
+
+// Decode the RedrivePolicy queue attribute, which travels as a JSON *string*:
+// `{"deadLetterTargetArn":"arn:aws:sqs:us-east-1:0:dlq","maxReceiveCount":3}`.
+// Anything malformed yields undefined (redrive simply stays off) instead of
+// throwing — a bad policy must never break SendMessage/ReceiveMessage on the
+// queue that carries it. maxReceiveCount is accepted as a number or a numeric
+// string, because both shapes occur in the wild (console/CDK/CFN emit either).
+export function parseRedrivePolicy(raw: string | undefined): RedrivePolicy | undefined {
+  if (!raw) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    return undefined;
+  }
+  if (!parsed || typeof parsed !== 'object') return undefined;
+  const policy = parsed as Record<string, unknown>;
+  const arn = typeof policy.deadLetterTargetArn === 'string' ? policy.deadLetterTargetArn : '';
+  const maxReceiveCount = Math.trunc(Number(policy.maxReceiveCount));
+  if (!arn || !Number.isFinite(maxReceiveCount) || maxReceiveCount < 1) return undefined;
+  return { deadLetterTargetArn: arn, maxReceiveCount };
 }
 
 export class SqsQueue {
@@ -118,12 +163,14 @@ export class SqsQueue {
   private sequenceCounter = 0;
   private readonly onVisible: () => void;
   private readonly dedupWindowMs: number;
+  private readonly redrive: RedriveResolver;
 
   constructor(name: string, options: SqsQueueOptions = {}) {
     this.name = name;
     this.fifo = options.fifo ?? name.endsWith('.fifo');
     this.onVisible = options.onVisible ?? (() => undefined);
     this.dedupWindowMs = options.dedupWindowMs ?? DEFAULT_DEDUP_WINDOW_MS;
+    this.redrive = options.redrive ?? (() => undefined);
   }
 
   send(options: SendMessageOptions): SendMessageOutcome {
@@ -303,6 +350,33 @@ export class SqsQueue {
     });
   }
 
+  // Take in a message moved here by a SOURCE queue's RedrivePolicy.
+  //
+  // AWS preserves the identity of a redriven message: MessageId, body,
+  // MessageAttributes and both MD5 digests survive the move, and so does the
+  // original SentTimestamp (dead-letter retention is measured from the first
+  // enqueue, not from the move). Delivery bookkeeping is per-queue, so the
+  // receive counters reset and this queue issues a fresh arrival order — plus a
+  // fresh SequenceNumber when it is FIFO (and none at all when the DLQ is a
+  // standard queue fed by a FIFO source).
+  //
+  // The move deliberately bypasses the dedup window: a poison message must
+  // never be silently dropped on its way to the dead-letter queue.
+  acceptRedriven(message: StoredMessage): void {
+    this.insertVisible({
+      ...message,
+      order: ++this.orderCounter,
+      receiveCount: 0,
+      firstReceiveTimestamp: undefined,
+      receiptHandle: undefined,
+      visibleAt: Date.now(),
+      sequenceNumber: this.fifo
+        ? (SEQUENCE_BASE + BigInt(++this.sequenceCounter)).toString()
+        : undefined,
+    });
+    this.notifyVisible();
+  }
+
   // PurgeQueue: drops every message (visible, delayed and in flight); the
   // FIFO dedup window and sequence counter survive, as on AWS.
   purge(): void {
@@ -392,7 +466,28 @@ export class SqsQueue {
     message.receiptHandle = undefined;
     message.visibleAt = Date.now();
     this.unlockGroup(message);
+    if (this.movedToDeadLetterQueue(message)) return;
     this.insertVisible(message);
+  }
+
+  // The redrive decision, taken on every path that would make an ALREADY
+  // RECEIVED message visible again. Returns true when the message left this
+  // queue for the dead-letter queue and must not be re-inserted.
+  //
+  // Off-by-one, AWS-faithful: a message moves once its ApproximateReceiveCount
+  // *exceeds* maxReceiveCount. `receiveCount` here is the number of deliveries
+  // already made, so the move happens exactly when the NEXT delivery would push
+  // it past the threshold — with maxReceiveCount: 2 the consumer sees the
+  // message twice, and the third delivery attempt goes to the DLQ instead.
+  //
+  // Callers unlock the FIFO group BEFORE calling this, so moving a poison
+  // message releases its MessageGroupId and the rest of the group flows again
+  // rather than stalling behind it forever.
+  private movedToDeadLetterQueue(message: StoredMessage): boolean {
+    const target = this.redrive();
+    if (!target || message.receiveCount < target.maxReceiveCount) return false;
+    target.move(message);
+    return true;
   }
 
   private unlockGroup(message: StoredMessage): void {
@@ -465,6 +560,9 @@ export class SqsQueue {
         this.inflight.delete(handle);
         message.receiptHandle = undefined;
         this.unlockGroup(message);
+        // Visibility expiry is the redelivery path a failing consumer takes:
+        // the message either goes to the dead-letter queue or becomes visible.
+        if (this.movedToDeadLetterQueue(message)) continue;
         this.insertVisible(message);
         becameVisible = true;
       }

@@ -21,6 +21,9 @@ POST /orders (3631)
   → in-process ESM delivery → S3 receipt + PutEvents      [billing-service]
   → rule match on billing-events → DynamoDB notification  [notifications-service]
   → GET /notifications (3633) shows the result
+
+…and when billing keeps rejecting an order:
+  2 failed deliveries → SQS orders-to-process-dlq         [RedrivePolicy]
 ```
 
 What this exercises on the self engine:
@@ -30,6 +33,11 @@ What this exercises on the self engine:
 - **SQS** — queue from `resources:`, `SendMessage` from a handler, and a
   **cross-service event source mapping** (billing consumes a queue owned by orders,
   referenced by ARN). Delivery is in-process to the LSS Lambda runtime.
+- **SQS redrive (`RedrivePolicy` → DLQ)** — `orders-to-process` declares a
+  `RedrivePolicy` (`maxReceiveCount: 2`) pointing at `orders-to-process-dlq`. An order
+  `processOrder` cannot bill (non-positive total) is delivered exactly twice and then
+  moved to the DLQ by the engine — same `MessageId`, same body — instead of redelivering
+  forever. See [Drive the DLQ redrive](#drive-the-dlq-redrive).
 - **S3** — bucket from `resources:`, `PutObject`/`ListObjectsV2`/`GetObject` round trips
   (bodies stored as blobs on disk, never in the engine heap), plus **presigned POST**:
   `GET /attachments/upload-url` hands back a browser form (`createPresignedPost`) that
@@ -114,6 +122,27 @@ curl -s 'http://localhost:3632/attachments/upload-url?filename=invoice.pdf'
 # to POST the form to the bucket. The object then appears under the S3 tab.
 ```
 
+## Drive the DLQ redrive
+
+```bash
+# A non-billable order: processOrder throws on every delivery.
+curl -s -X POST http://localhost:3631/orders \
+  -H 'content-type: application/json' \
+  -d '{"customerId":"u-poison","total":-1}'
+
+# VisibilityTimeout is 5 s and maxReceiveCount is 2, so after ~13 s the message
+# has been delivered twice and moved to the dead-letter queue.
+sleep 13
+
+curl -s http://localhost:3140/api/queues/orders-to-process-dlq   # 1 message
+curl -s http://localhost:3140/api/queues/orders-to-process       # drained
+```
+
+The redriven message keeps its original `MessageId`, body and MD5 digests; its
+`ApproximateReceiveCount` restarts on the DLQ (each queue counts its own
+deliveries). Both queues are inspectable in the dashboard's **Queues** tab, and
+the flow is also one click in the validation console.
+
 ## Drive the catalog
 
 ```bash
@@ -143,8 +172,8 @@ curl -s 'http://localhost:14566/_aoss/products-catalog/products/_count'
 ## Validation console
 
 `index.html` at the example root is a small browser console that pings every port and
-runs both flows (the full order pipeline and the catalog CRUD/search round trip) with one
-click. Open it directly (`file://…/examples/self-hosted/index.html`) or serve it:
+runs all three flows (the full order pipeline, the catalog CRUD/search round trip and the
+poison-order DLQ redrive) with one click. Open it directly (`file://…/examples/self-hosted/index.html`) or serve it:
 
 ```bash
 npm run console    # http://localhost:8622

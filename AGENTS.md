@@ -42,11 +42,12 @@ Published as the npm package `local-serverless-stack` (CLI: `lss`), plus the wor
 
 **You do not commit. You do not create branches. You do not push.** The human reviews and commits.
 
-- Leave your work **staged** (`git add` the files you changed) so it can be reviewed in the IDE.
-- Read-only git (`status`, `diff`, `log`) is fine. Everything else is off-limits.
-- Never run `git commit`, `add`-then-commit, `reset`, `stash`, `checkout`/`restore`, `rebase`,
-  `merge`, `pull`, `fetch`, `push`, `tag`, `branch`, or `clean` — **under any rationale**, including
-  "to get a clean tree" or "to isolate my diff".
+- Leave your work as **uncommitted working-tree edits**. Do not stage it either — whoever
+  orchestrates you (or the human) runs `git add` and reviews the staged diff.
+- Read-only git (`status`, `diff`, `log`) is fine. Every git **write** is off-limits.
+- Never run `git add`, `commit`, `reset`, `stash`, `checkout`/`restore`, `rebase`, `merge`, `pull`,
+  `fetch`, `push`, `tag`, `branch`, or `clean` — **under any rationale**, including "to get a clean
+  tree" or "to isolate my diff".
 - Do not run `npm install`, `npm ci` or `npm version` (they rewrite lockfiles and package manifests).
 
 This rule exists because agents have violated it here before — one committed unreviewed work and

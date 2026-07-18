@@ -4,7 +4,7 @@ The single **LocalStack community (free)** example: five services that exercise 
 
 | Service | Language | API flavor | Authorizer | API port | Invoke port |
 |---|---|---|---|---|---|
-| `users-service` | TypeScript | HTTP API (payload **v2**) | local v2 **simple response** | `3610` | `13610` |
+| `users-service` | TypeScript | HTTP API (payload **v2**) + **raw CFN** routes on its *own* framework `HttpApi` | local v2 **simple response** (×2) | `3610` | `13610` |
 | `auth-service` | JavaScript | REST API (payload **v1**) | local v1 **REQUEST** (IAM policy) | `3611` | `13611` |
 | `orders-service` | JavaScript | REST API (payload **v1**) | **cross-service** by ARN → auth-service | `3612` | `13612` |
 | `gateway-stack` | — | **raw CFN** HTTP API v2 (`AWS::ApiGatewayV2::*`) — **no functions of its own** | **cross-stack** by ARN → users-service | `3613` | `13613` |
@@ -17,7 +17,8 @@ The single **LocalStack community (free)** example: five services that exercise 
 - **Hot reload** — `lambdaRuntime.watch: true`; edit a handler and re-curl.
 - **SQS consumer** — `orders-OrderQueue` with a Lambda consumer (`processOrderQueue`), running without serverless-offline.
 - **Schedule** — `cleanupExpiredOrders` (`rate(1 hour)`), provisioned as an EventBridge rule that fires on schedule (`"events"` is enabled in `lss.config.json`); the function is also invocable via the Invoke API — every Lambda is, even without API events.
-- **Raw `AWS::ApiGatewayV2::*` routes, cross-stack** — `gateway-stack` has **no `functions:` block and no `httpApi:` event at all**. It declares an `::Api` + `::Route` + `::Integration` + `::Authorizer` (plus the `AWS::Lambda::Permission` invoke grant) directly under `resources:`, all pointing at **users-service's** Lambdas by ARN. LSS parses those resource types, reduces `IntegrationUri`/`AuthorizerUri` (literal ARN, `Fn::GetAtt`, `Fn::Sub`, `Fn::ImportValue`, `Fn::Join`) to concrete ARNs, and registers them into the *same* route registry the `httpApi:` events feed — resolving the cross-stack target through the global function registry at request time, so **registration order does not matter**. A raw `::Route` that mirrors an existing `httpApi:` event is de-duplicated (the state route wins), which is why registering `users-service` still yields its three routes, not six. There is **no `/api/{proxy+}` or `$default` catch-all anywhere** in this example.
+- **Raw `AWS::ApiGatewayV2::*` routes, cross-stack** — `gateway-stack` has **no `functions:` block and no `httpApi:` event at all**. It declares an `::Api` + `::Route` + `::Integration` + `::Authorizer` (plus the `AWS::Lambda::Permission` invoke grant) directly under `resources:`, all pointing at **users-service's** Lambdas by ARN. LSS parses those resource types, reduces `IntegrationUri`/`AuthorizerUri` (literal ARN, `Fn::GetAtt`, `Fn::Sub`, `Fn::ImportValue`, `Fn::Join`) to concrete ARNs, and registers them into the *same* route registry the `httpApi:` events feed — resolving the cross-stack target through the global function registry at request time, so **registration order does not matter**. A raw `::Route` that mirrors an existing `httpApi:` event is de-duplicated (the state route wins), which is why registering `users-service` yields its three `httpApi:` routes once, not twice. There is **no `/api/{proxy+}` or `$default` catch-all anywhere** in this example.
+- **Raw `AWS::ApiGatewayV2::*` routes on the framework's OWN `HttpApi`** — the *other* half of the raw story, and the shape a real `serverless.yml` produces far more often than a dedicated gateway stack: `users-service` keeps its normal `httpApi:` events **and** hand-writes `GET`/`POST /api/identity/spaces` under `resources:`, with `ApiId: !Ref HttpApi` (no second `::Api`). Every reference uses the `!Sub` idiom the Serverless Framework passes straight through into the compiled template — `Target: !Sub 'integrations/${SpacesIntegration}'`, an `AuthorizerUri`/`IntegrationUri` that is the API Gateway **invocation-URI wrapper** (`arn:aws:apigateway:${AWS::Region}:lambda:path/2015-03-31/functions/${LogicalId.Arn}/invocations`, *not* a bare Lambda ARN), `FunctionName: !Ref ListUsersLambdaFunction` (which CloudFormation resolves to a **name**, never an ARN) and `SourceArn: !Sub '…:${HttpApi}/*'`. Because that one template carries both the framework's compiled `::Route` mirrors and the genuinely-raw routes, it is also where the `(METHOD, path)` de-dup earns its keep.
 - **`AWS::Lambda::Permission` as an advisory grant** — present, its `SourceArn` is recorded on the route; absent, the route still registers and LSS logs one warning naming the ungranted function (in AWS the call would 500, but locally the in-process runtime performs the invoke).
 - **`AWS::Events::EventBus` in `resources:`** — registering `events-stack` (just `sls package`, never `deploy`) creates the `domain-events` bus in LocalStack. A service with zero functions and no ports registers fine.
 - **`AWS::Events::Archive`** — accepted and skipped with a registration warning (LocalStack mocks Archives: CFN says `CREATE_COMPLETE`, `ListArchives` stays empty).
@@ -99,7 +100,19 @@ curl http://localhost:3611/signups
 
 `GET /users` and `GET /users/{id}` work the same way (`Authorization: Bearer lss-secret`).
 
-**3b. A raw cross-stack CloudFormation route** — `gateway-stack` owns **no Lambdas**. Its `GET /gw/users` exists only as an `AWS::ApiGatewayV2::Route` under `resources:`, wired by ARN to users-service's `listUsers`, and guarded by an `AWS::ApiGatewayV2::Authorizer` pointing at users-service's v2 authorizer. LSS resolves both across the stack boundary at request time:
+**3b. A raw CloudFormation route on the service's OWN framework `HttpApi`** — `users-service` declares `GET`/`POST /api/identity/spaces` under `resources:` with `ApiId: !Ref HttpApi`, `Target: !Sub 'integrations/${SpacesIntegration}'` and an `AuthorizerUri`/`IntegrationUri` in the API Gateway *invocation-URI* form. No second `::Api`, no `httpApi:` event — yet they are served on the same port as the compiled routes, behind their own raw authorizer:
+
+```bash
+curl http://localhost:3610/api/identity/spaces -H 'authorization: Bearer lss-secret'
+# → 200 {"items":[...]}   (the raw route lands on listUsers)
+
+curl -i http://localhost:3610/api/identity/spaces
+# → 401 (identity source header absent — the raw ::Authorizer is enforced)
+```
+
+`GET /users` is still registered **once**: the framework compiles a mirror `::Route` for every `httpApi:` event into the very same template, and LSS de-duplicates it by `(METHOD, normalized path)` in favor of the serverless-state route.
+
+**3c. A raw cross-stack CloudFormation route** — `gateway-stack` owns **no Lambdas**. Its `GET /gw/users` exists only as an `AWS::ApiGatewayV2::Route` under `resources:`, wired by ARN to users-service's `listUsers`, and guarded by an `AWS::ApiGatewayV2::Authorizer` pointing at users-service's v2 authorizer. LSS resolves both across the stack boundary at request time:
 
 ```bash
 # Same body as :3610/users — but served by the gateway stack's raw route,

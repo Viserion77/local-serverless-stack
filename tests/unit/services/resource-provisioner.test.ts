@@ -16,6 +16,7 @@ import {
   CreateQueueCommand,
   ListQueuesCommand,
   GetQueueAttributesCommand,
+  SetQueueAttributesCommand,
   DeleteQueueCommand,
   GetQueueUrlCommand,
 } from '@aws-sdk/client-sqs';
@@ -384,6 +385,89 @@ describe('createSQSQueue (via provisionResources)', () => {
     sqsMock.on(CreateQueueCommand).rejects(new Error('sqs down'));
     await provisioner.provisionResources('svc', [sqsResource()]);
     expect(console.error).toHaveBeenCalled();
+  });
+
+  describe('RedrivePolicy', () => {
+    const dlq = sqsResource({ logicalId: 'OrdersDlq', name: 'orders-dlq' });
+
+    it('resolves an Fn::GetAtt target from the template, even when the DLQ comes later', async () => {
+      sqsMock.on(CreateQueueCommand).resolves({});
+      // Source queue FIRST: the DLQ does not exist in SQS yet, so the ARN must
+      // come from the template's logical-id map, not from a live lookup.
+      await provisioner.provisionResources(
+        'svc',
+        [sqsResource({ redrivePolicy: { deadLetterTargetRef: 'OrdersDlq::Arn', maxReceiveCount: 3 } }), dlq],
+        { region: 'us-east-1' },
+      );
+      const input = sqsMock.commandCalls(CreateQueueCommand)[0].args[0].input as any;
+      expect(JSON.parse(input.Attributes.RedrivePolicy)).toEqual({
+        deadLetterTargetArn: 'arn:aws:sqs:us-east-1:000000000000:orders-dlq',
+        maxReceiveCount: 3,
+      });
+    });
+
+    it('passes a literal dead-letter ARN through untouched', async () => {
+      sqsMock.on(CreateQueueCommand).resolves({});
+      await provisioner.provisionResources('svc', [
+        sqsResource({
+          redrivePolicy: { deadLetterTargetRef: 'arn:aws:sqs:eu-west-1:000000000000:other-dlq', maxReceiveCount: 1 },
+        }),
+      ]);
+      const input = sqsMock.commandCalls(CreateQueueCommand)[0].args[0].input as any;
+      expect(JSON.parse(input.Attributes.RedrivePolicy).deadLetterTargetArn).toBe(
+        'arn:aws:sqs:eu-west-1:000000000000:other-dlq',
+      );
+    });
+
+    it('warns and provisions without redrive when the target is not an SQS queue', async () => {
+      sqsMock.on(CreateQueueCommand).resolves({});
+      await provisioner.provisionResources('svc', [
+        sqsResource({ redrivePolicy: { deadLetterTargetRef: 'Nope::Arn', maxReceiveCount: 3 } }),
+      ]);
+      const input = sqsMock.commandCalls(CreateQueueCommand)[0].args[0].input as any;
+      expect(input.Attributes).toBeUndefined();
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('RedrivePolicy'));
+    });
+
+    it('applies the policy with SetQueueAttributes when the queue already exists', async () => {
+      sqsMock.on(CreateQueueCommand).rejects(namedError('QueueAlreadyExists'));
+      sqsMock.on(GetQueueUrlCommand).resolves({ QueueUrl: 'http://localhost:4566/000/order-queue' });
+      sqsMock.on(SetQueueAttributesCommand).resolves({});
+      await provisioner.provisionResources('svc', [
+        sqsResource({ redrivePolicy: { deadLetterTargetRef: 'OrdersDlq::Arn', maxReceiveCount: 2 } }),
+        dlq,
+      ]);
+      const input = sqsMock.commandCalls(SetQueueAttributesCommand)[0].args[0].input as any;
+      expect(input.QueueUrl).toBe('http://localhost:4566/000/order-queue');
+      expect(JSON.parse(input.Attributes.RedrivePolicy).maxReceiveCount).toBe(2);
+    });
+
+    it('skips SetQueueAttributes for an existing queue with no policy', async () => {
+      sqsMock.on(CreateQueueCommand).rejects(namedError('QueueAlreadyExists'));
+      await provisioner.provisionResources('svc', [sqsResource()]);
+      expect(sqsMock.commandCalls(SetQueueAttributesCommand)).toHaveLength(0);
+    });
+
+    it('warns (non-fatally) when applying the policy to an existing queue fails', async () => {
+      sqsMock.on(CreateQueueCommand).rejects(namedError('QueueAlreadyExists'));
+      sqsMock.on(GetQueueUrlCommand).rejects(new Error('gone'));
+      await provisioner.provisionResources('svc', [
+        sqsResource({ redrivePolicy: { deadLetterTargetRef: 'OrdersDlq::Arn', maxReceiveCount: 2 } }),
+        dlq,
+      ]);
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Failed to apply RedrivePolicy'));
+      expect(console.error).not.toHaveBeenCalled();
+    });
+
+    it('warns with the raw value when the SetQueueAttributes failure has no message', async () => {
+      sqsMock.on(CreateQueueCommand).rejects(namedError('QueueAlreadyExists'));
+      sqsMock.on(GetQueueUrlCommand).rejects({ name: 'WeirdFailure' } as never);
+      await provisioner.provisionResources('svc', [
+        sqsResource({ redrivePolicy: { deadLetterTargetRef: 'OrdersDlq::Arn', maxReceiveCount: 2 } }),
+        dlq,
+      ]);
+      expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Failed to apply RedrivePolicy'));
+    });
   });
 });
 
