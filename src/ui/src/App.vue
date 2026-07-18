@@ -2,9 +2,10 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterView, useRoute, useRouter } from 'vue-router';
 import {
-  TNavbar, TStack, TBadge, TToastProvider, TButton, TSelect,
-  TTabs, TTabList, TTab, TDropdown,
+  TStack, TBadge, TToastProvider, TButton, TSelect,
+  TAppShell, TNavMenu, TDropdown,
 } from '@treeui/vue';
+import type { TNavMenuItem } from '@treeui/vue';
 import { currentRegion, regionOptions, applyConfiguredRegion } from './services/region';
 import { api } from './services/api';
 import type { HealthInfo } from './services/api';
@@ -33,6 +34,18 @@ const activeTopLevel = computed(() => {
 const menuItems = computed(() => [
   { label: theme.value === 'dark' ? 'Switch to light' : 'Switch to dark', value: 'theme' },
 ]);
+
+const navItems: TNavMenuItem[] = [
+  { label: 'Overview', value: '/' },
+  { label: 'Services', value: '/services' },
+  { label: 'Lambdas', value: '/lambdas' },
+  { label: 'APIs', value: '/apis' },
+  { label: 'Queues', value: '/queues' },
+  { label: 'S3', value: '/buckets' },
+  { label: 'DynamoDB', value: '/dynamo' },
+  { label: 'OpenSearch', value: '/opensearch' },
+  { label: 'Secrets', value: '/secrets' },
+];
 
 function onNavSelect(value: string) {
   if (value && value !== activeTopLevel.value) router.push(value);
@@ -74,89 +87,71 @@ onBeforeUnmount(() => {
 
 <template>
   <TToastProvider position="top-right">
-    <div class="app-shell">
-      <header class="app-header">
-        <TNavbar as="div" bordered>
-          <template #start>
-            <TStack direction="horizontal" gap="0.625rem" align="center">
-              <img
-                v-if="branding.logoUrl"
-                :src="branding.logoUrl"
-                :alt="`${branding.title} logo`"
-                class="brand-logo"
-              />
-              <TStack direction="vertical" gap="0.125rem">
-                <strong>{{ branding.title }}</strong>
-                <span v-if="branding.subtitle" class="muted" style="font-size: 0.75rem;">
-                  {{ branding.subtitle }}
-                </span>
-              </TStack>
-            </TStack>
-          </template>
+    <TAppShell collapsible sidebar-width="16rem" sidebar-label="Primary navigation">
+      <template #header>
+        <TStack direction="horizontal" gap="0.625rem" align="center">
+          <img
+            v-if="branding.logoUrl"
+            :src="branding.logoUrl"
+            :alt="`${branding.title} logo`"
+            class="brand-logo"
+          />
+          <TStack direction="vertical" gap="0.125rem">
+            <strong>{{ branding.title }}</strong>
+            <span v-if="branding.subtitle" class="muted" style="font-size: 0.75rem;">
+              {{ branding.subtitle }}
+            </span>
+          </TStack>
+        </TStack>
 
-          <template #end>
-            <div class="app-header-controls">
-              <TBadge
-                :tone="health.localstack ? 'success' : 'danger'"
-                variant="soft"
-              >
-                LocalStack: {{ health.localstack ? 'Running' : 'Offline' }}
-              </TBadge>
-              <TBadge
-                v-if="health.dynamoProxy?.enabled"
-                :tone="health.dynamoProxy.running ? 'success' : 'warning'"
-                variant="soft"
-              >
-                Dynamo Proxy: {{ health.dynamoProxy.running ? 'On' : 'Off' }}
-              </TBadge>
-              <TSelect
-                v-model="currentRegion"
-                :options="regionOptions"
-                size="sm"
-                style="min-width: 14rem;"
-                aria-label="AWS Region"
-              />
-              <TDropdown
-                :items="menuItems"
-                size="sm"
-                label="Open menu"
-                @select="onMenuSelect"
-              >
-                <template #trigger>
-                  <TButton size="sm" variant="ghost" aria-label="Open menu">
-                    ⋮
-                  </TButton>
-                </template>
-              </TDropdown>
-            </div>
-          </template>
-        </TNavbar>
-
-        <nav class="app-subnav" aria-label="Primary">
-          <TTabs
-            :model-value="activeTopLevel"
-            @update:model-value="onNavSelect"
+        <div class="app-header-controls">
+          <TBadge
+            :tone="health.localstack ? 'success' : 'danger'"
+            variant="soft"
           >
-            <TTabList>
-              <TTab value="/">Overview</TTab>
-              <TTab value="/services">Services</TTab>
-              <TTab value="/lambdas">Lambdas</TTab>
-              <TTab value="/apis">APIs</TTab>
-              <TTab value="/queues">Queues</TTab>
-              <TTab value="/buckets">S3</TTab>
-              <TTab value="/dynamo">DynamoDB</TTab>
-              <TTab value="/opensearch">OpenSearch</TTab>
-              <TTab value="/secrets">Secrets</TTab>
-            </TTabList>
-          </TTabs>
-        </nav>
-      </header>
-
-      <main class="app-main">
-        <div :key="`${route.fullPath}-${currentRegion}`">
-          <RouterView />
+            LocalStack: {{ health.localstack ? 'Running' : 'Offline' }}
+          </TBadge>
+          <TBadge
+            v-if="health.dynamoProxy?.enabled"
+            :tone="health.dynamoProxy.running ? 'success' : 'warning'"
+            variant="soft"
+          >
+            Dynamo Proxy: {{ health.dynamoProxy.running ? 'On' : 'Off' }}
+          </TBadge>
+          <TSelect
+            v-model="currentRegion"
+            :options="regionOptions"
+            size="sm"
+            style="min-width: 14rem;"
+            aria-label="AWS Region"
+          />
+          <TDropdown
+            :items="menuItems"
+            size="sm"
+            label="Open menu"
+            @select="onMenuSelect"
+          >
+            <template #trigger>
+              <TButton size="sm" variant="ghost" aria-label="Open menu">
+                ⋮
+              </TButton>
+            </template>
+          </TDropdown>
         </div>
-      </main>
-    </div>
+      </template>
+
+      <template #sidebar>
+        <TNavMenu
+          :items="navItems"
+          :model-value="activeTopLevel"
+          aria-label="Primary"
+          @select="onNavSelect"
+        />
+      </template>
+
+      <div class="app-main" :key="`${route.fullPath}-${currentRegion}`">
+        <RouterView />
+      </div>
+    </TAppShell>
   </TToastProvider>
 </template>

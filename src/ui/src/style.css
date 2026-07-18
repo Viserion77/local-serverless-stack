@@ -16,23 +16,11 @@ body {
   width: 100%;
 }
 
-.app-shell {
-  display: flex;
-  flex-direction: column;
-  min-height: 100vh;
-  width: 100%;
-}
-
-/* Two-row sticky header: brand bar (row 1) + navigation tabs (row 2). */
-.app-header {
-  position: sticky;
-  top: 0;
-  z-index: var(--tree-z-popover);
-}
-
-/* Row 1 right side: status badge + region select + menu in a single row,
-   never stacked (plain flex — TNavbar's slot must not wrap these). */
+/* TAppShell's header slot is a single flex row: brand sits at the start,
+   controls are pushed to the far end. Status badge + region select + menu
+   stay on one line, never stacked. */
 .app-header-controls {
+  margin-inline-start: auto;
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -41,27 +29,9 @@ body {
   white-space: nowrap;
 }
 
-/* Row 2: full-width nav bar; matches the TNavbar background, and the tab
-   list's own bottom border acts as the header's bottom border. */
-.app-subnav {
-  width: 100%;
-  background: color-mix(in srgb, var(--tree-color-bg-surface) 92%, var(--tree-color-bg-subtle));
-  padding-inline: clamp(var(--tree-space-4), 3vw, var(--tree-space-6));
-  /* overflow-x: auto also clips on the block axis — leave room so the 4px
-     focus ring on the tabs isn't cut off at the container edges. */
-  padding-block: 4px;
-  overflow-x: auto;
-}
-
-/* Keep the tab-list border spanning the full scroll width on overflow. */
-.app-subnav .t-tabs {
-  width: max-content;
-  min-width: 100%;
-}
-
+/* Content lives inside TAppShell's scrollable main area (t-app-shell__main),
+   which owns the scroll — this wrapper only supplies the page padding. */
 .app-main {
-  flex: 1;
-  width: 100%;
   padding: 1.5rem 2rem;
 }
 
