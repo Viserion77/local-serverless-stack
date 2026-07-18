@@ -70,6 +70,23 @@ resources:
       Type: AWS::S3::Bucket
       Properties:
         BucketName: billing-receipts
+        # Template-driven CORS: LSS applies this at provision time (PutBucketCors),
+        # so a browser presigned-POST upload gets correct preflight headers on
+        # first boot — no post-boot bootstrap PutBucketCors needed.
+        CorsConfiguration:
+          CorsRules:
+            - Id: receipts-cors
+              AllowedOrigins:
+                - https://receipts.example.com
+              AllowedMethods:
+                - GET
+                - PUT
+                - POST
+              AllowedHeaders:
+                - '*'
+              ExposedHeaders:
+                - ETag
+              MaxAge: 600
 
     BillingBus:
       Type: AWS::Events::EventBus

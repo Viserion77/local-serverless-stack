@@ -1,4 +1,5 @@
 import crypto from 'crypto';
+import type { GenerateSecretStringSpec } from './secret-value.js';
 
 interface CloudFormationTemplate {
   Resources: Record<string, CloudFormationResource>;
@@ -73,12 +74,39 @@ export interface S3NotificationConfig {
   filterSuffix?: string;
 }
 
+// Normalized CORS rule, shaped to the AWS SDK CORSRule members the provisioner
+// sends via PutBucketCors (which is also the engine's S3CorsRule shape).
+export interface S3CorsRuleConfig {
+  id?: string;
+  allowedOrigins: string[];
+  allowedMethods: string[];
+  allowedHeaders: string[];
+  exposeHeaders: string[];
+  maxAgeSeconds?: number;
+}
+
 export interface S3Resource {
   type: 's3';
   logicalId: string;
   name: string;
   versioningEnabled?: boolean;
   notifications: S3NotificationConfig[];
+  // Set only when CorsConfiguration declares at least one valid rule — kept
+  // conditional so a bucket without CORS has no corsRules key at all.
+  corsRules?: S3CorsRuleConfig[];
+}
+
+export interface SecretsManagerResource {
+  type: 'secret';
+  logicalId: string;
+  name: string;
+  description?: string;
+  kmsKeyId?: string;
+  secretString?: string;
+  // Raw (camelCased) GenerateSecretString spec — the value is synthesized at
+  // provision time (parser stays pure), not here.
+  generateSecretString?: GenerateSecretStringSpec;
+  tags: Array<{ Key: string; Value: string }>;
 }
 
 export interface EventBusResource {
@@ -145,6 +173,7 @@ export type Resource =
   | SQSResource
   | SNSResource
   | S3Resource
+  | SecretsManagerResource
   | EventBusResource
   | EventRuleResource
   | OpenSearchCollectionResource
@@ -186,6 +215,8 @@ export class CloudFormationParser {
         // that LSS doesn't resolve, and it isn't useful for local dev.
         if (key === 'ServerlessDeploymentBucket') return null;
         return this.parseS3(key, resource);
+      case 'AWS::SecretsManager::Secret':
+        return this.parseSecret(key, resource);
       case 'AWS::Lambda::EventSourceMapping':
         return this.parseEventSource(key, resource);
       case 'AWS::Events::EventBus':
@@ -310,13 +341,86 @@ export class CloudFormationParser {
       notifications.push({ functionRef, events, filterPrefix, filterSuffix });
     }
 
-    return {
+    const parsed: S3Resource = {
       type: 's3',
       logicalId: key,
       name: (props.BucketName as string) || key,
       versioningEnabled: versioning?.Status === 'Enabled',
       notifications,
     };
+
+    const corsRules = this.parseCorsRules(props.CorsConfiguration);
+    // Assign conditionally (like ttl/streamViewType) so a bucket with no
+    // CorsConfiguration keeps NO corsRules key.
+    if (corsRules.length > 0) {
+      parsed.corsRules = corsRules;
+    }
+
+    return parsed;
+  }
+
+  private parseCorsRules(config: unknown): S3CorsRuleConfig[] {
+    const corsConfig = config as { CorsRules?: unknown[] } | undefined;
+    const rules: S3CorsRuleConfig[] = [];
+    for (const raw of corsConfig?.CorsRules || []) {
+      const rule = raw as Record<string, unknown>;
+      const allowedMethods = toStringArray(rule.AllowedMethods);
+      const allowedOrigins = toStringArray(rule.AllowedOrigins);
+      // AllowedMethods and AllowedOrigins are both required by AWS — skip a rule
+      // missing either.
+      if (allowedMethods.length === 0 || allowedOrigins.length === 0) continue;
+
+      const mapped: S3CorsRuleConfig = {
+        allowedOrigins,
+        allowedMethods,
+        allowedHeaders: toStringArray(rule.AllowedHeaders),
+        // CFN uses "ExposedHeaders"; the S3 wire/SDK member is "ExposeHeader(s)".
+        exposeHeaders: toStringArray(rule.ExposedHeaders ?? rule.ExposeHeaders),
+      };
+      if (rule.Id !== undefined) mapped.id = String(rule.Id);
+      // `!== undefined` guard so MaxAge:0 (a legal value) is preserved.
+      const maxAge = rule.MaxAge ?? rule.MaxAgeSeconds;
+      if (maxAge !== undefined) mapped.maxAgeSeconds = maxAge as number;
+      rules.push(mapped);
+    }
+    return rules;
+  }
+
+  private parseSecret(key: string, resource: CloudFormationResource): SecretsManagerResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    const parsed: SecretsManagerResource = {
+      type: 'secret',
+      logicalId: key,
+      // Name is optional in CFN — fall back to the logical id (like parseDynamoDB).
+      name: (props.Name as string) || key,
+      tags: Array.isArray(props.Tags)
+        ? (props.Tags as Array<{ Key?: unknown; Value?: unknown }>).map(t => ({
+            Key: String(t.Key ?? ''),
+            Value: String(t.Value ?? ''),
+          }))
+        : [],
+    };
+    if (props.Description !== undefined) parsed.description = props.Description as string;
+    if (props.KmsKeyId !== undefined) parsed.kmsKeyId = props.KmsKeyId as string;
+    // SecretString and GenerateSecretString are mutually exclusive in AWS; copy
+    // whichever is present verbatim (password synthesis happens at provision).
+    if (props.SecretString !== undefined) parsed.secretString = props.SecretString as string;
+    const gen = props.GenerateSecretString as Record<string, unknown> | undefined;
+    if (gen && typeof gen === 'object') {
+      parsed.generateSecretString = {
+        secretStringTemplate: gen.SecretStringTemplate as string | undefined,
+        generateStringKey: gen.GenerateStringKey as string | undefined,
+        passwordLength: gen.PasswordLength as number | undefined,
+        excludeCharacters: gen.ExcludeCharacters as string | undefined,
+        excludeUppercase: gen.ExcludeUppercase as boolean | undefined,
+        excludeLowercase: gen.ExcludeLowercase as boolean | undefined,
+        excludeNumbers: gen.ExcludeNumbers as boolean | undefined,
+        excludePunctuation: gen.ExcludePunctuation as boolean | undefined,
+        includeSpace: gen.IncludeSpace as boolean | undefined,
+        requireEachIncludedType: gen.RequireEachIncludedType as boolean | undefined,
+      };
+    }
+    return parsed;
   }
 
   private parseOpenSearchCollection(key: string, resource: CloudFormationResource): OpenSearchCollectionResource {
@@ -446,4 +550,11 @@ export class CloudFormationParser {
     const content = JSON.stringify(template);
     return crypto.createHash('sha256').update(content).digest('hex');
   }
+}
+
+// Coerce a CFN list (or a lone string) into a string[]; anything else → [].
+function toStringArray(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map(String);
+  if (typeof value === 'string') return [value];
+  return [];
 }

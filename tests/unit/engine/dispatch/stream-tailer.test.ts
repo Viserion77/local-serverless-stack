@@ -95,6 +95,18 @@ describe('StreamTailerSet', () => {
     return (call.event as { Records: WireStreamRecord[] }).Records;
   }
 
+  function ids(call: InvokeCall): string[] {
+    return records(call).map(r => (r.dynamodb.Keys.id as { S: string }).S);
+  }
+
+  async function createDlq(name: string): Promise<string> {
+    return ((await sqs.handle('CreateQueue', { QueueName: name }, awsReq(REGION))) as { QueueUrl: string }).QueueUrl;
+  }
+
+  function dlqArn(name: string): string {
+    return `arn:aws:sqs:us-east-1:000000000000:${name}`;
+  }
+
   test('delivers INSERT then MODIFY in order with AWS-shaped records', async () => {
     const streamArn = await createStreamTable('orders');
     await createEsm({
@@ -228,6 +240,255 @@ describe('StreamTailerSet', () => {
     expect(typeof info.approximateArrivalOfFirstRecord).toBe('string');
     expect(typeof info.approximateArrivalOfLastRecord).toBe('string');
     warn.mockRestore();
+  });
+
+  // --- LSS-STREAM-ESM-RETRY-01: AWS-faithful maximumRetryAttempts -----------
+
+  test('no MaximumRetryAttempts (AWS default -1) retries far past the old cap of 5 and never drops the batch', async () => {
+    const streamArn = await createStreamTable('infinite');
+    await createEsm({
+      FunctionName: 'never-gives-up',
+      EventSourceArn: streamArn,
+      StartingPosition: 'TRIM_HORIZON',
+      BatchSize: 10,
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const calls = startTailers([{ ok: false, errorType: 'Unhandled', errorMessage: 'kaboom' }]);
+
+    await putItem('infinite', 'poison');
+    // The old code capped at 5 retries (6 attempts) then advanced. Prove we go
+    // well past that and keep climbing while the record is still in the ring.
+    await waitFor(() => calls.length > 8, 3000, 'retries past the old cap of 5');
+    const seen = calls.length;
+    await sleep(40);
+    expect(calls.length).toBeGreaterThan(seen);
+    expect(warn.mock.calls.some(c => String(c[0]).includes('advancing past it'))).toBe(false);
+    warn.mockRestore();
+  });
+
+  test('explicit MaximumRetryAttempts: -1 still invokes at least once (regression: never a zero-invocation drop)', async () => {
+    const streamArn = await createStreamTable('minus-one');
+    await createEsm({
+      FunctionName: 'stubborn',
+      EventSourceArn: streamArn,
+      StartingPosition: 'TRIM_HORIZON',
+      BatchSize: 10,
+      MaximumRetryAttempts: -1,
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const calls = startTailers([{ ok: false, errorType: 'Unhandled' }]);
+
+    await putItem('minus-one', 'poison');
+    await waitFor(() => calls.length >= 1, 3000, 'at least one invoke');
+    const seen = calls.length;
+    await sleep(40);
+    expect(calls.length).toBeGreaterThan(seen); // keeps retrying, never dropped
+    warn.mockRestore();
+  });
+
+  test('a positive MaximumRetryAttempts is honored with no cap at 5 (N=8 → 9 attempts)', async () => {
+    const streamArn = await createStreamTable('bignum');
+    await createEsm({
+      FunctionName: 'fragile8',
+      EventSourceArn: streamArn,
+      StartingPosition: 'TRIM_HORIZON',
+      BatchSize: 10,
+      MaximumRetryAttempts: 8,
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const calls = startTailers([{ ok: false, errorType: 'Unhandled' }]);
+
+    await putItem('bignum', 'poison');
+    await waitFor(() => calls.length >= 9, 3000, 'nine attempts');
+    await sleep(60);
+    expect(calls).toHaveLength(9); // 1 initial + 8 retries, not truncated to 6
+    expect(warn.mock.calls.some(c => String(c[0]).includes('advancing past it'))).toBe(true);
+    warn.mockRestore();
+  });
+
+  test('disabling an ESM mid-infinite-retry halts invokes and sends no OnFailure envelope', async () => {
+    const streamArn = await createStreamTable('haltable');
+    const dlqUrl = await createDlq('halt-dlq');
+    const esm = await createEsm({
+      FunctionName: 'stuck',
+      EventSourceArn: streamArn,
+      StartingPosition: 'TRIM_HORIZON',
+      BatchSize: 10,
+      DestinationConfig: { OnFailure: { Destination: dlqArn('halt-dlq') } },
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const calls = startTailers([{ ok: false, errorType: 'Unhandled' }]);
+
+    await putItem('haltable', 'poison');
+    await waitFor(() => calls.length >= 3, 3000, 'infinite retries running');
+
+    await lambdaCtl.handle(jsonReq(REGION, 'PUT', `/2015-03-31/event-source-mappings/${esm.UUID}`, { Enabled: false }));
+    const frozen = calls.length;
+    await sleep(60);
+    expect(calls.length).toBeLessThanOrEqual(frozen + 1); // halted promptly
+
+    const received = (await sqs.handle('ReceiveMessage', { QueueUrl: dlqUrl, WaitTimeSeconds: 0 }, awsReq(REGION))) as {
+      Messages?: unknown[];
+    };
+    expect(received.Messages ?? []).toHaveLength(0);
+    warn.mockRestore();
+  });
+
+  // --- LSS-DDBSTREAM-RBIF-01: ReportBatchItemFailures partial batches --------
+
+  test('ReportBatchItemFailures checkpoints before the earliest failure and DLQs only the failing suffix', async () => {
+    const streamArn = await createStreamTable('projected');
+    const dlqUrl = await createDlq('proj-dlq');
+    // All three exist before the tailer starts → one batch [r1,r2,r3].
+    await putItem('projected', 'r1');
+    await putItem('projected', 'r2');
+    await putItem('projected', 'r3');
+    await createEsm({
+      FunctionName: 'projector',
+      EventSourceArn: streamArn,
+      StartingPosition: 'TRIM_HORIZON',
+      BatchSize: 10,
+      MaximumRetryAttempts: 2,
+      FunctionResponseTypes: ['ReportBatchItemFailures'],
+      DestinationConfig: { OnFailure: { Destination: dlqArn('proj-dlq') } },
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // The handler always reports r2 as the failing record.
+    const calls = startTailers(call => {
+      const r2 = records(call).find(r => (r.dynamodb.Keys.id as { S: string }).S === 'r2');
+      return { ok: true, payload: { batchItemFailures: r2 ? [{ itemIdentifier: r2.dynamodb.SequenceNumber }] : [] } };
+    });
+
+    await waitFor(() => calls.length >= 3, 3000, 'initial + 2 retries');
+    await sleep(40);
+
+    // First invoke saw all three; every retry saw exactly [r2, r3].
+    expect(ids(calls[0])).toEqual(['r1', 'r2', 'r3']);
+    for (const call of calls.slice(1)) expect(ids(call)).toEqual(['r2', 'r3']);
+    expect(calls).toHaveLength(3); // r1 committed, never re-delivered
+
+    const received = (await sqs.handle(
+      'ReceiveMessage',
+      { QueueUrl: dlqUrl, MaxNumberOfMessages: 1, WaitTimeSeconds: 2 },
+      awsReq(REGION),
+    )) as { Messages?: Array<{ Body: string }> };
+    const envelope = JSON.parse(received.Messages![0].Body);
+    const s2 = records(calls[1])[0].dynamodb.SequenceNumber;
+    const s3 = records(calls[1])[1].dynamodb.SequenceNumber;
+    expect(envelope.DDBStreamBatchInfo.startSequenceNumber).toBe(s2);
+    expect(envelope.DDBStreamBatchInfo.endSequenceNumber).toBe(s3);
+    expect(envelope.DDBStreamBatchInfo.batchSize).toBe(2); // the suffix, not 3
+    expect(envelope.requestContext.condition).toBe('RetryAttemptsExhausted');
+    expect(envelope.requestContext.approximateInvokeCount).toBe(3);
+
+    // After exhaustion the cursor advanced past the whole batch: r4 on its own.
+    await putItem('projected', 'r4');
+    await waitFor(() => calls.some(c => ids(c).includes('r4')), 3000, 'r4 delivered');
+    expect(ids(calls.find(c => ids(c).includes('r4'))!)).toEqual(['r4']);
+    warn.mockRestore();
+  });
+
+  test('ReportBatchItemFailures: an empty failure list commits the whole batch (no re-delivery, no DLQ)', async () => {
+    const streamArn = await createStreamTable('allgood');
+    const dlqUrl = await createDlq('allgood-dlq');
+    await putItem('allgood', 'g1');
+    await putItem('allgood', 'g2');
+    await createEsm({
+      FunctionName: 'acker',
+      EventSourceArn: streamArn,
+      StartingPosition: 'TRIM_HORIZON',
+      BatchSize: 10,
+      MaximumRetryAttempts: 2,
+      FunctionResponseTypes: ['ReportBatchItemFailures'],
+      DestinationConfig: { OnFailure: { Destination: dlqArn('allgood-dlq') } },
+    });
+    const calls = startTailers([{ ok: true, payload: { batchItemFailures: [] } }]);
+
+    await waitFor(() => calls.length >= 1, 3000, 'first delivery');
+    await sleep(60);
+    expect(calls).toHaveLength(1); // committed once, never re-delivered
+
+    const received = (await sqs.handle('ReceiveMessage', { QueueUrl: dlqUrl, WaitTimeSeconds: 0 }, awsReq(REGION))) as {
+      Messages?: unknown[];
+    };
+    expect(received.Messages ?? []).toHaveLength(0);
+  });
+
+  test('ReportBatchItemFailures: a malformed response retries the whole batch then DLQs all of it', async () => {
+    const streamArn = await createStreamTable('malformed');
+    const dlqUrl = await createDlq('malformed-dlq');
+    await putItem('malformed', 'r1');
+    await putItem('malformed', 'r2');
+    await putItem('malformed', 'r3');
+    await createEsm({
+      FunctionName: 'confused',
+      EventSourceArn: streamArn,
+      StartingPosition: 'TRIM_HORIZON',
+      BatchSize: 10,
+      MaximumRetryAttempts: 2,
+      FunctionResponseTypes: ['ReportBatchItemFailures'],
+      DestinationConfig: { OnFailure: { Destination: dlqArn('malformed-dlq') } },
+    });
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // itemIdentifier does not match any SequenceNumber in the batch → malformed.
+    const calls = startTailers([{ ok: true, payload: { batchItemFailures: [{ itemIdentifier: 'does-not-exist' }] } }]);
+
+    await waitFor(() => calls.length >= 3, 3000, 'whole-batch retries');
+    await sleep(40);
+    for (const call of calls) expect(ids(call)).toEqual(['r1', 'r2', 'r3']);
+    expect(calls).toHaveLength(3);
+
+    const received = (await sqs.handle(
+      'ReceiveMessage',
+      { QueueUrl: dlqUrl, MaxNumberOfMessages: 1, WaitTimeSeconds: 2 },
+      awsReq(REGION),
+    )) as { Messages?: Array<{ Body: string }> };
+    const envelope = JSON.parse(received.Messages![0].Body);
+    expect(envelope.DDBStreamBatchInfo.batchSize).toBe(3); // the whole batch
+    warn.mockRestore();
+  });
+
+  // --- LSS-ESM-FILTER-CRITERIA: stream leg ----------------------------------
+
+  test('FilterCriteria drops non-matching stream records while advancing the cursor', async () => {
+    const streamArn = await createStreamTable('filtered');
+    const dlqUrl = await createDlq('filtered-dlq');
+    await createEsm({
+      FunctionName: 'insert-only',
+      EventSourceArn: streamArn,
+      StartingPosition: 'TRIM_HORIZON',
+      BatchSize: 10,
+      FilterCriteria: { Filters: [{ Pattern: '{"eventName":["INSERT"]}' }] },
+      DestinationConfig: { OnFailure: { Destination: dlqArn('filtered-dlq') } },
+    });
+    const calls = startTailers([{ ok: true }]);
+
+    await putItem('filtered', 'a'); // INSERT (match)
+    await putItem('filtered', 'a', { v: { S: 'x' } }); // MODIFY (filtered out)
+    await putItem('filtered', 'b'); // INSERT (match)
+    await waitFor(() => calls.flatMap(records).length >= 2, 3000, 'two INSERTs delivered');
+    await sleep(60);
+
+    let delivered = calls.flatMap(records);
+    expect(delivered.map(r => r.eventName)).toEqual(['INSERT', 'INSERT']);
+    expect(delivered.map(r => (r.dynamodb.Keys.id as { S: string }).S)).toEqual(['a', 'b']);
+
+    // The cursor advanced past the dropped MODIFY: a later MODIFY is also
+    // dropped and a subsequent INSERT is still delivered exactly once.
+    await putItem('filtered', 'b', { v: { S: 'y' } }); // MODIFY (filtered out)
+    await putItem('filtered', 'c'); // INSERT (match)
+    await waitFor(() => calls.flatMap(records).some(r => (r.dynamodb.Keys.id as { S: string }).S === 'c'), 3000, 'c delivered');
+    await sleep(40);
+
+    delivered = calls.flatMap(records);
+    expect(delivered.filter(r => r.eventName === 'MODIFY')).toHaveLength(0);
+    expect(delivered.map(r => (r.dynamodb.Keys.id as { S: string }).S)).toEqual(['a', 'b', 'c']);
+
+    // A fully-filtered window never reaches the OnFailure destination.
+    const received = (await sqs.handle('ReceiveMessage', { QueueUrl: dlqUrl, WaitTimeSeconds: 0 }, awsReq(REGION))) as {
+      Messages?: unknown[];
+    };
+    expect(received.Messages ?? []).toHaveLength(0);
   });
 
   test('disabled stream ESMs stop tailing', async () => {

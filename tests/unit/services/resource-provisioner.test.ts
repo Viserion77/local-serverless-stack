@@ -32,9 +32,15 @@ import {
   DeleteBucketCommand,
   PutBucketVersioningCommand,
   PutBucketNotificationConfigurationCommand,
+  PutBucketCorsCommand,
   ListObjectsV2Command,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
+import {
+  SecretsManagerClient,
+  CreateSecretCommand,
+  GetRandomPasswordCommand,
+} from '@aws-sdk/client-secrets-manager';
 import {
   LambdaClient,
   CreateFunctionCommand,
@@ -69,6 +75,7 @@ import type {
   SQSResource,
   SNSResource,
   S3Resource,
+  SecretsManagerResource,
   EventBusResource,
   EventRuleResource,
   OpenSearchCollectionResource,
@@ -83,6 +90,7 @@ const s3Mock = mockClient(S3Client);
 const lambdaMock = mockClient(LambdaClient);
 const eventBridgeMock = mockClient(EventBridgeClient);
 const openSearchMock = mockClient(OpenSearchServerlessClient);
+const secretsMock = mockClient(SecretsManagerClient);
 
 let provisioner: ResourceProvisioner;
 
@@ -101,6 +109,7 @@ beforeEach(() => {
   lambdaMock.reset();
   eventBridgeMock.reset();
   openSearchMock.reset();
+  secretsMock.reset();
   provisioner = ResourceProvisioner.getInstance();
   (provisioner as any).resourcesByLogicalId.clear();
   (provisioner as any).currentRegion = 'us-east-1';
@@ -121,6 +130,7 @@ afterAll(() => {
   lambdaMock.restore();
   eventBridgeMock.restore();
   openSearchMock.restore();
+  secretsMock.restore();
 });
 
 const dynamoResource = (over: Partial<DynamoDBResource> = {}): DynamoDBResource => ({
@@ -159,6 +169,14 @@ const opensearchResource = (over: Partial<OpenSearchCollectionResource> = {}): O
   type: 'opensearch',
   logicalId: 'ProductsCollection',
   name: 'products',
+  ...over,
+});
+
+const secretResource = (over: Partial<SecretsManagerResource> = {}): SecretsManagerResource => ({
+  type: 'secret',
+  logicalId: 'SigningKey',
+  name: 'app/signing-key',
+  tags: [],
   ...over,
 });
 
@@ -439,6 +457,127 @@ describe('createS3Bucket (via provisionResources)', () => {
     s3Mock.on(CreateBucketCommand).rejects(namedError('', 'boom'));
     await provisioner.provisionResources('svc', [s3Resource()]);
     expect(console.error).toHaveBeenCalledWith('Failed to provision s3:uploads-bucket:', 'boom');
+  });
+
+  it('applies CorsConfiguration via PutBucketCors (mapped SDK member names)', async () => {
+    s3Mock.on(CreateBucketCommand).resolves({});
+    s3Mock.on(PutBucketCorsCommand).resolves({});
+    await provisioner.provisionResources('svc', [s3Resource({
+      corsRules: [{
+        id: 'receipts-cors',
+        allowedOrigins: ['https://receipts.example.com'],
+        allowedMethods: ['GET', 'PUT', 'POST'],
+        allowedHeaders: ['*'],
+        exposeHeaders: ['ETag'],
+        maxAgeSeconds: 600,
+      }],
+    })]);
+    const calls = s3Mock.commandCalls(PutBucketCorsCommand);
+    expect(calls).toHaveLength(1);
+    const input = calls[0].args[0].input as any;
+    expect(input.Bucket).toBe('uploads-bucket');
+    expect(input.CORSConfiguration.CORSRules).toEqual([{
+      ID: 'receipts-cors',
+      AllowedHeaders: ['*'],
+      AllowedMethods: ['GET', 'PUT', 'POST'],
+      AllowedOrigins: ['https://receipts.example.com'],
+      ExposeHeaders: ['ETag'],
+      MaxAgeSeconds: 600,
+    }]);
+  });
+
+  it('sends no PutBucketCors when the bucket has no corsRules', async () => {
+    s3Mock.on(CreateBucketCommand).resolves({});
+    await provisioner.provisionResources('svc', [s3Resource()]);
+    expect(s3Mock.commandCalls(PutBucketCorsCommand)).toHaveLength(0);
+  });
+
+  it('warns (but does not throw) when PutBucketCors fails', async () => {
+    s3Mock.on(CreateBucketCommand).resolves({});
+    s3Mock.on(PutBucketCorsCommand).rejects(new Error('cors down'));
+    await provisioner.provisionResources('svc', [s3Resource({
+      corsRules: [{ allowedOrigins: ['*'], allowedMethods: ['GET'], allowedHeaders: [], exposeHeaders: [] }],
+    })]);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('Failed to apply CORS'));
+    expect(console.error).not.toHaveBeenCalled();
+  });
+});
+
+describe('createSecret (via provisionResources)', () => {
+  it('creates a secret with a literal SecretString', async () => {
+    secretsMock.on(CreateSecretCommand).resolves({});
+    await provisioner.provisionResources('svc', [secretResource({
+      name: 'app/signing-key',
+      description: 'signing key',
+      secretString: 'literal-value',
+      tags: [{ Key: 'team', Value: 'identity' }],
+    })]);
+    const calls = secretsMock.commandCalls(CreateSecretCommand);
+    expect(calls).toHaveLength(1);
+    const input = calls[0].args[0].input as any;
+    expect(input).toMatchObject({
+      Name: 'app/signing-key',
+      Description: 'signing key',
+      SecretString: 'literal-value',
+      Tags: [{ Key: 'team', Value: 'identity' }],
+    });
+  });
+
+  it('is idempotent — swallows ResourceExistsException without clobbering', async () => {
+    secretsMock.on(CreateSecretCommand).rejects(namedError('ResourceExistsException'));
+    await provisioner.provisionResources('svc', [secretResource()]);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('Secret already exists'));
+  });
+
+  it('warns and skips a secret scheduled for deletion (InvalidRequestException)', async () => {
+    secretsMock.on(CreateSecretCommand).rejects(namedError('InvalidRequestException'));
+    await provisioner.provisionResources('svc', [secretResource()]);
+    expect(console.error).not.toHaveBeenCalled();
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('scheduled for deletion'));
+  });
+
+  it('synthesizes a value from GenerateSecretString (GetRandomPassword + template injection)', async () => {
+    secretsMock.on(GetRandomPasswordCommand).resolves({ RandomPassword: 'gEn3rated-Pw!' });
+    secretsMock.on(CreateSecretCommand).resolves({});
+    await provisioner.provisionResources('svc', [secretResource({
+      name: 'db/creds',
+      secretString: undefined,
+      generateSecretString: {
+        secretStringTemplate: '{"username":"admin"}',
+        generateStringKey: 'password',
+      },
+    })]);
+    // GetRandomPassword called with the AWS-faithful defaults (length 32,
+    // RequireEachIncludedType true).
+    const genInput = secretsMock.commandCalls(GetRandomPasswordCommand)[0].args[0].input as any;
+    expect(genInput.PasswordLength).toBe(32);
+    expect(genInput.RequireEachIncludedType).toBe(true);
+    // The created SecretString is valid JSON with the generated key populated.
+    const input = secretsMock.commandCalls(CreateSecretCommand)[0].args[0].input as any;
+    const parsed = JSON.parse(input.SecretString);
+    expect(parsed).toEqual({ username: 'admin', password: 'gEn3rated-Pw!' });
+  });
+
+  it('uses the raw generated password as the SecretString when no template/key is given', async () => {
+    secretsMock.on(GetRandomPasswordCommand).resolves({ RandomPassword: 'raw-generated' });
+    secretsMock.on(CreateSecretCommand).resolves({});
+    await provisioner.provisionResources('svc', [secretResource({
+      secretString: undefined,
+      generateSecretString: { passwordLength: 20 },
+    })]);
+    const genInput = secretsMock.commandCalls(GetRandomPasswordCommand)[0].args[0].input as any;
+    expect(genInput.PasswordLength).toBe(20);
+    const input = secretsMock.commandCalls(CreateSecretCommand)[0].args[0].input as any;
+    expect(input.SecretString).toBe('raw-generated');
+  });
+
+  it('creates a valueless secret with a warning when neither SecretString nor GenerateSecretString is set', async () => {
+    secretsMock.on(CreateSecretCommand).resolves({});
+    await provisioner.provisionResources('svc', [secretResource({ secretString: undefined })]);
+    expect(console.warn).toHaveBeenCalledWith(expect.stringContaining('created with no value'));
+    const input = secretsMock.commandCalls(CreateSecretCommand)[0].args[0].input as any;
+    expect(input.SecretString).toBeUndefined();
   });
 });
 

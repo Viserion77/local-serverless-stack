@@ -8,6 +8,7 @@
 
 import { randomUUID } from 'crypto';
 import { AwsError, notImplementedOperation } from '../../http/errors.js';
+import { validateFilterCriteria } from '../../dispatch/filter-criteria.js';
 import type { CatalogStore } from '../../store/store-types.js';
 import type {
   AwsRequest,
@@ -63,7 +64,13 @@ type EventSourceMappingInput = {
   StartingPosition?: 'TRIM_HORIZON' | 'LATEST';
   DestinationConfig?: { OnFailure?: { Destination?: string } };
   FilterCriteria?: unknown;
+  FunctionResponseTypes?: string[];
 };
+
+// DynamoDB Streams / Kinesis sources; SQS sources do not carry a retry count.
+function isStreamSourceArn(arn: string): boolean {
+  return arn.startsWith('arn:aws:dynamodb:') || arn.startsWith('arn:aws:kinesis:');
+}
 
 // Failed dispatcher results with these errorType values mean "the ref could
 // not be resolved at all" (vs a handler error, which stays a 200 +
@@ -337,8 +344,10 @@ export class LambdaCtlEmulator implements RestEmulator {
         { status: 409 },
       );
     }
+    if (input.FilterCriteria !== undefined) this.assertValidFilterCriteria(input.FilterCriteria);
     const now = new Date().toISOString();
     const enabled = input.Enabled !== false;
+    const isStream = isStreamSourceArn(eventSourceArn);
     const record: EngineEventSourceMappingRecord = {
       uuid: randomUUID(),
       functionName,
@@ -346,10 +355,13 @@ export class LambdaCtlEmulator implements RestEmulator {
       enabled,
       batchSize: input.BatchSize ?? 10,
       maximumBatchingWindowInSeconds: input.MaximumBatchingWindowInSeconds,
-      maximumRetryAttempts: input.MaximumRetryAttempts,
+      // AWS default for a stream (DynamoDB Streams / Kinesis) ESM is -1
+      // (retry until the record ages out); SQS sources carry no retry count.
+      maximumRetryAttempts: input.MaximumRetryAttempts ?? (isStream ? -1 : undefined),
       startingPosition: input.StartingPosition,
       onFailureDestinationArn: input.DestinationConfig?.OnFailure?.Destination,
       filterCriteria: input.FilterCriteria,
+      functionResponseTypes: input.FunctionResponseTypes,
       createdAt: now,
       lastModified: now,
       state: enabled ? 'Enabled' : 'Disabled',
@@ -380,7 +392,11 @@ export class LambdaCtlEmulator implements RestEmulator {
     if (input.MaximumBatchingWindowInSeconds !== undefined) record.maximumBatchingWindowInSeconds = input.MaximumBatchingWindowInSeconds;
     if (input.MaximumRetryAttempts !== undefined) record.maximumRetryAttempts = input.MaximumRetryAttempts;
     if (input.FunctionName !== undefined) record.functionName = this.resolveFunctionName(input.FunctionName);
-    if (input.FilterCriteria !== undefined) record.filterCriteria = input.FilterCriteria;
+    if (input.FilterCriteria !== undefined) {
+      this.assertValidFilterCriteria(input.FilterCriteria);
+      record.filterCriteria = input.FilterCriteria;
+    }
+    if (input.FunctionResponseTypes !== undefined) record.functionResponseTypes = input.FunctionResponseTypes;
     if (input.DestinationConfig !== undefined) record.onFailureDestinationArn = input.DestinationConfig.OnFailure?.Destination;
     record.lastModified = new Date().toISOString();
     this.mappings(req.region).set(uuid, record);
@@ -522,7 +538,22 @@ export class LambdaCtlEmulator implements RestEmulator {
       json.DestinationConfig = { OnFailure: { Destination: record.onFailureDestinationArn } };
     }
     if (record.filterCriteria !== undefined) json.FilterCriteria = record.filterCriteria;
+    // AWS always returns FunctionResponseTypes, defaulting to [].
+    json.FunctionResponseTypes = record.functionResponseTypes ?? [];
     return json;
+  }
+
+  // Validates ESM FilterCriteria at write time, surfacing the AWS-shaped 400.
+  private assertValidFilterCriteria(filterCriteria: unknown): void {
+    try {
+      validateFilterCriteria(filterCriteria);
+    } catch (err) {
+      throw new AwsError(
+        'InvalidArgumentException',
+        err instanceof Error ? err.message : 'Invalid FilterCriteria.',
+        { status: 400 },
+      );
+    }
   }
 
   private fireEsmChanged(region: string): void {

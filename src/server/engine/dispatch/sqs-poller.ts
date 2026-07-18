@@ -11,6 +11,7 @@ import type { EngineContext, EngineEventSourceMappingRecord, EngineInvokeResult,
 import type { DeliveredMessage, SqsEmulator } from '../emulators/sqs/index.js';
 import { queueNameFromArn } from '../emulators/sqs/index.js';
 import type { LambdaCtlEmulator } from '../emulators/lambda-ctl/index.js';
+import { buildSqsFilterView, compileFilterCriteria } from './filter-criteria.js';
 
 export type InvokeFn = (ref: string, event: unknown, opts?: { async?: boolean }) => Promise<EngineInvokeResult>;
 
@@ -72,6 +73,47 @@ export function buildSqsLambdaEvent(
   };
 }
 
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+// ReportBatchItemFailures partitioning for an SQS batch (matched by messageId).
+// Returns the receiptHandles to delete and whether any message stays in flight.
+//  - null/{}/{batchItemFailures:[]}     → delete the whole batch.
+//  - malformed / unknown / empty id / every message listed → delete NOTHING
+//    (whole batch redelivers via the visibility timeout).
+//  - partial subset                     → delete the messages NOT listed.
+export function partitionBatchFailures(
+  batch: DeliveredMessage[],
+  payload: unknown,
+): { deleteHandles: string[]; anyRemaining: boolean } {
+  const deleteAll = { deleteHandles: batch.map(message => message.receiptHandle), anyRemaining: false };
+  const deleteNone = { deleteHandles: [] as string[], anyRemaining: true };
+
+  if (payload === null || payload === undefined) return deleteAll;
+  if (!isPlainObject(payload)) return deleteNone;
+  const bif = payload.batchItemFailures;
+  if (bif === null || bif === undefined) return deleteAll;
+  if (!Array.isArray(bif)) return deleteNone;
+  if (bif.length === 0) return deleteAll;
+
+  const failed = new Set<string>();
+  for (const entry of bif) {
+    if (!isPlainObject(entry)) return deleteNone;
+    const id = entry.itemIdentifier;
+    if (typeof id !== 'string' || id.length === 0) return deleteNone;
+    failed.add(id);
+  }
+  const batchIds = new Set(batch.map(message => message.messageId));
+  for (const id of failed) {
+    if (!batchIds.has(id)) return deleteNone; // an id outside the batch = whole-batch failure
+  }
+  const remaining = batch.filter(message => failed.has(message.messageId));
+  if (remaining.length === batch.length) return deleteNone; // every message listed = whole-batch failure
+  const deleteHandles = batch.filter(message => !failed.has(message.messageId)).map(message => message.receiptHandle);
+  return { deleteHandles, anyRemaining: remaining.length > 0 };
+}
+
 class DeliveryLoop {
   readonly region: string;
   readonly queueName: string;
@@ -86,6 +128,7 @@ class DeliveryLoop {
   private awaitingRedelivery = false;
   private tick: NodeJS.Timeout | null = null;
   private windowWaiter: (() => void) | null = null;
+  private filter: (record: Record<string, unknown>) => boolean;
   private readonly busListener: (payload: SqsMessageVisibleEvent) => void;
 
   constructor(deps: SqsPollerDeps, esm: EngineEventSourceMappingRecord, region: string) {
@@ -93,6 +136,7 @@ class DeliveryLoop {
     this.esm = esm;
     this.region = region;
     this.queueName = queueNameFromArn(esm.eventSourceArn);
+    this.filter = compileFilterCriteria(esm.filterCriteria);
     this.busListener = payload => {
       if (payload.region === this.region && payload.queueName === this.queueName) this.wake();
     };
@@ -106,6 +150,8 @@ class DeliveryLoop {
 
   update(esm: EngineEventSourceMappingRecord): void {
     this.esm = esm;
+    // FilterCriteria can change on update — recompile the predicate.
+    this.filter = compileFilterCriteria(esm.filterCriteria);
     this.wake();
   }
 
@@ -165,19 +211,42 @@ class DeliveryLoop {
     }
     if (this.stopped) return true; // in-flight messages redeliver via visibility
 
+    // FilterCriteria: drop non-matching messages BEFORE invoking. AWS
+    // auto-deletes them (the receive made them invisible), so they must not
+    // redeliver, count as a failure, or reach the OnFailure destination.
+    const matching: DeliveredMessage[] = [];
+    const nonMatching: DeliveredMessage[] = [];
+    for (const message of batch) {
+      (this.filter(buildSqsFilterView(message)) ? matching : nonMatching).push(message);
+    }
+    if (nonMatching.length > 0) {
+      this.deps.sqs.deleteDelivered(this.region, this.queueName, nonMatching.map(message => message.receiptHandle));
+    }
+    if (matching.length === 0) {
+      // The whole window was filtered out: progress, but nothing to invoke.
+      this.awaitingRedelivery = false;
+      return true;
+    }
+
     this.armTick();
-    const event = buildSqsLambdaEvent(batch, this.esm.eventSourceArn, this.region);
+    const event = buildSqsLambdaEvent(matching, this.esm.eventSourceArn, this.region);
+    const reportPartial = this.esm.functionResponseTypes?.includes('ReportBatchItemFailures') ?? false;
     const backoffs = this.deps.runtimeRetryBackoffMs ?? DEFAULT_RUNTIME_RETRY_BACKOFF_MS;
     let attempt = 0;
     for (;;) {
       const result = await this.deps.invoke(this.esm.functionName, event);
       if (result.ok) {
-        this.deps.sqs.deleteDelivered(
-          this.region,
-          this.queueName,
-          batch.map(message => message.receiptHandle),
-        );
-        this.awaitingRedelivery = false;
+        // ReportBatchItemFailures: delete only the messages NOT reported as
+        // failed; leave the rest in flight for the visibility timeout to
+        // redeliver. Without it, a successful invoke deletes the whole batch.
+        if (reportPartial) {
+          const { deleteHandles, anyRemaining } = partitionBatchFailures(matching, result.payload);
+          this.deps.sqs.deleteDelivered(this.region, this.queueName, deleteHandles);
+          this.awaitingRedelivery = anyRemaining;
+        } else {
+          this.deps.sqs.deleteDelivered(this.region, this.queueName, matching.map(message => message.receiptHandle));
+          this.awaitingRedelivery = false;
+        }
         return true;
       }
       if (result.errorType === 'RuntimeUnavailable' && attempt < backoffs.length && !this.stopped) {

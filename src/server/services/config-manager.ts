@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import type { SecretSeedValue } from './secret-value.js';
 
 // Symlink-stable spelling of a directory (e.g. macOS /tmp -> /private/tmp),
 // so the project identity matches the plugin's symlink-resolved process.cwd().
@@ -221,6 +222,14 @@ export interface LSSConfig {
   // Directory containing DynamoDB seed files ({tableName}.json).
   // Seeds are auto-applied when a table is created; can also be run on demand.
   seedsDir?: string;
+
+  // Secrets to seed on boot (name → value/descriptor). Applied idempotently so
+  // an AWSCURRENT version exists before the first GetSecretValue; an existing
+  // active secret is never clobbered. A value is a bare string/object (the
+  // SecretString itself) or a descriptor with secretString/generateSecretString
+  // plus optional description/kmsKeyId/tags. Merged with seeds/secrets/*.json
+  // (this map wins on a name collision).
+  secrets?: Record<string, SecretSeedValue>;
 
   // Directory where this instance keeps its state (PID/lock/log). When set, the
   // CLI isolates an instance there so `lss stop --config <path>` targets it and
@@ -520,6 +529,16 @@ export class ConfigManager {
     return path.isAbsolute(raw) ? raw : path.resolve(process.cwd(), raw);
   }
 
+  // Directory holding boot secret seeds (seeds/secrets/<name>.json).
+  getSecretsSeedDir(): string {
+    return path.join(this.getSeedsDir(), 'secrets');
+  }
+
+  // The config-declared secrets map (name → value/descriptor), empty by default.
+  getSecretSeeds(): Record<string, SecretSeedValue> {
+    return this.config.secrets ?? {};
+  }
+
   getStateDir(): string | undefined {
     const raw = this.config.stateDir;
     if (!raw) return undefined;
@@ -750,6 +769,10 @@ export class ConfigManager {
     console.log(`  Services: ${this.getServices().join(', ')}`);
     console.log(`  Persistence: ${this.isPersistence()}`);
     console.log(`  Seeds Dir: ${this.getSeedsDir()}`);
+    const secretSeedCount = Object.keys(this.getSecretSeeds()).length;
+    if (secretSeedCount > 0) {
+      console.log(`  Config Secrets: ${secretSeedCount}`);
+    }
     console.log(`  Auto Package: ${this.isAutoPackage()}`);
     if (this.isAutoPackage()) {
       console.log(`  Package Command: ${this.getPackageCommand()}`);

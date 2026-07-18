@@ -18,6 +18,7 @@ import { EngineManager } from './engine/engine-manager.js';
 import { ConfigManager } from './services/config-manager.js';
 import { QueueInspector } from './services/queue-inspector.js';
 import { ServiceRegistrar } from './services/service-registrar.js';
+import { SeedManager } from './services/seed-manager.js';
 import { LambdaRuntimeManager } from './services/lambda-runtime-manager.js';
 import { GatewayManager } from './services/gateway-manager.js';
 import { SourceWatcher } from './services/source-watcher.js';
@@ -128,6 +129,20 @@ async function start() {
       onRuntimeReload: name => LambdaRuntimeManager.getInstance().restartRuntime(name),
       onFullReload: name => ServiceRegistrar.getInstance().reregister(name),
     });
+
+    // Seed Secrets Manager BEFORE reactivating services so any handler that
+    // reads a secret on its first invocation (including relay-triggered handlers
+    // that fire during rehydrate) already finds an AWSCURRENT version. Non-fatal
+    // — a seed failure must not abort startup (matches the aoss-sidecar block).
+    try {
+      SeedManager.getInstance().setDefaultRegion(configManager.getRegion());
+      await SeedManager.getInstance().seedAllSecrets(configManager.getRegion());
+    } catch (error) {
+      console.warn(
+        '⚠️  Failed to seed Secrets Manager on boot:',
+        error instanceof Error ? error.message : error,
+      );
+    }
 
     // Reactivate cached services (runtime workers + gateway/invoke listeners)
     // so registrations survive orchestrator restarts.

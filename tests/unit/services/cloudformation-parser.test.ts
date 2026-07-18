@@ -12,6 +12,7 @@ import {
   SQSResource,
   SNSResource,
   S3Resource,
+  SecretsManagerResource,
   EventBusResource,
   EventRuleResource,
   OpenSearchCollectionResource,
@@ -422,6 +423,192 @@ describe('parseS3', () => {
       },
     } as never) as S3Resource[];
     expect(res.versioningEnabled).toBe(false);
+  });
+
+  it('lifts CorsConfiguration.CorsRules into corsRules with mapped SDK member names', () => {
+    const [res] = parser.parse({
+      Resources: {
+        B: {
+          Type: 'AWS::S3::Bucket',
+          Properties: {
+            CorsConfiguration: {
+              CorsRules: [
+                {
+                  Id: 'receipts-cors',
+                  AllowedOrigins: ['https://receipts.example.com'],
+                  AllowedMethods: ['GET', 'PUT', 'POST'],
+                  AllowedHeaders: ['*'],
+                  ExposedHeaders: ['ETag'],
+                  MaxAge: 600,
+                },
+              ],
+            },
+          },
+        },
+      },
+    } as never) as S3Resource[];
+    expect(res.corsRules).toEqual([
+      {
+        id: 'receipts-cors',
+        allowedOrigins: ['https://receipts.example.com'],
+        allowedMethods: ['GET', 'PUT', 'POST'],
+        allowedHeaders: ['*'],
+        exposeHeaders: ['ETag'],
+        maxAgeSeconds: 600,
+      },
+    ]);
+  });
+
+  it('accepts ExposeHeaders and MaxAgeSeconds (SDK spellings) equivalently and preserves MaxAge:0', () => {
+    const [res] = parser.parse({
+      Resources: {
+        B: {
+          Type: 'AWS::S3::Bucket',
+          Properties: {
+            CorsConfiguration: {
+              CorsRules: [
+                {
+                  AllowedOrigins: ['*'],
+                  AllowedMethods: ['GET'],
+                  ExposeHeaders: ['x-amz-request-id'],
+                  MaxAgeSeconds: 0,
+                },
+              ],
+            },
+          },
+        },
+      },
+    } as never) as S3Resource[];
+    expect(res.corsRules).toEqual([
+      {
+        allowedOrigins: ['*'],
+        allowedMethods: ['GET'],
+        allowedHeaders: [],
+        exposeHeaders: ['x-amz-request-id'],
+        maxAgeSeconds: 0,
+      },
+    ]);
+  });
+
+  it('defaults allowedHeaders/exposeHeaders to [] and leaves maxAgeSeconds undefined when absent', () => {
+    const [res] = parser.parse({
+      Resources: {
+        B: {
+          Type: 'AWS::S3::Bucket',
+          Properties: {
+            CorsConfiguration: {
+              CorsRules: [{ AllowedOrigins: ['https://a.example.com'], AllowedMethods: ['PUT'] }],
+            },
+          },
+        },
+      },
+    } as never) as S3Resource[];
+    expect(res.corsRules).toEqual([
+      {
+        allowedOrigins: ['https://a.example.com'],
+        allowedMethods: ['PUT'],
+        allowedHeaders: [],
+        exposeHeaders: [],
+      },
+    ]);
+    expect(res.corsRules![0].maxAgeSeconds).toBeUndefined();
+  });
+
+  it('skips CorsRules missing AllowedMethods or AllowedOrigins (both AWS-required)', () => {
+    const [res] = parser.parse({
+      Resources: {
+        B: {
+          Type: 'AWS::S3::Bucket',
+          Properties: {
+            CorsConfiguration: {
+              CorsRules: [
+                { AllowedOrigins: ['*'] }, // no methods → dropped
+                { AllowedMethods: ['GET'] }, // no origins → dropped
+                { AllowedOrigins: ['*'], AllowedMethods: ['GET'] }, // valid
+              ],
+            },
+          },
+        },
+      },
+    } as never) as S3Resource[];
+    expect(res.corsRules).toHaveLength(1);
+    expect(res.corsRules![0].allowedMethods).toEqual(['GET']);
+  });
+
+  it('assigns NO corsRules key for a bucket with no CorsConfiguration', () => {
+    const [res] = parser.parse({
+      Resources: {
+        B: { Type: 'AWS::S3::Bucket', Properties: { BucketName: 'plain' } },
+      },
+    } as never) as S3Resource[];
+    expect(res).not.toHaveProperty('corsRules');
+  });
+});
+
+describe('parseSecret', () => {
+  it('parses a SecretString secret with name/description/kmsKeyId/tags', () => {
+    const [res] = parser.parse({
+      Resources: {
+        SigningKey: {
+          Type: 'AWS::SecretsManager::Secret',
+          Properties: {
+            Name: 's7/identity/jwt-signing-key',
+            Description: 'JWT signing key',
+            KmsKeyId: 'alias/aws/secretsmanager',
+            SecretString: '{"key":"dev-signing-secret"}',
+            Tags: [{ Key: 'team', Value: 'identity' }],
+          },
+        },
+      },
+    } as never) as SecretsManagerResource[];
+    expect(res).toEqual({
+      type: 'secret',
+      logicalId: 'SigningKey',
+      name: 's7/identity/jwt-signing-key',
+      description: 'JWT signing key',
+      kmsKeyId: 'alias/aws/secretsmanager',
+      secretString: '{"key":"dev-signing-secret"}',
+      tags: [{ Key: 'team', Value: 'identity' }],
+    });
+  });
+
+  it('falls back to the logical id when Name is absent and defaults tags to []', () => {
+    const [res] = parser.parse({
+      Resources: {
+        DbSecret: { Type: 'AWS::SecretsManager::Secret' },
+      },
+    } as never) as SecretsManagerResource[];
+    expect(res.name).toBe('DbSecret');
+    expect(res.tags).toEqual([]);
+    expect(res.secretString).toBeUndefined();
+    expect(res.generateSecretString).toBeUndefined();
+  });
+
+  it('preserves GenerateSecretString fields verbatim (no password generated at parse time)', () => {
+    const [res] = parser.parse({
+      Resources: {
+        DbSecret: {
+          Type: 'AWS::SecretsManager::Secret',
+          Properties: {
+            GenerateSecretString: {
+              SecretStringTemplate: '{"username":"admin"}',
+              GenerateStringKey: 'password',
+              PasswordLength: 24,
+              ExcludeCharacters: '"@/\\',
+              ExcludePunctuation: true,
+            },
+          },
+        },
+      },
+    } as never) as SecretsManagerResource[];
+    expect(res.secretString).toBeUndefined();
+    expect(res.generateSecretString).toMatchObject({
+      secretStringTemplate: '{"username":"admin"}',
+      generateStringKey: 'password',
+      passwordLength: 24,
+      excludeCharacters: '"@/\\',
+      excludePunctuation: true,
+    });
   });
 });
 

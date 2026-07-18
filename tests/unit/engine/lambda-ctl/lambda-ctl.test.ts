@@ -200,6 +200,7 @@ interface MappingJson {
   FunctionArn?: string;
   DestinationConfig?: { OnFailure?: { Destination?: string } };
   FilterCriteria?: unknown;
+  FunctionResponseTypes?: string[];
   LastModified?: number;
 }
 
@@ -521,6 +522,77 @@ describe('LambdaCtlEmulator', () => {
       expect(record.onFailureDestinationArn).toBe(dlqArn);
       expect(record.maximumRetryAttempts).toBe(2);
       expect(record.filterCriteria).toEqual(filter);
+    });
+
+    it('defaults MaximumRetryAttempts to -1 for a stream source, leaving SQS sources untouched', async () => {
+      const streamArn = `arn:aws:dynamodb:${REGION}:000000000000:table/orders/stream/2026-07-10T00:00:00.000`;
+      const stream = await createMapping({ FunctionName: FN, EventSourceArn: streamArn, StartingPosition: 'TRIM_HORIZON' });
+      expect(stream.MaximumRetryAttempts).toBe(-1);
+      expect(emulator.listEventSourceMappings(REGION).find(m => m.eventSourceArn === streamArn)!.maximumRetryAttempts).toBe(-1);
+
+      const sqs = await createMapping({ FunctionName: 'sqs-fn', EventSourceArn: QUEUE_ARN });
+      expect(sqs.MaximumRetryAttempts).toBeUndefined();
+      expect(emulator.listEventSourceMappings(REGION).find(m => m.eventSourceArn === QUEUE_ARN)!.maximumRetryAttempts).toBeUndefined();
+    });
+
+    it('round-trips FunctionResponseTypes and defaults it to [] when omitted', async () => {
+      const withRbif = await createMapping({
+        FunctionName: FN,
+        EventSourceArn: QUEUE_ARN,
+        FunctionResponseTypes: ['ReportBatchItemFailures'],
+      });
+      expect(withRbif.FunctionResponseTypes).toEqual(['ReportBatchItemFailures']);
+      expect(emulator.listEventSourceMappings(REGION)[0].functionResponseTypes).toEqual(['ReportBatchItemFailures']);
+
+      const without = await createMapping({ FunctionName: 'plain-fn', EventSourceArn: `arn:aws:sqs:${REGION}:000000000000:plain` });
+      expect(without.FunctionResponseTypes).toEqual([]);
+    });
+
+    it('applies FunctionResponseTypes on update and echoes it back', async () => {
+      const mapping = await createMapping({ FunctionName: FN, EventSourceArn: QUEUE_ARN });
+      const res = await emulator.handle(makeReq('PUT', `/2015-03-31/event-source-mappings/${mapping.UUID}`, {
+        body: { FunctionResponseTypes: ['ReportBatchItemFailures'] },
+      }));
+      expect(parseBody<MappingJson & { FunctionResponseTypes?: string[] }>(res).FunctionResponseTypes)
+        .toEqual(['ReportBatchItemFailures']);
+    });
+
+    it('accepts valid FilterCriteria (numeric/anything-but/prefix/exists) and echoes them unchanged', async () => {
+      const filter = {
+        Filters: [
+          { Pattern: '{"dynamodb":{"NewImage":{"price":{"N":[{"numeric":[">",50]}]}}}}' },
+          { Pattern: '{"eventName":[{"anything-but":"REMOVE"}]}' },
+          { Pattern: '{"eventName":[{"prefix":"MOD"}]}' },
+          { Pattern: '{"dynamodb":{"NewImage":{"status":{"S":[{"exists":true}]}}}}' },
+        ],
+      };
+      const mapping = await createMapping({ FunctionName: FN, EventSourceArn: QUEUE_ARN, FilterCriteria: filter });
+      expect(mapping.FilterCriteria).toEqual(filter);
+    });
+
+    it('rejects invalid FilterCriteria with InvalidArgumentException (400)', async () => {
+      await expectAwsError(
+        emulator.handle(makeReq('POST', '/2015-03-31/event-source-mappings', {
+          body: { FunctionName: FN, EventSourceArn: QUEUE_ARN, FilterCriteria: { Filters: [{ Pattern: '{not json' }] } },
+        })),
+        'InvalidArgumentException',
+        400,
+      );
+      await expectAwsError(
+        emulator.handle(makeReq('POST', '/2015-03-31/event-source-mappings', {
+          body: { FunctionName: FN, EventSourceArn: QUEUE_ARN, FilterCriteria: { Filters: [{ Pattern: '{"source":[{"suffix":".users"}]}' }] } },
+        })),
+        'InvalidArgumentException',
+        400,
+      );
+      const sixFilters = { Filters: Array.from({ length: 6 }, (_, i) => ({ Pattern: `{"n":[${i}]}` })) };
+      await expectAwsError(
+        emulator.handle(makeReq('POST', '/2015-03-31/event-source-mappings', {
+          body: { FunctionName: FN, EventSourceArn: QUEUE_ARN, FilterCriteria: sixFilters },
+        })),
+        'InvalidArgumentException',
+        400,
+      );
     });
 
     it('requires EventSourceArn', async () => {

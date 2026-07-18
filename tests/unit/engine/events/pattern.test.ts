@@ -1,7 +1,7 @@
 // Table-driven tests for the pure EventBridge pattern matcher and the PutRule
 // validator (v1 semantics: exact / OR / prefix / exists / nesting; unsupported
 // operators are surfaced by validatePattern, never silently at match time).
-import { matches, validatePattern } from '../../../../src/server/engine/emulators/events/pattern';
+import { matches, matchEsmPattern, validateEsmPattern, validatePattern } from '../../../../src/server/engine/emulators/events/pattern';
 
 describe('matches', () => {
   const event = {
@@ -110,5 +110,68 @@ describe('validatePattern', () => {
     ['exists with non-boolean argument', { source: [{ exists: 'yes' }] }],
   ])('throws on invalid structure: %s', (_name, pattern) => {
     expect(() => validatePattern(pattern)).toThrow(Error);
+  });
+});
+
+// The ESM (Lambda FilterCriteria) matcher shares the object-walker but adds
+// numeric + anything-but and refines exists — without touching EventBridge.
+describe('matchEsmPattern', () => {
+  const event = {
+    eventName: 'INSERT',
+    dynamodb: {
+      Keys: { id: { S: 'a-1' } },
+      NewImage: { status: { S: 'active' }, price: { N: '99' }, note: { NULL: true } },
+    },
+  };
+
+  const table: Array<[string, unknown, boolean]> = [
+    ['typed nested exact', { eventName: ['INSERT'], dynamodb: { NewImage: { status: { S: ['active'] } } } }, true],
+    ['typed nested exact miss', { dynamodb: { NewImage: { status: { S: ['closed'] } } } }, false],
+    ['numeric over string N leaf >', { dynamodb: { NewImage: { price: { N: [{ numeric: ['>', 50] }] } } } }, true],
+    ['numeric over string N leaf rejects', { dynamodb: { NewImage: { price: { N: [{ numeric: ['>', 500] }] } } } }, false],
+    ['numeric two-sided range', { dynamodb: { NewImage: { price: { N: [{ numeric: ['>', 0, '<=', 100] }] } } } }, true],
+    ['anything-but passes on non-match', { eventName: [{ 'anything-but': 'REMOVE' }] }, true],
+    ['anything-but drops on match', { eventName: [{ 'anything-but': 'INSERT' }] }, false],
+    ['anything-but list', { eventName: [{ 'anything-but': ['REMOVE', 'MODIFY'] }] }, true],
+    ['prefix on eventName', { eventName: [{ prefix: 'INS' }] }, true],
+    ['exists true on present non-null', { dynamodb: { NewImage: { status: [{ exists: true }] } } }, true],
+    ['exists true on missing key', { dynamodb: { NewImage: { missing: [{ exists: true }] } } }, false],
+    ['exists false on missing key', { dynamodb: { NewImage: { missing: [{ exists: false }] } } }, true],
+    ['empty pattern matches everything', {}, true],
+  ];
+
+  test.each(table)('%s', (_name, pattern, expected) => {
+    expect(matchEsmPattern(pattern, event)).toBe(expected);
+  });
+
+  test('exists:true is FALSE for a present-null value; exists:false is TRUE', () => {
+    const withNull = { churnedAt: null } as Record<string, unknown>;
+    expect(matchEsmPattern({ churnedAt: [{ exists: true }] }, withNull)).toBe(false);
+    expect(matchEsmPattern({ churnedAt: [{ exists: false }] }, withNull)).toBe(true);
+    // Exact-match still supports an explicit null and empty string.
+    expect(matchEsmPattern({ churnedAt: [null] }, withNull)).toBe(true);
+    expect(matchEsmPattern({ label: [''] }, { label: '' })).toBe(true);
+  });
+});
+
+describe('validateEsmPattern', () => {
+  test.each([
+    ['numeric', { seats: [{ numeric: ['>', 0] }] }],
+    ['anything-but scalar', { plan: [{ 'anything-but': 'free' }] }],
+    ['prefix', { source: [{ prefix: 'app.' }] }],
+    ['exists', { plan: [{ exists: true }] }],
+    ['exact + OR', { plan: ['pro', 'free'] }],
+  ])('accepts supported operator %s', (_name, pattern) => {
+    expect(() => validateEsmPattern(pattern)).not.toThrow();
+  });
+
+  test.each([
+    ['suffix (EventBridge-only)', { source: [{ suffix: '.users' }] }],
+    ['wildcard', { source: [{ wildcard: 'app.*' }] }],
+    ['non-object root', 'nope'],
+    ['empty object', {}],
+    ['bad numeric comparator', { seats: [{ numeric: ['~', 0] }] }],
+  ])('rejects %s', (_name, pattern) => {
+    expect(() => validateEsmPattern(pattern)).toThrow(Error);
   });
 });

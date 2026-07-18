@@ -233,6 +233,9 @@ export interface EngineEventSourceMappingRecord {
   // OnFailure SQS destination ARN, when configured.
   onFailureDestinationArn?: string;
   filterCriteria?: unknown;
+  // Lambda FunctionResponseTypes; the only accepted member is
+  // 'ReportBatchItemFailures' (partial-batch responses). Defaults to [] in AWS.
+  functionResponseTypes?: string[];
   createdAt: string;
   lastModified: string;
   state: 'Enabled' | 'Disabled';

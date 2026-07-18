@@ -10,8 +10,14 @@ import {
   type AttributeValue,
 } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
+import {
+  SecretsManagerClient,
+  CreateSecretCommand,
+  DescribeSecretCommand,
+} from '@aws-sdk/client-secrets-manager';
 import { LocalStackManager } from './localstack-manager.js';
 import { ConfigManager } from './config-manager.js';
+import { normalizeSecretSeed, resolveGeneratedSecretString, type SecretSeedValue } from './secret-value.js';
 
 const BATCH_LIMIT = 25;
 
@@ -39,6 +45,7 @@ export interface ClearResult {
 export class SeedManager {
   private static instance: SeedManager;
   private clients = new Map<string, DynamoDBClient>();
+  private secretsClients = new Map<string, SecretsManagerClient>();
   private defaultRegion: string = 'us-east-1';
 
   private constructor() {}
@@ -66,6 +73,19 @@ export class SeedManager {
       const baseConfig = LocalStackManager.getInstance().getConfig();
       client = new DynamoDBClient({ ...baseConfig, region: r });
       this.clients.set(r, client);
+    }
+    return client;
+  }
+
+  // Per-region Secrets Manager client, built like clientFor / SecretsExplorer so
+  // it targets the active engine (self or LocalStack).
+  private secretsClientFor(region?: string): SecretsManagerClient {
+    const r = region || this.defaultRegion;
+    let client = this.secretsClients.get(r);
+    if (!client) {
+      const baseConfig = LocalStackManager.getInstance().getConfig();
+      client = new SecretsManagerClient({ ...baseConfig, region: r });
+      this.secretsClients.set(r, client);
     }
     return client;
   }
@@ -303,6 +323,128 @@ export class SeedManager {
       const msg = error instanceof Error ? error.message : 'unknown error';
       console.warn(`[seed] auto-seed for ${tableName} failed: ${msg}`);
     });
+  }
+
+  // -- Secrets Manager seeding ----------------------------------------------
+  // A boot-time seed path (analogous to table seeding) so a secret EXISTS with
+  // an AWSCURRENT version before the first GetSecretValue — even for services
+  // that never declare the secret in CFN. Sources: seeds/secrets/<name>.json
+  // files AND the config `secrets` map. Applied idempotently and never throwing.
+
+  private getSecretSeedsDir(): string {
+    return path.join(this.getSeedsDir(), 'secrets');
+  }
+
+  // Recursively collect *.json under seeds/secrets/. A secret name may contain
+  // "/" (e.g. billing/receipt-signing-key), so the name is the file's path
+  // relative to the secrets dir, without the .json extension.
+  private listSecretSeeds(): Array<{ name: string; file: string }> {
+    const dir = this.getSecretSeedsDir();
+    if (!fs.existsSync(dir)) return [];
+    const results: Array<{ name: string; file: string }> = [];
+    const walk = (current: string): void => {
+      for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
+        const full = path.join(current, entry.name);
+        if (entry.isDirectory()) {
+          walk(full);
+        } else if (entry.isFile() && entry.name.endsWith('.json')) {
+          const rel = path.relative(dir, full).slice(0, -'.json'.length);
+          results.push({ name: rel.split(path.sep).join('/'), file: full });
+        }
+      }
+    };
+    walk(dir);
+    return results;
+  }
+
+  private readSecretSeedFile(file: string): SecretSeedValue | null {
+    try {
+      return JSON.parse(fs.readFileSync(file, 'utf-8')) as SecretSeedValue;
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'unknown error';
+      console.warn(`[secrets] failed to read secret seed ${file}: ${msg}`);
+      return null;
+    }
+  }
+
+  /**
+   * Ensure a single secret exists with an AWSCURRENT version. Never throws —
+   * logs warnings like seedOnTableCreated. DescribeSecret first: an existing
+   * active secret is SKIPPED (don't clobber a runtime-edited value; keep
+   * restarts idempotent); a secret scheduled for deletion is warned + skipped;
+   * a missing one is created from the resolved value.
+   */
+  async ensureSecret(name: string, value: SecretSeedValue, region?: string): Promise<void> {
+    try {
+      const client = this.secretsClientFor(region);
+      try {
+        const existing = await client.send(new DescribeSecretCommand({ SecretId: name }));
+        if (existing.DeletedDate) {
+          console.warn(`[secrets] "${name}" is scheduled for deletion — skipped`);
+          return;
+        }
+        // Already present and active — leave it untouched.
+        return;
+      } catch (error) {
+        const errName = error instanceof Error && 'name' in error ? (error as { name: string }).name : '';
+        if (errName !== 'ResourceNotFoundException') {
+          const msg = error instanceof Error ? error.message : 'unknown error';
+          console.warn(`[secrets] could not describe "${name}": ${msg}`);
+          return;
+        }
+        // Not found → fall through and create it.
+      }
+
+      const spec = normalizeSecretSeed(value);
+      let secretString = spec.secretString;
+      if (secretString === undefined && spec.generateSecretString) {
+        secretString = await resolveGeneratedSecretString(client, spec.generateSecretString);
+      }
+      if (secretString === undefined) {
+        console.warn(`[secrets] "${name}" seed has no secretString/generateSecretString — skipped`);
+        return;
+      }
+      await client.send(
+        new CreateSecretCommand({
+          Name: name,
+          SecretString: secretString,
+          Description: spec.description,
+          KmsKeyId: spec.kmsKeyId,
+          Tags: spec.tags && spec.tags.length > 0 ? spec.tags : undefined,
+        }),
+      );
+      console.log(`  ✓ Seeded secret: ${name}`);
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'unknown error';
+      console.warn(`[secrets] seed for "${name}" failed: ${msg}`);
+    }
+  }
+
+  /**
+   * Apply every secret seed on boot: files under seeds/secrets/ merged with the
+   * config `secrets` map (config wins on a name collision, with a warning).
+   * Never throws — a single failing seed is logged and the rest still run.
+   */
+  async seedAllSecrets(region?: string): Promise<void> {
+    const r = region || this.defaultRegion;
+    const merged = new Map<string, SecretSeedValue>();
+
+    for (const { name, file } of this.listSecretSeeds()) {
+      const value = this.readSecretSeedFile(file);
+      if (value !== null) merged.set(name, value);
+    }
+
+    const configSeeds = ConfigManager.getInstance().getSecretSeeds();
+    for (const [name, value] of Object.entries(configSeeds)) {
+      if (merged.has(name)) {
+        console.warn(`[secrets] config secret "${name}" overrides the seeds/secrets file of the same name`);
+      }
+      merged.set(name, value);
+    }
+
+    for (const [name, value] of merged) {
+      await this.ensureSecret(name, value, r);
+    }
   }
 
   private async listTables(region?: string): Promise<string[]> {

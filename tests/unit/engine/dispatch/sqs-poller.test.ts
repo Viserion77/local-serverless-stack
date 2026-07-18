@@ -244,6 +244,91 @@ describe('SqsPollerSet', () => {
     expect(attributes.MessageDeduplicationId).toBeDefined();
   });
 
+  // --- LSS-SQS-ESM-REDRIVE (partial-batch half): ReportBatchItemFailures ----
+
+  test('ReportBatchItemFailures deletes only the succeeded messages; the failed one redelivers', async () => {
+    const queueUrl = await createQueue('bus', { VisibilityTimeout: '1' });
+    await createEsm({
+      FunctionName: 'relay',
+      EventSourceArn: QUEUE_ARN('bus'),
+      BatchSize: 10,
+      FunctionResponseTypes: ['ReportBatchItemFailures'],
+    });
+    // The handler reports the 'fail2' message as failed on every invoke.
+    const calls = startPollers(call => {
+      const failing = records(call).find(r => r.body === 'fail2');
+      return { ok: true, payload: { batchItemFailures: failing ? [{ itemIdentifier: failing.messageId }] : [] } };
+    });
+
+    for (const body of ['keep1', 'fail2', 'keep3']) {
+      await sqs.handle('SendMessage', { QueueUrl: queueUrl, MessageBody: body }, awsReq(REGION));
+    }
+    await waitFor(() => calls.length >= 1, 3000, 'first delivery');
+
+    // keep1 and keep3 are deleted; only fail2 stays in flight.
+    await waitFor(async () => {
+      const a = await counters(queueUrl);
+      return a.ApproximateNumberOfMessagesNotVisible === '1' && a.ApproximateNumberOfMessages === '0';
+    }, 2000, 'only the failed message remains in flight');
+
+    // After the 1s visibility timeout, fail2 redelivers with an incremented
+    // ApproximateReceiveCount (batching order of the initial sends is irrelevant).
+    await waitFor(
+      () => calls.some(c => records(c).some(r =>
+        r.body === 'fail2' && (r.attributes as Record<string, string>).ApproximateReceiveCount === '2')),
+      4000,
+      'redelivery of the failed message',
+    );
+    const bodyCount = (body: string): number => calls.flatMap(records).filter(r => r.body === body).length;
+    expect(bodyCount('keep1')).toBe(1); // deleted after its first (successful) delivery
+    expect(bodyCount('keep3')).toBe(1);
+    expect(bodyCount('fail2')).toBeGreaterThanOrEqual(2); // stayed in flight and redelivered
+  });
+
+  test('without ReportBatchItemFailures a successful invoke still deletes the whole batch (no regression)', async () => {
+    const queueUrl = await createQueue('legacy');
+    await createEsm({ FunctionName: 'relay', EventSourceArn: QUEUE_ARN('legacy'), BatchSize: 10 });
+    // Handler returns a batchItemFailures body, but the ESM did not opt in.
+    const calls = startPollers([{ ok: true, payload: { batchItemFailures: [{ itemIdentifier: 'ignored' }] } }]);
+
+    await sqs.handle('SendMessage', { QueueUrl: queueUrl, MessageBody: 'x' }, awsReq(REGION));
+    await waitFor(() => calls.length >= 1, 3000, 'delivery');
+    await waitFor(async () => {
+      const a = await counters(queueUrl);
+      return a.ApproximateNumberOfMessages === '0' && a.ApproximateNumberOfMessagesNotVisible === '0';
+    }, 2000, 'whole batch deleted regardless of the response body');
+  });
+
+  // --- LSS-ESM-FILTER-CRITERIA: SQS leg -------------------------------------
+
+  test('FilterCriteria delivers only matching messages and auto-deletes the rest', async () => {
+    const queueUrl = await createQueue('orders-bus', { VisibilityTimeout: '1' });
+    await createEsm({
+      FunctionName: 'order-relay',
+      EventSourceArn: QUEUE_ARN('orders-bus'),
+      BatchSize: 10,
+      FilterCriteria: { Filters: [{ Pattern: '{"body":{"status":["completed"]}}' }] },
+    });
+    const calls = startPollers([{ ok: true }]);
+
+    await sqs.handle('SendMessage', { QueueUrl: queueUrl, MessageBody: '{"status":"completed"}' }, awsReq(REGION));
+    await sqs.handle('SendMessage', { QueueUrl: queueUrl, MessageBody: '{"status":"pending"}' }, awsReq(REGION));
+    await sqs.handle('SendMessage', { QueueUrl: queueUrl, MessageBody: 'PING' }, awsReq(REGION));
+
+    await waitFor(() => calls.length >= 1, 3000, 'matching delivery');
+    const delivered = calls.flatMap(records);
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].body).toBe('{"status":"completed"}');
+
+    // Non-matching messages are auto-deleted and never redeliver: queue drains.
+    await waitFor(async () => {
+      const a = await counters(queueUrl);
+      return a.ApproximateNumberOfMessages === '0' && a.ApproximateNumberOfMessagesNotVisible === '0';
+    }, 4000, 'queue fully drained without redelivery');
+    await sleep(200); // past what a visibility redelivery would need
+    expect(calls.flatMap(records)).toHaveLength(1);
+  });
+
   test('non-SQS event sources and deleted ESMs are ignored', async () => {
     await createQueue('plain');
     await createEsm({

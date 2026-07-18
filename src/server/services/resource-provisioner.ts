@@ -8,9 +8,11 @@ import {
   DeleteBucketCommand,
   PutBucketVersioningCommand,
   PutBucketNotificationConfigurationCommand,
+  PutBucketCorsCommand,
   ListObjectsV2Command,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
+import { SecretsManagerClient, CreateSecretCommand } from '@aws-sdk/client-secrets-manager';
 import { LambdaClient, CreateFunctionCommand, GetFunctionCommand, DeleteFunctionCommand, AddPermissionCommand, UpdateFunctionConfigurationCommand } from '@aws-sdk/client-lambda';
 import { CreateEventSourceMappingCommand, ListEventSourceMappingsCommand, DeleteEventSourceMappingCommand } from '@aws-sdk/client-lambda';
 import {
@@ -32,12 +34,14 @@ import {
 import { LocalStackManager } from './localstack-manager.js';
 import { ConfigManager } from './config-manager.js';
 import { SeedManager } from './seed-manager.js';
+import { resolveGeneratedSecretString } from './secret-value.js';
 import type {
   Resource,
   DynamoDBResource,
   SQSResource,
   SNSResource,
   S3Resource,
+  SecretsManagerResource,
   EventBusResource,
   EventRuleResource,
   OpenSearchCollectionResource,
@@ -66,6 +70,7 @@ export class ResourceProvisioner {
   private lambdaClient!: LambdaClient;
   private eventBridgeClient!: EventBridgeClient;
   private openSearchClient!: OpenSearchServerlessClient;
+  private secretsManagerClient!: SecretsManagerClient;
   private currentRegion: string = 'us-east-1';
   // CFN logical id → resource snapshot for the service currently being
   // provisioned. Lets resolveEventSourceArn map Fn::GetAtt references
@@ -99,6 +104,7 @@ export class ResourceProvisioner {
     this.s3Client = new S3Client({ ...config, forcePathStyle: true });
     this.lambdaClient = new LambdaClient(config);
     this.eventBridgeClient = new EventBridgeClient(config);
+    this.secretsManagerClient = new SecretsManagerClient(config);
     // aoss lives on the sidecar when enabled, not on the engine endpoint.
     this.openSearchClient = new OpenSearchServerlessClient({
       ...config,
@@ -162,6 +168,10 @@ export class ResourceProvisioner {
             break;
           case 's3':
             await this.createS3Bucket(resource);
+            provisionedCount++;
+            break;
+          case 'secret':
+            await this.createSecret(resource);
             provisionedCount++;
             break;
           case 'eventbus':
@@ -384,6 +394,74 @@ export class ResourceProvisioner {
       } catch (error) {
         const msg = error instanceof Error ? error.message : 'Unknown error';
         console.warn(`  ⚠ Failed to enable versioning on ${resource.name}: ${msg}`);
+      }
+    }
+
+    // Apply the template's CorsConfiguration at create time so a browser
+    // preflight against the bucket succeeds on first boot (no separate
+    // bootstrap PutBucketCors). PutBucketCors is a full-replace PUT, so
+    // re-registration re-sends the same config → naturally idempotent; the
+    // try/catch keeps it non-fatal, matching the versioning pattern above.
+    if (resource.corsRules?.length) {
+      try {
+        await this.s3Client.send(
+          new PutBucketCorsCommand({
+            Bucket: resource.name,
+            CORSConfiguration: {
+              CORSRules: resource.corsRules.map(rule => ({
+                ID: rule.id,
+                AllowedHeaders: rule.allowedHeaders,
+                AllowedMethods: rule.allowedMethods,
+                AllowedOrigins: rule.allowedOrigins,
+                ExposeHeaders: rule.exposeHeaders,
+                MaxAgeSeconds: rule.maxAgeSeconds,
+              })),
+            },
+          }),
+        );
+        console.log(`  ✓ Applied CORS on bucket: ${resource.name}`);
+      } catch (error) {
+        const msg = error instanceof Error ? error.message : 'Unknown error';
+        console.warn(`  ⚠ Failed to apply CORS on ${resource.name}: ${msg}`);
+      }
+    }
+  }
+
+  // CreateSecret so an AWSCURRENT version exists before the first GetSecretValue.
+  // Honors GenerateSecretString by synthesizing the value with the engine's
+  // GetRandomPassword (via resolveGeneratedSecretString). Idempotent + non-fatal:
+  // ResourceExistsException is swallowed (mirrors createDynamoDBTable's
+  // ResourceInUseException); a secret scheduled for deletion is warned + skipped.
+  private async createSecret(resource: SecretsManagerResource): Promise<void> {
+    let secretString = resource.secretString;
+    if (secretString === undefined && resource.generateSecretString) {
+      secretString = await resolveGeneratedSecretString(this.secretsManagerClient, resource.generateSecretString);
+    }
+    if (secretString === undefined) {
+      // Valid in AWS (a secret with no version) but GetSecretValue would 404 —
+      // create it anyway and warn, matching AWS-faithful behavior.
+      console.warn(`  ⚠ Secret ${resource.name} declares neither SecretString nor GenerateSecretString — created with no value`);
+    }
+    try {
+      await this.secretsManagerClient.send(
+        new CreateSecretCommand({
+          Name: resource.name,
+          Description: resource.description,
+          SecretString: secretString,
+          KmsKeyId: resource.kmsKeyId,
+          Tags: resource.tags.length > 0 ? resource.tags : undefined,
+        }),
+      );
+      console.log(`  ✓ Created secret: ${resource.name}`);
+    } catch (error: any) {
+      const name = error?.name || '';
+      if (name === 'ResourceExistsException') {
+        console.log(`  ⚠ Secret already exists: ${resource.name}`);
+      } else if (name === 'InvalidRequestException') {
+        // Scheduled for deletion — don't crash the pass.
+        console.warn(`  ⚠ Secret ${resource.name} is scheduled for deletion — skipped`);
+      } else {
+        throw error;
       }
     }
   }
