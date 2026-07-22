@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import {
   TButton, TBadge, TStack, TTabs, TTabList, TTab, TTabPanel, TSpinner, TAlert,
   TCard, TTag, TEmptyState, TGrid, TStat, TTable, TTextarea, TFormField,
-  TSelect, TDivider, useToast,
+  TSelect, TDivider, TText, TIcon, useToast,
 } from '@treeui/vue';
 import type { TreeBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
@@ -206,9 +206,9 @@ watch(() => props.functionName, () => {
   <TStack direction="vertical" gap="1rem">
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
-        <TButton size="sm" variant="ghost" @click="emit('back')">← Lambdas</TButton>
-        <strong style="font-size: 1.1rem;">{{ functionName }}</strong>
-        <span v-if="fn" class="muted mono" style="font-size: 0.75rem;">{{ fn.fullName }}</span>
+        <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> Lambdas</TButton>
+        <TText weight="semibold" size="lg">{{ functionName }}</TText>
+        <TText v-if="fn" tone="muted" family="mono" size="xs">{{ fn.fullName }}</TText>
       </TStack>
       <TButton size="sm" variant="ghost" :loading="loading" @click="load()">Refresh</TButton>
     </TStack>
@@ -217,9 +217,9 @@ watch(() => props.functionName, () => {
       {{ error }}
     </TAlert>
 
-    <div v-if="loading && !fn" style="display: flex; justify-content: center; padding: 2rem;">
+    <TStack v-if="loading && !fn" direction="horizontal" justify="center" align="center">
       <TSpinner label="Loading function..." />
-    </div>
+    </TStack>
 
     <template v-else-if="fn">
       <TGrid :columns="5" gap="0.75rem">
@@ -244,8 +244,8 @@ watch(() => props.functionName, () => {
               <TCard variant="outline">
                 <template #header>
                   <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-                    <strong>Invoke function</strong>
-                    <span class="muted mono" style="font-size: 0.75rem;">{{ fn.handler }}</span>
+                    <TText weight="semibold">Invoke function</TText>
+                    <TText tone="muted" family="mono" size="xs">{{ fn.handler }}</TText>
                   </TStack>
                 </template>
 
@@ -271,9 +271,9 @@ watch(() => props.functionName, () => {
                         Reset payload
                       </TButton>
                     </TStack>
-                    <span v-if="lastAccepted" class="muted" style="font-size: 0.75rem;">
+                    <TText v-if="lastAccepted" tone="muted" size="xs">
                       Last invocation accepted as Event — check the Logs tab for output.
-                    </span>
+                    </TText>
                   </TStack>
                 </template>
               </TCard>
@@ -282,24 +282,24 @@ watch(() => props.functionName, () => {
                 <template #header>
                   <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
                     <TStack direction="horizontal" gap="0.5rem" align="center">
-                      <strong>Result</strong>
+                      <TText weight="semibold">Result</TText>
                       <TBadge :tone="lastResult.ok ? 'success' : 'danger'" variant="soft">
                         {{ lastResult.ok ? 'OK' : (lastResult.functionError?.errorType || 'Error') }}
                       </TBadge>
                     </TStack>
-                    <span class="muted mono" style="font-size: 0.75rem;">
+                    <TText tone="muted" family="mono" size="xs">
                       {{ lastResult.durationMs }}ms
-                    </span>
+                    </TText>
                   </TStack>
                 </template>
 
                 <TStack direction="vertical" gap="0.75rem">
                   <template v-if="lastResult.ok">
-                    <strong style="font-size: 0.8rem;">Response payload</strong>
+                    <TText weight="semibold" size="sm">Response payload</TText>
                     <pre class="logs-pre">{{ resultPayloadPretty }}</pre>
                   </template>
                   <template v-else>
-                    <strong style="font-size: 0.8rem;">Function error</strong>
+                    <TText weight="semibold" size="sm">Function error</TText>
                     <pre class="logs-pre">{{
                       [
                         `${lastResult.functionError?.errorType || 'Error'}: ${lastResult.functionError?.errorMessage || ''}`,
@@ -308,7 +308,7 @@ watch(() => props.functionName, () => {
                     }}</pre>
                   </template>
                   <TDivider />
-                  <strong style="font-size: 0.8rem;">Captured logs</strong>
+                  <TText weight="semibold" size="sm">Captured logs</TText>
                   <pre class="logs-pre">{{ lastResult.logs.join('\n') || '— no output —' }}</pre>
                 </TStack>
               </TCard>
@@ -321,7 +321,7 @@ watch(() => props.functionName, () => {
             <TStack direction="vertical" gap="1rem">
               <TCard variant="outline">
                 <template #header>
-                  <strong>Trigger sources</strong>
+                  <TText weight="semibold">Trigger sources</TText>
                 </template>
                 <TStack direction="horizontal" gap="0.25rem" wrap>
                   <template v-if="fn.triggers.length">
@@ -329,22 +329,22 @@ watch(() => props.functionName, () => {
                       {{ t }}
                     </TTag>
                   </template>
-                  <span v-else class="muted">—</span>
+                  <TText v-else tone="muted">—</TText>
                 </TStack>
               </TCard>
 
               <TCard variant="outline">
                 <template #header>
-                  <strong>HTTP routes</strong>
+                  <TText weight="semibold">HTTP routes</TText>
                 </template>
-                <TTable v-if="fn.routes.length" :columns="routesColumns" :rows="routesRows">
+                <TTable v-if="fn.routes.length" :columns="routesColumns" :rows="routesRows" aria-label="HTTP routes">
                   <template #cell-method="{ row }">
                     <TBadge :tone="methodTone(String(row.method))" variant="soft">
                       {{ row.method }}
                     </TBadge>
                   </template>
                   <template #cell-path="{ row }">
-                    <span class="mono">{{ row.path }}</span>
+                    <TText family="mono">{{ row.path }}</TText>
                   </template>
                   <template #cell-eventType="{ row }">
                     <TTag size="sm" variant="soft">{{ row.eventType }}</TTag>
@@ -353,7 +353,7 @@ watch(() => props.functionName, () => {
                     <TTag v-if="row.authorizerName" size="sm" variant="soft">
                       {{ row.authorizerName }}
                     </TTag>
-                    <span v-else class="muted">—</span>
+                    <TText v-else tone="muted">—</TText>
                   </template>
                 </TTable>
                 <TEmptyState
@@ -370,14 +370,14 @@ watch(() => props.functionName, () => {
           <div style="padding-top: 1rem;">
             <TCard variant="outline">
               <template #header>
-                <strong>Environment variables</strong>
+                <TText weight="semibold">Environment variables</TText>
               </template>
-              <TTable v-if="envRows.length" :columns="envColumns" :rows="envRows">
+              <TTable v-if="envRows.length" :columns="envColumns" :rows="envRows" aria-label="Environment variables">
                 <template #cell-key="{ row }">
-                  <span class="mono" style="font-size: 0.78rem;">{{ row.key }}</span>
+                  <TText family="mono" style="font-size: 0.78rem;">{{ row.key }}</TText>
                 </template>
                 <template #cell-value="{ row }">
-                  <span class="mono" style="font-size: 0.78rem;">{{ row.value }}</span>
+                  <TText family="mono" style="font-size: 0.78rem;">{{ row.value }}</TText>
                 </template>
               </TTable>
               <TEmptyState
@@ -394,16 +394,16 @@ watch(() => props.functionName, () => {
             <TCard variant="outline">
               <template #header>
                 <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-                  <strong>Recent invocations ({{ history.length }})</strong>
+                  <TText weight="semibold">Recent invocations ({{ history.length }})</TText>
                   <TButton size="sm" variant="ghost" :loading="logsLoading" @click="loadLogs">
                     Refresh
                   </TButton>
                 </TStack>
               </template>
 
-              <div v-if="logsLoading && !history.length" style="display: flex; justify-content: center; padding: 2rem;">
+              <TStack v-if="logsLoading && !history.length" direction="horizontal" justify="center" align="center">
                 <TSpinner label="Loading invocations..." />
-              </div>
+              </TStack>
 
               <TEmptyState
                 v-else-if="!history.length"
@@ -421,10 +421,8 @@ watch(() => props.functionName, () => {
                     >
                       <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
                         <TStack direction="horizontal" gap="0.5rem" align="center">
-                          <span class="mono" style="font-size: 0.8rem;">
-                            {{ expandedLogs[idx] ? '▼' : '▶' }}
-                          </span>
-                          <span style="font-size: 0.85rem;">{{ formatDate(rec.at) }}</span>
+                          <TIcon :name="expandedLogs[idx] ? 'chevron-down' : 'chevron-right'" />
+                          <TText size="sm">{{ formatDate(rec.at) }}</TText>
                           <TBadge :tone="rec.ok ? 'success' : 'danger'" variant="soft">
                             {{ rec.ok ? 'OK' : 'Error' }}
                           </TBadge>
@@ -436,9 +434,9 @@ watch(() => props.functionName, () => {
                             HTTP {{ rec.statusCode }}
                           </TBadge>
                         </TStack>
-                        <span class="muted mono" style="font-size: 0.75rem;">
+                        <TText tone="muted" family="mono" size="xs">
                           {{ rec.durationMs }}ms · {{ rec.logs.length }} line{{ rec.logs.length === 1 ? '' : 's' }}
-                        </span>
+                        </TText>
                       </TStack>
                     </a>
                     <pre v-if="expandedLogs[idx]" class="logs-pre">{{ rec.logs.join('\n') || '— no output —' }}</pre>

@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import {
   TCard, TButton, TBadge, TStack, TGrid, TStat, TSpinner, TAlert,
-  TTag, TEmptyState, TModal, TConfirmDialog, useToast,
+  TTag, TEmptyState, TModal, TConfirmDialog, TText, TIcon, useToast,
 } from '@treeui/vue';
 import type { TreeBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
@@ -143,9 +143,9 @@ watch(() => props.serviceName, load);
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
         <RouterLink to="/services" style="text-decoration: none;">
-          <TButton size="sm" variant="ghost">← Services</TButton>
+          <TButton size="sm" variant="ghost"><TIcon name="arrow-left" /> Services</TButton>
         </RouterLink>
-        <strong style="font-size: 1.1rem;">{{ serviceName }}</strong>
+        <TText weight="semibold" size="lg">{{ serviceName }}</TText>
         <TBadge v-if="service?.status" :tone="statusTone(service.status)" variant="soft">
           {{ service.status }}
         </TBadge>
@@ -179,9 +179,9 @@ watch(() => props.serviceName, load);
       {{ error }}
     </TAlert>
 
-    <div v-if="loading && !service" style="display: flex; justify-content: center; padding: 2rem;">
+    <TStack v-if="loading && !service" direction="horizontal" justify="center" align="center">
       <TSpinner label="Loading service..." />
-    </div>
+    </TStack>
 
     <template v-else-if="service">
       <TGrid :columns="5" gap="1rem">
@@ -194,27 +194,27 @@ watch(() => props.serviceName, load);
 
       <TCard variant="outline">
         <template #header>
-          <strong>Metadata</strong>
+          <TText weight="semibold">Metadata</TText>
         </template>
         <TStack direction="vertical" gap="0.5rem">
           <TStack direction="horizontal" justify="space-between">
-            <span class="muted">Path</span>
-            <span class="mono">{{ service.root }}</span>
+            <TText tone="muted">Path</TText>
+            <TText family="mono">{{ service.root }}</TText>
           </TStack>
           <TStack direction="horizontal" justify="space-between">
-            <span class="muted">Region</span>
-            <span class="mono">{{ service.region || '—' }}</span>
+            <TText tone="muted">Region</TText>
+            <TText family="mono">{{ service.region || '—' }}</TText>
           </TStack>
           <TStack direction="horizontal" justify="space-between">
-            <span class="muted">Invoke port</span>
-            <span class="mono">{{ service.invokePort ?? '—' }}</span>
+            <TText tone="muted">Invoke port</TText>
+            <TText family="mono">{{ service.invokePort ?? '—' }}</TText>
           </TStack>
           <TStack direction="horizontal" justify="space-between">
-            <span class="muted">PID</span>
-            <span class="mono">{{ service.pid ?? '—' }}</span>
+            <TText tone="muted">PID</TText>
+            <TText family="mono">{{ service.pid ?? '—' }}</TText>
           </TStack>
           <TStack direction="horizontal" justify="space-between">
-            <span class="muted">Last updated</span>
+            <TText tone="muted">Last updated</TText>
             <span>{{ formatDate(service.lastUpdated) }}</span>
           </TStack>
         </TStack>
@@ -223,7 +223,7 @@ watch(() => props.serviceName, load);
       <TCard variant="outline">
         <template #header>
           <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-            <strong>Declared resources</strong>
+            <TText weight="semibold">Declared resources</TText>
             <TBadge tone="neutral" variant="soft">
               {{ service.resources?.length || 0 }} total
             </TBadge>
@@ -240,7 +240,7 @@ watch(() => props.serviceName, load);
           <TStack v-if="grouped.dynamodb?.length" direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" align="center">
               <TBadge tone="info" variant="soft">DynamoDB tables</TBadge>
-              <span class="muted">{{ grouped.dynamodb.length }}</span>
+              <TText tone="muted">{{ grouped.dynamodb.length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
               <RouterLink
@@ -257,7 +257,7 @@ watch(() => props.serviceName, load);
           <TStack v-if="grouped.sqs?.length" direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" align="center">
               <TBadge tone="warning" variant="soft">SQS queues</TBadge>
-              <span class="muted">{{ grouped.sqs.length }}</span>
+              <TText tone="muted">{{ grouped.sqs.length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
               <RouterLink
@@ -274,7 +274,7 @@ watch(() => props.serviceName, load);
           <TStack v-if="grouped.sns?.length" direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" align="center">
               <TBadge tone="info" variant="soft">SNS topics</TBadge>
-              <span class="muted">{{ grouped.sns.length }}</span>
+              <TText tone="muted">{{ grouped.sns.length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
               <TTag
@@ -291,7 +291,7 @@ watch(() => props.serviceName, load);
           <TStack v-if="grouped.s3?.length" direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" align="center">
               <TBadge tone="neutral" variant="soft">S3 buckets</TBadge>
-              <span class="muted">{{ grouped.s3.length }}</span>
+              <TText tone="muted">{{ grouped.s3.length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
               <RouterLink
@@ -308,7 +308,7 @@ watch(() => props.serviceName, load);
           <TStack v-if="grouped.lambda?.length" direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" align="center">
               <TBadge tone="neutral" variant="soft">Lambda functions</TBadge>
-              <span class="muted">{{ grouped.lambda.length }}</span>
+              <TText tone="muted">{{ grouped.lambda.length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
               <TTag
@@ -317,7 +317,7 @@ watch(() => props.serviceName, load);
                 size="sm"
                 variant="soft"
               >
-                λ {{ r.name }}
+                <TIcon name="code" /> {{ r.name }}
               </TTag>
             </TStack>
           </TStack>
@@ -325,7 +325,7 @@ watch(() => props.serviceName, load);
           <TStack v-if="grouped.eventbus?.length" direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" align="center">
               <TBadge tone="info" variant="soft">EventBridge buses</TBadge>
-              <span class="muted">{{ grouped.eventbus.length }}</span>
+              <TText tone="muted">{{ grouped.eventbus.length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
               <TTag
@@ -342,7 +342,7 @@ watch(() => props.serviceName, load);
           <TStack v-if="grouped['event-rule']?.length" direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" align="center">
               <TBadge tone="info" variant="soft">EventBridge rules</TBadge>
-              <span class="muted">{{ grouped['event-rule'].length }}</span>
+              <TText tone="muted">{{ grouped['event-rule'].length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
               <TTag
@@ -359,7 +359,7 @@ watch(() => props.serviceName, load);
           <TStack v-if="grouped.opensearch?.length" direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" align="center">
               <TBadge tone="info" variant="soft">OpenSearch collections</TBadge>
-              <span class="muted">{{ grouped.opensearch.length }}</span>
+              <TText tone="muted">{{ grouped.opensearch.length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
               <TTag
@@ -368,7 +368,7 @@ watch(() => props.serviceName, load);
                 size="sm"
                 variant="soft"
               >
-                🔍 {{ r.name }}
+                <TIcon name="search" /> {{ r.name }}
               </TTag>
             </TStack>
           </TStack>
@@ -376,7 +376,7 @@ watch(() => props.serviceName, load);
           <TStack v-if="grouped['event-source']?.length" direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" align="center">
               <TBadge tone="neutral" variant="soft">Event-source mappings</TBadge>
-              <span class="muted">{{ grouped['event-source'].length }}</span>
+              <TText tone="muted">{{ grouped['event-source'].length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
               <TTag

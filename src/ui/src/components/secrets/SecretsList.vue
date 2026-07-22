@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import {
   TCard, TButton, TStack, TGrid, TStat, TEmptyState,
-  TSpinner, TAlert, TTag, TTable, TInput, TModal, TBadge, useToast,
+  TSpinner, TAlert, TTag, TTable, TInput, TModal, TBadge, TText, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { SecretSummary, SecretDetail, SecretValue } from '../../services/api';
@@ -139,17 +139,17 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
-          <strong>Secrets Manager</strong>
+          <TText weight="semibold">Secrets Manager</TText>
           <TStack direction="horizontal" align="center" gap="1rem">
             <TInput v-model="search" placeholder="Filter secrets..." style="min-width: 16rem;" />
-            <span class="muted" style="font-size: 0.75rem;">Refreshes every 15s</span>
+            <TText tone="muted" size="xs">Refreshes every 15s</TText>
           </TStack>
         </TStack>
       </template>
 
-      <div v-if="loading" style="display: flex; justify-content: center; padding: 2rem;">
+      <TStack v-if="loading" direction="horizontal" justify="center" align="center">
         <TSpinner label="Loading secrets..." />
-      </div>
+      </TStack>
 
       <TEmptyState
         v-else-if="!rows.length"
@@ -163,21 +163,22 @@ onBeforeUnmount(() => {
         :description="`No secrets match &quot;${search}&quot;.`"
       />
 
-      <TTable v-else :columns="columns" :rows="filteredRows">
+      <TTable v-else :columns="columns" :rows="filteredRows" aria-label="Secrets">
         <template #cell-name="{ row }">
           <TStack direction="horizontal" align="center" gap="0.5rem">
-            <strong
+            <TText
+              weight="semibold"
               style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;"
               @click="openDetail(String(row.name))"
             >
               {{ row.name }}
-            </strong>
+            </TText>
             <TBadge v-if="row.scheduledDeletion" tone="warning" variant="soft">deletion scheduled</TBadge>
           </TStack>
         </template>
 
         <template #cell-description="{ row }">
-          <span class="muted" style="font-size: 0.85rem;">{{ row.description || '—' }}</span>
+          <TText tone="muted" size="sm">{{ row.description || '—' }}</TText>
         </template>
 
         <template #cell-versions="{ row }">
@@ -185,7 +186,7 @@ onBeforeUnmount(() => {
         </template>
 
         <template #cell-lastChanged="{ row }">
-          <span class="muted mono" style="font-size: 0.75rem;">{{ row.lastChanged }}</span>
+          <TText tone="muted" family="mono" size="xs">{{ row.lastChanged }}</TText>
         </template>
 
         <template #cell-actions="{ row }">
@@ -199,27 +200,28 @@ onBeforeUnmount(() => {
       :title="activeName ? `Secret — ${activeName}` : 'Secret'"
       size="lg"
     >
-      <div v-if="detailLoading" style="display: flex; justify-content: center; padding: 2rem;">
+      <TStack v-if="detailLoading" direction="horizontal" justify="center" align="center">
         <TSpinner label="Loading secret..." />
-      </div>
+      </TStack>
 
       <TStack v-else-if="detail" direction="vertical" gap="1rem">
         <TStack direction="vertical" gap="0.35rem">
-          <span class="muted mono" style="font-size: 0.75rem; word-break: break-all;">{{ detail.arn }}</span>
+          <TText tone="muted" family="mono" size="xs" style="word-break: break-all;">{{ detail.arn }}</TText>
           <span v-if="detail.description">{{ detail.description }}</span>
         </TStack>
 
         <div>
-          <strong style="font-size: 0.85rem;">Versions &amp; staging labels</strong>
+          <TText weight="semibold" size="sm">Versions &amp; staging labels</TText>
           <TTable
             :columns="[
               { key: 'versionId', label: 'Version' },
               { key: 'stages', label: 'Staging labels' },
             ]"
             :rows="versionRows"
+            aria-label="Secret versions and staging labels"
           >
             <template #cell-versionId="{ row }">
-              <span class="mono" style="font-size: 0.75rem;">{{ row.versionId }}</span>
+              <TText family="mono" size="xs">{{ row.versionId }}</TText>
             </template>
             <template #cell-stages="{ row }">
               <TBadge :tone="row.current ? 'success' : 'neutral'" variant="soft">{{ row.stages }}</TBadge>

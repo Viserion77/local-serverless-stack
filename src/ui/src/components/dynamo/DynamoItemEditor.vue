@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import {
-  TModal, TButton, TStack, TTextarea, TAlert, TBadge, useToast,
+  TModal, TButton, TStack, TTextarea, TAlert, TBadge, TText, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 
@@ -115,9 +115,9 @@ function formatDraft() {
       </TAlert>
 
       <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-        <span class="muted" style="font-size: 0.75rem;">
+        <TText tone="muted" size="xs">
           JSON object. Types are inferred — numbers, booleans, strings, arrays, nested objects are all supported.
-        </span>
+        </TText>
         <TBadge v-if="readOnly" tone="neutral" variant="soft">read-only</TBadge>
       </TStack>
 

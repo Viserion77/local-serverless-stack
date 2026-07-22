@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterView, useRoute, useRouter } from 'vue-router';
 import {
-  TStack, TBadge, TToastProvider, TButton, TSelect,
+  TStack, TStackItem, TText, TIcon, TPage, TBadge, TToastProvider, TButton, TSelect,
   TAppShell, TNavMenu, TDropdown,
 } from '@treeui/vue';
 import type { TNavMenuItem } from '@treeui/vue';
@@ -88,7 +88,11 @@ onBeforeUnmount(() => {
 <template>
   <TToastProvider position="top-right">
     <TAppShell collapsible sidebar-width="16rem" sidebar-label="Primary navigation">
-      <template #header>
+      <!-- Brand in #header-start (over the sidebar rail, animates with the collapse) and controls in
+           #header-end (0.20 slot, pinned trailing) — the shell header grid owns the layout, no local
+           CSS. The brand-logo <img> is the documented interim until TreeUI ships TBrandLockup
+           (TREEUX-009). -->
+      <template #header-start>
         <TStack direction="horizontal" gap="0.625rem" align="center">
           <img
             v-if="branding.logoUrl"
@@ -97,14 +101,16 @@ onBeforeUnmount(() => {
             class="brand-logo"
           />
           <TStack direction="vertical" gap="0.125rem">
-            <strong>{{ branding.title }}</strong>
-            <span v-if="branding.subtitle" class="muted" style="font-size: 0.75rem;">
+            <TText weight="semibold">{{ branding.title }}</TText>
+            <TText v-if="branding.subtitle" tone="muted" size="xs">
               {{ branding.subtitle }}
-            </span>
+            </TText>
           </TStack>
         </TStack>
+      </template>
 
-        <div class="app-header-controls">
+      <template #header-end>
+        <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
           <TBadge
             :tone="health.localstack ? 'success' : 'danger'"
             variant="soft"
@@ -118,13 +124,14 @@ onBeforeUnmount(() => {
           >
             Dynamo Proxy: {{ health.dynamoProxy.running ? 'On' : 'Off' }}
           </TBadge>
-          <TSelect
-            v-model="currentRegion"
-            :options="regionOptions"
-            size="sm"
-            style="min-width: 14rem;"
-            aria-label="AWS Region"
-          />
+          <TStackItem min-width="14rem">
+            <TSelect
+              v-model="currentRegion"
+              :options="regionOptions"
+              size="sm"
+              aria-label="AWS Region"
+            />
+          </TStackItem>
           <TDropdown
             :items="menuItems"
             size="sm"
@@ -132,12 +139,14 @@ onBeforeUnmount(() => {
             @select="onMenuSelect"
           >
             <template #trigger>
-              <TButton size="sm" variant="ghost" aria-label="Open menu">
-                ⋮
+              <TButton icon-only size="sm" variant="ghost" label="Open menu">
+                <template #icon>
+                  <TIcon name="ellipsis-vertical" />
+                </template>
               </TButton>
             </template>
           </TDropdown>
-        </div>
+        </TStack>
       </template>
 
       <template #sidebar>
@@ -149,9 +158,9 @@ onBeforeUnmount(() => {
         />
       </template>
 
-      <div class="app-main" :key="`${route.fullPath}-${currentRegion}`">
+      <TPage width="full" :key="`${route.fullPath}-${currentRegion}`">
         <RouterView />
-      </div>
+      </TPage>
     </TAppShell>
   </TToastProvider>
 </template>

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import {
   TButton, TBadge, TStack, TSpinner, TAlert, TCard, TTable, TEmptyState,
-  TGrid, TStat, TInput, useToast,
+  TGrid, TStat, TInput, TText, TIcon, TLink, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { BucketSnapshot, BucketObject } from '../../services/api';
@@ -146,8 +146,8 @@ watch(() => props.bucketName, () => {
   <TStack direction="vertical" gap="1rem">
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
-        <TButton size="sm" variant="ghost" @click="emit('back')">← Buckets</TButton>
-        <strong style="font-size: 1.1rem;">{{ bucketName }}</strong>
+        <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> Buckets</TButton>
+        <TText size="lg" weight="semibold">{{ bucketName }}</TText>
         <TBadge v-if="bucket?.versioning" tone="info" variant="soft">Versioning</TBadge>
       </TStack>
       <TButton size="sm" variant="ghost" :loading="loadingObjects" @click="loadObjects()">Refresh</TButton>
@@ -157,9 +157,9 @@ watch(() => props.bucketName, () => {
       {{ error }}
     </TAlert>
 
-    <div v-if="loading && !bucket" style="display: flex; justify-content: center; padding: 2rem;">
+    <TStack v-if="loading && !bucket" direction="horizontal" justify="center" align="center">
       <TSpinner label="Loading bucket..." />
-    </div>
+    </TStack>
 
     <template v-else-if="bucket">
       <TGrid :columns="4" gap="0.75rem">
@@ -179,12 +179,12 @@ watch(() => props.bucketName, () => {
 
       <TCard variant="outline">
         <template #header>
-          <strong>Upload object</strong>
+          <TText weight="semibold">Upload object</TText>
         </template>
         <TStack direction="vertical" gap="0.5rem">
           <TInput v-model="uploadKey" placeholder="object/key.txt" label="Key" />
           <TInput v-model="uploadContentType" placeholder="text/plain" label="Content-Type" />
-          <label class="muted" style="font-size: 0.875rem;">Body</label>
+          <TText as="label" tone="muted" size="sm">Body</TText>
           <textarea
             v-model="uploadBody"
             rows="4"
@@ -200,7 +200,7 @@ watch(() => props.bucketName, () => {
       <TCard variant="outline">
         <template #header>
           <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-            <strong>Objects ({{ objects.length }} · {{ formatBytes(totalSize) }})</strong>
+            <TText weight="semibold">Objects ({{ objects.length }} · {{ formatBytes(totalSize) }})</TText>
             <TStack direction="horizontal" gap="0.5rem" align="center">
               <TInput
                 v-model="prefix"
@@ -213,9 +213,9 @@ watch(() => props.bucketName, () => {
           </TStack>
         </template>
 
-        <div v-if="loadingObjects" style="display: flex; justify-content: center; padding: 2rem;">
+        <TStack v-if="loadingObjects" direction="horizontal" justify="center" align="center">
           <TSpinner label="Loading objects..." />
-        </div>
+        </TStack>
 
         <TEmptyState
           v-else-if="!objects.length"
@@ -223,16 +223,11 @@ watch(() => props.bucketName, () => {
           description="This bucket is empty (or the prefix filter excluded everything)."
         />
 
-        <TTable v-else :columns="objectColumns" :rows="objects">
+        <TTable v-else :columns="objectColumns" :rows="objects" aria-label="Bucket objects">
           <template #cell-key="{ row }">
-            <a
-              :href="previewUrl(String(row.key))"
-              target="_blank"
-              rel="noopener noreferrer"
-              style="text-decoration: none; font-weight: 500;"
-            >
+            <TLink :href="previewUrl(String(row.key))" external style="font-weight: 500;">
               {{ row.key }}
-            </a>
+            </TLink>
           </template>
           <template #cell-size="{ row }">
             {{ formatBytes(Number(row.size)) }}

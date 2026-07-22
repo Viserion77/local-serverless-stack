@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TBadge, TStack, TGrid, TStat, TEmptyState,
-  TSpinner, TAlert, TTag, TTable, TInput,
+  TSpinner, TAlert, TTag, TTable, TInput, TText,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { DynamoTableSummary, SeedFileEntry } from '../../services/api';
@@ -164,23 +164,23 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
-          <strong>DynamoDB tables</strong>
+          <TText weight="semibold">DynamoDB tables</TText>
           <TStack direction="horizontal" align="center" gap="1rem">
             <TInput
               v-model="search"
               placeholder="Filter tables..."
               style="min-width: 16rem;"
             />
-            <span class="muted" style="font-size: 0.75rem;">
+            <TText tone="muted" size="xs">
               Rows with reduced opacity exist only as a seed file
-            </span>
+            </TText>
           </TStack>
         </TStack>
       </template>
 
-      <div v-if="loading" style="display: flex; justify-content: center; padding: 2rem;">
+      <TStack v-if="loading" direction="horizontal" justify="center" align="center">
         <TSpinner label="Loading tables..." />
-      </div>
+      </TStack>
 
       <TEmptyState
         v-else-if="!rows.length"
@@ -198,21 +198,27 @@ onBeforeUnmount(() => {
         v-else
         :columns="columns"
         :rows="filteredRows"
-        :row-class="(row: any) => row.exists ? '' : 'dim-row'"
+        row-key="name"
+        :row-state="(row: any) => row.exists ? 'default' : 'muted'"
+        aria-label="DynamoDB tables"
       >
         <template #cell-name="{ row }">
           <TStack direction="vertical" gap="0.125rem">
-            <strong
+            <TText
               v-if="row.exists"
+              weight="semibold"
               style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;"
               @click="openRow(row as any)"
             >
               {{ row.name }}
-            </strong>
-            <strong v-else>{{ row.name }}</strong>
-            <span class="muted mono" style="font-size: 0.75rem;">
+            </TText>
+            <TStack v-else direction="horizontal" gap="0.375rem" align="center">
+              <TText weight="semibold">{{ row.name }}</TText>
+              <TTag size="sm" variant="soft">seed only</TTag>
+            </TStack>
+            <TText tone="muted" family="mono" size="xs">
               {{ row.keyDescriptor }}
-            </span>
+            </TText>
           </TStack>
         </template>
 
@@ -224,7 +230,7 @@ onBeforeUnmount(() => {
           >
             <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
           </RouterLink>
-          <span v-else class="muted" style="font-size: 0.75rem;">—</span>
+          <TText v-else tone="muted" size="xs">—</TText>
         </template>
 
         <template #cell-status="{ row }">
@@ -250,7 +256,7 @@ onBeforeUnmount(() => {
           >
             {{ row.seedItemCount }} seeded item{{ row.seedItemCount === 1 ? '' : 's' }}
           </TBadge>
-          <span v-else class="muted" style="font-size: 0.75rem;">no seed</span>
+          <TText v-else tone="muted" size="xs">no seed</TText>
         </template>
 
         <template #cell-features="{ row }">
@@ -274,9 +280,9 @@ onBeforeUnmount(() => {
           >
             Explore
           </TButton>
-          <span v-else class="muted" style="font-size: 0.75rem;">
+          <TText v-else tone="muted" size="xs">
             Register service to provision
-          </span>
+          </TText>
         </template>
       </TTable>
     </TCard>

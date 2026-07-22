@@ -3,7 +3,7 @@ import { ref, computed, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   TButton, TBadge, TStack, TTabs, TTabList, TTab, TTabPanel, TSpinner, TAlert,
-  TCard, TTag, TEmptyState, TGrid,
+  TCard, TTag, TEmptyState, TGrid, TText, TIcon,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { DynamoTableDetail, SeedFileEntry } from '../../services/api';
@@ -61,8 +61,8 @@ watch(() => props.tableName, load);
   <TStack direction="vertical" gap="1rem">
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
-        <TButton size="sm" variant="ghost" @click="emit('back')">← Tables</TButton>
-        <strong style="font-size: 1.1rem;">{{ tableName }}</strong>
+        <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> Tables</TButton>
+        <TText size="lg" weight="semibold">{{ tableName }}</TText>
         <TBadge
           v-if="table?.status"
           :tone="table.status === 'ACTIVE' ? 'success' : 'warning'"
@@ -87,16 +87,16 @@ watch(() => props.tableName, load);
       gap="0.375rem"
       wrap
     >
-      <TBadge v-for="w in table.warnings" :key="w" tone="warning" variant="soft">⚠ {{ w }}</TBadge>
+      <TBadge v-for="w in table.warnings" :key="w" tone="warning" variant="soft"><TIcon name="triangle-alert" /> {{ w }}</TBadge>
     </TStack>
 
     <TAlert v-if="error" variant="danger" dismissible @dismiss="error = null">
       {{ error }}
     </TAlert>
 
-    <div v-if="loading && !table" style="display: flex; justify-content: center; padding: 2rem;">
+    <TStack v-if="loading && !table" direction="horizontal" justify="center" align="center">
       <TSpinner label="Loading table..." />
-    </div>
+    </TStack>
 
     <TTabs v-else-if="table" v-model="activeTab">
       <TTabList>
@@ -124,7 +124,7 @@ watch(() => props.tableName, load);
               <TCard v-for="idx in table.gsis" :key="idx.IndexName" variant="outline">
                 <template #header>
                   <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-                    <strong>{{ idx.IndexName }}</strong>
+                    <TText weight="semibold">{{ idx.IndexName }}</TText>
                     <TBadge tone="info" variant="soft">GSI</TBadge>
                   </TStack>
                 </template>
@@ -139,11 +139,11 @@ watch(() => props.tableName, load);
                       {{ k.AttributeName }} ({{ k.KeyType }})
                     </TTag>
                   </TStack>
-                  <span class="muted" style="font-size: 0.75rem;">
+                  <TText tone="muted" size="xs">
                     Projection: {{ idx.Projection?.ProjectionType || '—' }}
                     · Items: {{ idx.ItemCount ?? '—' }}
                     · Status: {{ idx.IndexStatus || '—' }}
-                  </span>
+                  </TText>
                 </TStack>
               </TCard>
             </TGrid>
@@ -152,7 +152,7 @@ watch(() => props.tableName, load);
               <TCard v-for="idx in table.lsis" :key="idx.IndexName" variant="outline">
                 <template #header>
                   <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-                    <strong>{{ idx.IndexName }}</strong>
+                    <TText weight="semibold">{{ idx.IndexName }}</TText>
                     <TBadge tone="neutral" variant="soft">LSI</TBadge>
                   </TStack>
                 </template>
@@ -167,9 +167,9 @@ watch(() => props.tableName, load);
                       {{ k.AttributeName }} ({{ k.KeyType }})
                     </TTag>
                   </TStack>
-                  <span class="muted" style="font-size: 0.75rem;">
+                  <TText tone="muted" size="xs">
                     Projection: {{ idx.Projection?.ProjectionType || '—' }}
-                  </span>
+                  </TText>
                 </TStack>
               </TCard>
             </TGrid>

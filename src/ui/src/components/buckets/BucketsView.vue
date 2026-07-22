@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TTag, TSpinner, TAlert,
+  TTag, TSpinner, TAlert, TText, TLink,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { BucketSnapshot } from '../../services/api';
@@ -93,14 +93,14 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <strong>S3 Buckets</strong>
-          <span class="muted">Refreshes every 10s</span>
+          <TText weight="semibold">S3 Buckets</TText>
+          <TText tone="muted">Refreshes every 10s</TText>
         </TStack>
       </template>
 
-      <div v-if="loading" style="display: flex; justify-content: center; padding: 2rem;">
+      <TStack v-if="loading" direction="horizontal" justify="center" align="center">
         <TSpinner label="Loading buckets..." />
-      </div>
+      </TStack>
 
       <TEmptyState
         v-else-if="!buckets.length"
@@ -108,15 +108,14 @@ onBeforeUnmount(() => {
         description="Register a microservice that defines S3 resources or create buckets directly in LocalStack."
       />
 
-      <TTable v-else :columns="columns" :rows="rows">
+      <TTable v-else :columns="columns" :rows="rows" aria-label="S3 buckets">
         <template #cell-name="{ row }">
-          <a
-            href="#"
-            style="text-decoration: none; font-weight: 600;"
-            @click.prevent="openDetail(String(row.name))"
+          <TLink
+            :to="`/buckets/${encodeURIComponent(String(row.name))}`"
+            style="font-weight: 600;"
           >
             {{ row.name }}
-          </a>
+          </TLink>
         </template>
 
         <template #cell-service="{ row }">
@@ -127,7 +126,7 @@ onBeforeUnmount(() => {
           >
             <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
           </RouterLink>
-          <span v-else class="muted" style="font-size: 0.75rem;">unmanaged</span>
+          <TText v-else tone="muted" size="xs">unmanaged</TText>
         </template>
 
         <template #cell-objectCount="{ row }">

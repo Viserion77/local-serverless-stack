@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue';
 import {
   TCard, TButton, TStack, TTable, TEmptyState, TSpinner, TAlert,
   TInput, TSelect, TDivider, TConfirmDialog, useToast, TFormField,
-  TToggleGroup, TLink, TCheckbox,
+  TToggleGroup, TLink, TCheckbox, TText, TIcon,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type {
@@ -423,7 +423,7 @@ watch(() => [mode.value, indexName.value], () => {
   <TStack direction="vertical" gap="1rem">
     <TCard variant="outline">
       <template #header>
-        <strong>Scan or query items</strong>
+        <TText weight="semibold">Scan or query items</TText>
       </template>
 
       <TStack direction="vertical" gap="1rem">
@@ -451,7 +451,7 @@ watch(() => [mode.value, indexName.value], () => {
         <template v-if="mode === 'query'">
           <TDivider />
           <TStack direction="vertical" gap="0.5rem">
-            <strong style="font-size: 0.9rem;">Partition key</strong>
+            <TText weight="semibold" style="font-size: 0.9rem;">Partition key</TText>
             <TStack direction="horizontal" gap="1rem">
               <TFormField label="Attribute" style="flex: 1;">
                 <TInput :model-value="pkAttr || '—'" disabled />
@@ -463,7 +463,7 @@ watch(() => [mode.value, indexName.value], () => {
           </TStack>
 
           <TStack v-if="skAttr" direction="vertical" gap="0.5rem">
-            <strong style="font-size: 0.9rem;">Sort key – optional</strong>
+            <TText weight="semibold" style="font-size: 0.9rem;">Sort key – optional</TText>
             <TStack direction="horizontal" gap="0.75rem" align="end">
               <TFormField label="Attribute" style="flex: 1.4;">
                 <TInput :model-value="skAttr" disabled />
@@ -490,13 +490,13 @@ watch(() => [mode.value, indexName.value], () => {
         <TDivider />
 
         <TStack direction="vertical" gap="0.5rem">
-          <a
+          <TLink
             href="#"
-            style="text-decoration: none; font-weight: 600; font-size: 0.9rem;"
+            style="font-weight: 600; font-size: 0.9rem;"
             @click.prevent="filtersExpanded = !filtersExpanded"
           >
-            {{ filtersExpanded ? '▼' : '▶' }} Filters – optional
-          </a>
+            <TIcon :name="filtersExpanded ? 'chevron-down' : 'chevron-right'" /> Filters – optional
+          </TLink>
 
           <TStack v-if="filtersExpanded" direction="vertical" gap="0.5rem">
             <TStack
@@ -539,7 +539,7 @@ watch(() => [mode.value, indexName.value], () => {
             <TButton variant="ghost" @click="reset">Reset</TButton>
           </TStack>
           <TStack direction="horizontal" gap="0.5rem" align="center">
-            <span class="muted">Limit</span>
+            <TText tone="muted">Limit</TText>
             <TInput v-model.number="limit" type="number" size="sm" style="width: 6rem;" />
           </TStack>
         </TStack>
@@ -558,10 +558,10 @@ watch(() => [mode.value, indexName.value], () => {
     >
       <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
         <span>
-          <strong>{{ statusInfo.finished ? 'Completed' : 'Stopped' }}</strong>
-          · Items returned: <strong>{{ statusInfo.returned }}</strong>
-          · Items scanned: <strong>{{ statusInfo.scanned }}</strong>
-          · Efficiency: <strong>{{ statusInfo.efficiency }}%</strong>
+          <TText as="strong" weight="semibold">{{ statusInfo.finished ? 'Completed' : 'Stopped' }}</TText>
+          · Items returned: <TText as="strong" weight="semibold">{{ statusInfo.returned }}</TText>
+          · Items scanned: <TText as="strong" weight="semibold">{{ statusInfo.scanned }}</TText>
+          · Efficiency: <TText as="strong" weight="semibold">{{ statusInfo.efficiency }}%</TText>
         </span>
         <TButton
           v-if="!statusInfo.finished"
@@ -579,18 +579,18 @@ watch(() => [mode.value, indexName.value], () => {
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
           <TStack direction="vertical" gap="0.125rem">
-            <strong>
+            <TText weight="semibold">
               {{
                 indexName
                   ? `Index: ${indexName} (${props.table.name})`
                   : `Table: ${props.table.name}`
               }}
               – Items returned ({{ items.length }})
-            </strong>
-            <span class="muted" style="font-size: 0.75rem;">
+            </TText>
+            <TText tone="muted" size="xs">
               {{ mode === 'scan' ? 'Scan' : 'Query' }} started on
               {{ startedAt ? startedAt.toLocaleString() : '—' }}
-            </span>
+            </TText>
           </TStack>
           <TStack direction="horizontal" gap="0.5rem">
             <TButton size="sm" variant="ghost" :loading="running" @click="run()">Refresh</TButton>
@@ -599,9 +599,9 @@ watch(() => [mode.value, indexName.value], () => {
         </TStack>
       </template>
 
-      <div v-if="running && !items.length" style="display: flex; justify-content: center; padding: 2rem;">
+      <TStack v-if="running && !items.length" direction="horizontal" justify="center" align="center">
         <TSpinner label="Running..." />
-      </div>
+      </TStack>
 
       <TEmptyState
         v-else-if="!items.length"
@@ -609,7 +609,7 @@ watch(() => [mode.value, indexName.value], () => {
         description="Run the operation to load items."
       />
 
-      <TTable v-else :columns="columns" :rows="rows">
+      <TTable v-else :columns="columns" :rows="rows" aria-label="Scan and query results">
         <template
           v-for="(name, idx) in keyAttrNames"
           :key="`k-${name}`"
@@ -623,9 +623,9 @@ watch(() => [mode.value, indexName.value], () => {
           >
             {{ stringifyShort((row as any)[`__attr__${name}`]) }}
           </TLink>
-          <span v-else class="mono">
+          <TText v-else family="mono">
             {{ stringifyShort((row as any)[`__attr__${name}`]) }}
-          </span>
+          </TText>
         </template>
 
         <template
@@ -633,9 +633,9 @@ watch(() => [mode.value, indexName.value], () => {
           :key="`n-${name}`"
           #[`cell-__attr__${name}`]="{ row }"
         >
-          <span class="mono" style="font-size: 0.8rem;">
+          <TText family="mono" size="sm">
             {{ stringifyShort((row as any)[`__attr__${name}`]) }}
-          </span>
+          </TText>
         </template>
       </TTable>
     </TCard>

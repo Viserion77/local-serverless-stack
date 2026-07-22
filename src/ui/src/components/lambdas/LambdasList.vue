@@ -1,15 +1,14 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { RouterLink, useRouter } from 'vue-router';
+import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TTag, TSpinner, TAlert,
+  TTag, TSpinner, TAlert, TText, TLink,
 } from '@treeui/vue';
 import type { TreeBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { LambdaSummary } from '../../services/api';
 
-const router = useRouter();
 const lambdas = ref<LambdaSummary[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
@@ -44,10 +43,6 @@ async function loadLambdas() {
   } finally {
     loading.value = false;
   }
-}
-
-function openDetail(name: string) {
-  router.push(`/lambdas/${encodeURIComponent(name)}`);
 }
 
 function statusTone(status: string): TreeBadgeTone {
@@ -110,14 +105,14 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <strong>Lambda functions</strong>
-          <span class="muted">Live · refreshes every 10s</span>
+          <TText weight="semibold">Lambda functions</TText>
+          <TText tone="muted">Live · refreshes every 10s</TText>
         </TStack>
       </template>
 
-      <div v-if="loading" style="display: flex; justify-content: center; padding: 2rem;">
+      <TStack v-if="loading" direction="horizontal" justify="center" align="center">
         <TSpinner label="Loading lambdas..." />
-      </div>
+      </TStack>
 
       <TEmptyState
         v-else-if="!lambdas.length"
@@ -125,19 +120,18 @@ onBeforeUnmount(() => {
         description="Register a microservice that defines Lambda functions to see them here."
       />
 
-      <TTable v-else :columns="columns" :rows="rows">
+      <TTable v-else :columns="columns" :rows="rows" aria-label="Lambda functions">
         <template #cell-name="{ row }">
           <TStack direction="vertical" gap="0.125rem">
-            <a
-              href="#"
-              style="text-decoration: none; font-weight: 600;"
-              @click.prevent="openDetail(String(row.name))"
+            <TLink
+              :to="`/lambdas/${encodeURIComponent(String(row.name))}`"
+              style="font-weight: 600;"
             >
               {{ row.name }}
-            </a>
-            <span class="muted mono" style="font-size: 0.75rem;">
+            </TLink>
+            <TText tone="muted" family="mono" size="xs">
               {{ row.fullName }}
-            </span>
+            </TText>
           </TStack>
         </template>
 
@@ -155,7 +149,7 @@ onBeforeUnmount(() => {
         </template>
 
         <template #cell-handler="{ row }">
-          <span class="mono" style="font-size: 0.78rem;">{{ row.handler }}</span>
+          <TText family="mono" style="font-size: 0.78rem;">{{ row.handler }}</TText>
         </template>
 
         <template #cell-triggers="{ row }">
@@ -170,7 +164,7 @@ onBeforeUnmount(() => {
                 {{ t }}
               </TTag>
             </template>
-            <span v-else class="muted">—</span>
+            <TText v-else tone="muted">—</TText>
           </TStack>
         </template>
 
@@ -196,10 +190,10 @@ onBeforeUnmount(() => {
 
         <template #cell-last="{ row }">
           <TStack direction="vertical" gap="0.125rem">
-            <span style="font-size: 0.8rem;">{{ formatDate(row.lastInvokedAt as number | undefined) }}</span>
-            <span v-if="row.lastDurationMs !== undefined" class="muted mono" style="font-size: 0.75rem;">
+            <TText size="sm">{{ formatDate(row.lastInvokedAt as number | undefined) }}</TText>
+            <TText v-if="row.lastDurationMs !== undefined" tone="muted" family="mono" size="xs">
               {{ row.lastDurationMs }}ms
-            </span>
+            </TText>
           </TStack>
         </template>
       </TTable>

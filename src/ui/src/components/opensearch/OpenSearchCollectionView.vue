@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import {
   TCard, TButton, TBadge, TStack, TTable, TEmptyState, TSpinner, TAlert,
-  TInput, TSelect, TFormField,
+  TInput, TSelect, TFormField, TText, TIcon,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type {
@@ -112,8 +112,8 @@ watch(() => props.name, load);
   <TStack direction="vertical" gap="1rem">
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
-        <TButton size="sm" variant="ghost" @click="emit('back')">← Collections</TButton>
-        <strong style="font-size: 1.1rem;">{{ name }}</strong>
+        <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> Collections</TButton>
+        <TText size="lg" weight="semibold">{{ name }}</TText>
         <TBadge tone="info" variant="soft">
           {{ indices.length }} {{ indices.length === 1 ? 'index' : 'indices' }}
         </TBadge>
@@ -127,12 +127,12 @@ watch(() => props.name, load);
 
     <TCard variant="outline">
       <template #header>
-        <strong>Indices</strong>
+        <TText weight="semibold">Indices</TText>
       </template>
 
-      <div v-if="loading && !indices.length" style="display: flex; justify-content: center; padding: 2rem;">
+      <TStack v-if="loading && !indices.length" direction="horizontal" justify="center" align="center">
         <TSpinner label="Loading indices..." />
-      </div>
+      </TStack>
 
       <TEmptyState
         v-else-if="!indices.length"
@@ -140,9 +140,9 @@ watch(() => props.name, load);
         description="Indices are created when the first document is indexed into this collection."
       />
 
-      <TTable v-else :columns="indexColumns" :rows="indices">
+      <TTable v-else :columns="indexColumns" :rows="indices" aria-label="OpenSearch indices">
         <template #cell-index="{ row }">
-          <strong>{{ row.index }}</strong>
+          <TText weight="semibold">{{ row.index }}</TText>
         </template>
 
         <template #cell-docsCount="{ row }">
@@ -165,7 +165,7 @@ watch(() => props.name, load);
 
     <TCard variant="outline">
       <template #header>
-        <strong>Search documents</strong>
+        <TText weight="semibold">Search documents</TText>
       </template>
 
       <TStack direction="horizontal" gap="1rem" align="end">
@@ -193,11 +193,11 @@ watch(() => props.name, load);
     <TCard v-if="result" variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <strong>Results</strong>
-          <span class="muted" style="font-size: 0.75rem;">
+          <TText weight="semibold">Results</TText>
+          <TText tone="muted" size="xs">
             {{ result.hits.total.value }} hit{{ result.hits.total.value === 1 ? '' : 's' }}
             · took {{ result.took }} ms
-          </span>
+          </TText>
         </TStack>
       </template>
 
@@ -209,13 +209,13 @@ watch(() => props.name, load);
           : 'No documents match this search.'"
       />
 
-      <TTable v-else :columns="hitColumns" :rows="hitRows">
+      <TTable v-else :columns="hitColumns" :rows="hitRows" aria-label="Search result documents">
         <template #cell-index="{ row }">
-          <span class="mono" style="font-size: 0.78rem;">{{ row.index }}</span>
+          <TText family="mono" style="font-size: 0.78rem;">{{ row.index }}</TText>
         </template>
 
         <template #cell-id="{ row }">
-          <span class="mono" style="font-size: 0.78rem;">{{ row.id }}</span>
+          <TText family="mono" style="font-size: 0.78rem;">{{ row.id }}</TText>
         </template>
 
         <template #cell-source="{ row }">

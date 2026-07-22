@@ -2,7 +2,7 @@
 import { ref, watch } from 'vue';
 import {
   TCard, TButton, TStack, TGrid, TStat, TBadge, TSwitch, TInput, TAlert,
-  TFormField, TTag, useToast,
+  TFormField, TTag, TText, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { DynamoTableDetail } from '../../services/api';
@@ -68,7 +68,7 @@ function formatBytes(n: number): string {
 
     <TCard variant="outline">
       <template #header>
-        <strong>Time to Live (TTL)</strong>
+        <TText weight="semibold">Time to Live (TTL)</TText>
       </template>
 
       <TAlert v-if="error" variant="danger" dismissible @dismiss="error = null">
@@ -76,9 +76,9 @@ function formatBytes(n: number): string {
       </TAlert>
 
       <TStack direction="vertical" gap="0.75rem">
-        <span class="muted" style="font-size: 0.8rem;">
+        <TText tone="muted" size="sm">
           When TTL is enabled, items are automatically deleted by DynamoDB after the timestamp in the configured attribute (epoch seconds). Items are eventually consistent and may take time to be removed.
-        </span>
+        </TText>
 
         <TFormField label="Enable TTL">
           <TSwitch v-model="ttlEnabled" />
@@ -105,7 +105,7 @@ function formatBytes(n: number): string {
 
     <TCard variant="outline">
       <template #header>
-        <strong>Streams</strong>
+        <TText weight="semibold">Streams</TText>
       </template>
       <TStack direction="vertical" gap="0.5rem">
         <TStack direction="horizontal" gap="0.5rem" align="center">
@@ -116,26 +116,26 @@ function formatBytes(n: number): string {
             {{ props.table.streamViewType }}
           </TTag>
         </TStack>
-        <span v-if="props.table.streamArn" class="muted mono" style="font-size: 0.7rem;">
+        <TText v-if="props.table.streamArn" tone="muted" family="mono" style="font-size: 0.7rem;">
           {{ props.table.streamArn }}
-        </span>
-        <span v-else class="muted" style="font-size: 0.75rem;">
+        </TText>
+        <TText v-else tone="muted" size="xs">
           Streams configuration is set at table creation time and cannot be changed from here.
-        </span>
+        </TText>
       </TStack>
     </TCard>
 
     <TCard variant="outline">
       <template #header>
-        <strong>Identifier</strong>
+        <TText weight="semibold">Identifier</TText>
       </template>
       <TStack direction="vertical" gap="0.25rem">
-        <span class="muted mono" style="font-size: 0.75rem;">
+        <TText tone="muted" family="mono" size="xs">
           ARN: {{ props.table.arn || '—' }}
-        </span>
-        <span class="muted" style="font-size: 0.75rem;">
+        </TText>
+        <TText tone="muted" size="xs">
           Created: {{ props.table.createdAt ? new Date(props.table.createdAt).toLocaleString() : '—' }}
-        </span>
+        </TText>
       </TStack>
     </TCard>
   </TStack>

@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TTag, TSpinner, TAlert,
+  TTag, TSpinner, TAlert, TText, TLink,
 } from '@treeui/vue';
 import type { TreeBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
@@ -123,14 +123,14 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <strong>SQS Queues</strong>
-          <span class="muted">Live · refreshes every 4s</span>
+          <TText weight="semibold">SQS Queues</TText>
+          <TText tone="muted">Live · refreshes every 4s</TText>
         </TStack>
       </template>
 
-      <div v-if="loading" style="display: flex; justify-content: center; padding: 2rem;">
+      <TStack v-if="loading" direction="horizontal" justify="center" align="center">
         <TSpinner label="Loading queues..." />
-      </div>
+      </TStack>
 
       <TEmptyState
         v-else-if="!queues.length"
@@ -138,19 +138,18 @@ onBeforeUnmount(() => {
         description="Register a microservice that defines SQS resources or create queues directly in LocalStack."
       />
 
-      <TTable v-else :columns="columns" :rows="rows">
+      <TTable v-else :columns="columns" :rows="rows" aria-label="SQS queues">
         <template #cell-name="{ row }">
           <TStack direction="vertical" gap="0.125rem">
-            <a
-              href="#"
-              style="text-decoration: none; font-weight: 600;"
-              @click.prevent="openDetail(String(row.name))"
+            <TLink
+              :to="`/queues/${encodeURIComponent(String(row.name))}`"
+              style="font-weight: 600;"
             >
               {{ row.name }}
-            </a>
-            <span class="muted mono" style="font-size: 0.75rem;">
+            </TLink>
+            <TText tone="muted" family="mono" size="xs">
               {{ String(row.arn || row.url || '') }}
-            </span>
+            </TText>
           </TStack>
         </template>
 
@@ -162,7 +161,7 @@ onBeforeUnmount(() => {
           >
             <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
           </RouterLink>
-          <span v-else class="muted" style="font-size: 0.75rem;">unmanaged</span>
+          <TText v-else tone="muted" size="xs">unmanaged</TText>
         </template>
 
         <template #cell-available="{ row }">

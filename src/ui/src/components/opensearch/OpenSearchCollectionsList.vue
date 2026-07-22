@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TStack, TGrid, TStat, TEmptyState,
-  TSpinner, TAlert, TTag, TTable, TInput,
+  TSpinner, TAlert, TTag, TTable, TText, TInput,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { OpenSearchCollectionSummary } from '../../services/api';
@@ -91,21 +91,21 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
-          <strong>OpenSearch collections</strong>
+          <TText weight="semibold">OpenSearch collections</TText>
           <TStack direction="horizontal" align="center" gap="1rem">
             <TInput
               v-model="search"
               placeholder="Filter collections..."
               style="min-width: 16rem;"
             />
-            <span class="muted" style="font-size: 0.75rem;">Refreshes every 15s</span>
+            <TText tone="muted" size="xs">Refreshes every 15s</TText>
           </TStack>
         </TStack>
       </template>
 
-      <div v-if="loading" style="display: flex; justify-content: center; padding: 2rem;">
+      <TStack v-if="loading" direction="horizontal" justify="center" align="center">
         <TSpinner label="Loading collections..." />
-      </div>
+      </TStack>
 
       <TEmptyState
         v-else-if="!rows.length"
@@ -119,14 +119,15 @@ onBeforeUnmount(() => {
         :description="`No collections match &quot;${search}&quot;.`"
       />
 
-      <TTable v-else :columns="columns" :rows="filteredRows">
+      <TTable v-else :columns="columns" :rows="filteredRows" aria-label="OpenSearch collections">
         <template #cell-name="{ row }">
-          <strong
+          <TText
+            weight="semibold"
             style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;"
             @click="emit('open', String(row.name))"
           >
             {{ row.name }}
-          </strong>
+          </TText>
         </template>
 
         <template #cell-service="{ row }">
@@ -137,11 +138,11 @@ onBeforeUnmount(() => {
           >
             <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
           </RouterLink>
-          <span v-else class="muted" style="font-size: 0.75rem;">unmanaged</span>
+          <TText v-else tone="muted" size="xs">unmanaged</TText>
         </template>
 
         <template #cell-endpoint="{ row }">
-          <span class="muted mono" style="font-size: 0.75rem;">{{ row.endpoint }}</span>
+          <TText tone="muted" family="mono" size="xs">{{ row.endpoint }}</TText>
         </template>
 
         <template #cell-actions="{ row }">

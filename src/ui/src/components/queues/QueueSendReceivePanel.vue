@@ -2,7 +2,8 @@
 import { ref, computed } from 'vue';
 import {
   TCard, TButton, TStack, TInput, TTextarea, TFormField, TAlert, TBadge,
-  TDivider, TTable, TEmptyState, TSpinner, TConfirmDialog, TSelect, useToast,
+  TDivider, TTable, TEmptyState, TSpinner, TConfirmDialog, TSelect,
+  TText, TIcon, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type {
@@ -208,7 +209,7 @@ function copyToClipboard(text: string) {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <strong>Send a message</strong>
+          <TText weight="semibold">Send a message</TText>
           <TBadge v-if="isFifo" tone="info" variant="soft">FIFO</TBadge>
         </TStack>
       </template>
@@ -251,7 +252,7 @@ function copyToClipboard(text: string) {
 
         <TStack direction="vertical" gap="0.5rem">
           <TStack direction="horizontal" justify="space-between" align="center">
-            <strong style="font-size: 0.85rem;">Message attributes – optional</strong>
+            <TText weight="semibold" size="sm">Message attributes – optional</TText>
             <TButton size="sm" variant="outline" @click="addAttr">Add attribute</TButton>
           </TStack>
           <TStack
@@ -281,12 +282,12 @@ function copyToClipboard(text: string) {
             <TButton variant="solid" :loading="sending" @click="send">Send message</TButton>
             <TButton variant="ghost" :disabled="sending" @click="body = ''">Clear</TButton>
           </TStack>
-          <span v-if="lastSent" class="muted mono" style="font-size: 0.75rem;">
+          <TText v-if="lastSent" tone="muted" family="mono" size="xs">
             Last sent: {{ lastSent.messageId }}
             <template v-if="lastSent.sequenceNumber">
               · seq {{ lastSent.sequenceNumber }}
             </template>
-          </span>
+          </TText>
         </TStack>
       </template>
     </TCard>
@@ -298,7 +299,7 @@ function copyToClipboard(text: string) {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <strong>Poll for messages</strong>
+          <TText weight="semibold">Poll for messages</TText>
           <TBadge tone="warning" variant="soft">
             Messages become invisible during the visibility timeout
           </TBadge>
@@ -343,16 +344,16 @@ function copyToClipboard(text: string) {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <strong>Received messages ({{ messages.length }})</strong>
-          <span class="muted" style="font-size: 0.75rem;">
+          <TText weight="semibold">Received messages ({{ messages.length }})</TText>
+          <TText tone="muted" size="xs">
             Click a row to view the full body
-          </span>
+          </TText>
         </TStack>
       </template>
 
-      <div v-if="polling && !messages.length" style="display: flex; justify-content: center; padding: 2rem;">
+      <TStack v-if="polling && !messages.length" direction="horizontal" justify="center" align="center">
         <TSpinner label="Polling..." />
-      </div>
+      </TStack>
 
       <TEmptyState
         v-else-if="!messages.length"
@@ -360,24 +361,24 @@ function copyToClipboard(text: string) {
         description="Use Poll messages to fetch a batch from the queue."
       />
 
-      <TTable v-else :columns="messagesColumns" :rows="messagesRows">
+      <TTable v-else :columns="messagesColumns" :rows="messagesRows" aria-label="Received messages">
         <template #cell-preview="{ row }">
           <a
             href="#"
             style="text-decoration: none;"
             @click.prevent="toggleExpanded(String((row as any).messageId))"
           >
-            <span class="mono" style="font-size: 0.8rem;">
-              {{ expanded[String((row as any).messageId)] ? '▼' : '▶' }}
+            <TText family="mono" size="sm">
+              <TIcon :name="expanded[String((row as any).messageId)] ? 'chevron-down' : 'chevron-right'" />
               {{ (row as any).preview }}
-            </span>
+            </TText>
           </a>
         </template>
         <template #cell-messageId="{ row }">
-          <span class="mono" style="font-size: 0.75rem;">{{ (row as any).messageId }}</span>
+          <TText family="mono" size="xs">{{ (row as any).messageId }}</TText>
         </template>
         <template #cell-sentAt="{ row }">
-          <span class="muted" style="font-size: 0.75rem;">{{ (row as any).sentAt }}</span>
+          <TText tone="muted" size="xs">{{ (row as any).sentAt }}</TText>
         </template>
         <template #cell-attrs="{ row }">
           <TBadge
@@ -387,7 +388,7 @@ function copyToClipboard(text: string) {
           >
             {{ (row as any).attrs }}
           </TBadge>
-          <span v-else class="muted" style="font-size: 0.75rem;">—</span>
+          <TText v-else tone="muted" size="xs">—</TText>
         </template>
         <template #cell-actions="{ row }">
           <TStack direction="horizontal" gap="0.25rem" justify="flex-end">
@@ -433,7 +434,7 @@ function copyToClipboard(text: string) {
             </TStack>
 
             <div v-if="m.messageAttributes && Object.keys(m.messageAttributes).length">
-              <strong style="font-size: 0.8rem;">Message attributes</strong>
+              <TText weight="semibold" size="sm">Message attributes</TText>
               <TStack direction="horizontal" gap="0.375rem" wrap>
                 <TBadge
                   v-for="(v, k) in m.messageAttributes"

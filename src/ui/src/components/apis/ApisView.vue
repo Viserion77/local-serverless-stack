@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TTag, TSpinner, TAlert, TDivider, useToast,
+  TTag, TSpinner, TAlert, TDivider, TText, TLink, useToast,
 } from '@treeui/vue';
 import type { TreeBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
@@ -140,9 +140,9 @@ onBeforeUnmount(() => {
       {{ error }}
     </TAlert>
 
-    <div v-if="loading && !apis.length" style="display: flex; justify-content: center; padding: 2rem;">
+    <TStack v-if="loading && !apis.length" direction="horizontal" justify="center" align="center">
       <TSpinner label="Loading APIs..." />
-    </div>
+    </TStack>
 
     <TEmptyState
       v-else-if="!apis.length"
@@ -158,14 +158,9 @@ onBeforeUnmount(() => {
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between" wrap>
           <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
-            <RouterLink
-              :to="`/services/${encodeURIComponent(svc.service)}`"
-              style="color: inherit; text-decoration: none;"
-            >
-              <strong style="text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;">
-                {{ svc.service }}
-              </strong>
-            </RouterLink>
+            <TLink :to="`/services/${encodeURIComponent(svc.service)}`">
+              <TText weight="semibold">{{ svc.service }}</TText>
+            </TLink>
             <TBadge v-if="svc.apiPort" tone="info" variant="soft">:{{ svc.apiPort }}</TBadge>
             <TBadge :tone="listenerTone(svc.status)" variant="soft">{{ svc.status }}</TBadge>
             <TBadge
@@ -189,7 +184,7 @@ onBeforeUnmount(() => {
       </template>
 
       <TStack direction="vertical" gap="0.75rem">
-        <TTable v-if="svc.routes.length" :columns="routeColumns" :rows="routeRows(svc)">
+        <TTable v-if="svc.routes.length" :columns="routeColumns" :rows="routeRows(svc)" aria-label="API routes">
           <template #cell-method="{ row }">
             <TBadge :tone="methodTone(String(row.method))" variant="soft">
               {{ row.method }}
@@ -197,7 +192,7 @@ onBeforeUnmount(() => {
           </template>
 
           <template #cell-path="{ row }">
-            <span class="mono">{{ row.path }}</span>
+            <TText family="mono">{{ row.path }}</TText>
           </template>
 
           <template #cell-functionName="{ row }">
@@ -219,7 +214,7 @@ onBeforeUnmount(() => {
             <TTag v-if="row.authorizerName" size="sm" variant="soft">
               {{ row.authorizerName }}
             </TTag>
-            <span v-else class="muted">—</span>
+            <TText v-else tone="muted">—</TText>
           </template>
 
           <template #cell-actions="{ row }">
@@ -243,10 +238,10 @@ onBeforeUnmount(() => {
 
         <template v-if="svc.authorizers.length">
           <TDivider />
-          <strong style="font-size: 0.85rem;">Authorizers</strong>
-          <TTable :columns="authorizerColumns" :rows="authorizerRows(svc)">
+          <TText weight="semibold" size="sm">Authorizers</TText>
+          <TTable :columns="authorizerColumns" :rows="authorizerRows(svc)" aria-label="Authorizers">
             <template #cell-name="{ row }">
-              <span class="mono" style="font-size: 0.8rem;">{{ row.name }}</span>
+              <TText family="mono" size="sm">{{ row.name }}</TText>
             </template>
             <template #cell-type="{ row }">
               <TTag size="sm" variant="soft">{{ row.type }}</TTag>
@@ -257,18 +252,18 @@ onBeforeUnmount(() => {
               </TTag>
             </template>
             <template #cell-resultTtlInSeconds="{ row }">
-              <span class="mono" style="font-size: 0.8rem;">{{ row.resultTtlInSeconds }}s</span>
+              <TText family="mono" size="sm">{{ row.resultTtlInSeconds }}s</TText>
             </template>
             <template #cell-identitySource="{ row }">
-              <span class="mono" style="font-size: 0.75rem;">
+              <TText family="mono" size="xs">
                 {{ row.identitySource || '—' }}
-              </span>
+              </TText>
             </template>
             <template #cell-target="{ row }">
-              <span v-if="row.target" class="mono" style="font-size: 0.75rem;">
+              <TText v-if="row.target" family="mono" size="xs">
                 {{ row.target }}
-              </span>
-              <span v-else class="muted">—</span>
+              </TText>
+              <TText v-else tone="muted">—</TText>
             </template>
           </TTable>
         </template>

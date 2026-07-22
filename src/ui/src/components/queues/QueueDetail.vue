@@ -3,7 +3,8 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   TButton, TBadge, TStack, TTabs, TTabList, TTab, TTabPanel, TSpinner, TAlert,
-  TCard, TTag, TEmptyState, TGrid, TStat, TProgress, TDivider, useToast,
+  TCard, TTag, TEmptyState, TGrid, TStat, TProgress, TDivider,
+  TText, TIcon, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { QueueSnapshot } from '../../services/api';
@@ -101,8 +102,8 @@ watch(() => props.queueName, () => load());
   <TStack direction="vertical" gap="1rem">
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
-        <TButton size="sm" variant="ghost" @click="emit('back')">← Queues</TButton>
-        <strong style="font-size: 1.1rem;">{{ queueName }}</strong>
+        <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> Queues</TButton>
+        <TText weight="semibold" size="lg">{{ queueName }}</TText>
         <TBadge v-if="queue?.fifo" tone="info" variant="soft">FIFO</TBadge>
       </TStack>
       <TButton size="sm" variant="ghost" :loading="loading" @click="load()">Refresh</TButton>
@@ -112,9 +113,9 @@ watch(() => props.queueName, () => load());
       {{ error }}
     </TAlert>
 
-    <div v-if="loading && !queue" style="display: flex; justify-content: center; padding: 2rem;">
+    <TStack v-if="loading && !queue" direction="horizontal" justify="center" align="center">
       <TSpinner label="Loading queue..." />
-    </div>
+    </TStack>
 
     <template v-else-if="queue">
       <TGrid :columns="4" gap="0.75rem">
@@ -141,7 +142,7 @@ watch(() => props.queueName, () => load());
           <div style="padding-top: 1rem;">
             <TCard variant="outline">
               <template #header>
-                <strong>Lambda event-source mappings</strong>
+                <TText weight="semibold">Lambda event-source mappings</TText>
               </template>
               <TStack
                 v-if="queue.consumers.length"
@@ -155,10 +156,10 @@ watch(() => props.queueName, () => load());
                 >
                   <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
                     <TStack direction="vertical" gap="0.125rem">
-                      <span class="mono">{{ c.functionName }}</span>
-                      <span class="muted" style="font-size: 0.75rem;">
+                      <TText family="mono">{{ c.functionName }}</TText>
+                      <TText tone="muted" size="xs">
                         UUID: {{ c.uuid || '—' }} · batch size {{ c.batchSize ?? '—' }}
-                      </span>
+                      </TText>
                     </TStack>
                     <TBadge :tone="c.enabled ? 'success' : 'neutral'" variant="soft">
                       {{ c.state || (c.enabled ? 'Enabled' : 'Disabled') }}
@@ -180,23 +181,23 @@ watch(() => props.queueName, () => load());
             <TStack direction="vertical" gap="1rem">
               <TCard variant="outline">
                 <template #header>
-                  <strong>Identity</strong>
+                  <TText weight="semibold">Identity</TText>
                 </template>
                 <TStack direction="vertical" gap="0.5rem">
                   <TStack direction="horizontal" justify="space-between" wrap gap="0.5rem">
-                    <span class="muted">Queue URL</span>
-                    <span class="mono" style="font-size: 0.78rem;">{{ queue.url }}</span>
+                    <TText tone="muted">Queue URL</TText>
+                    <TText family="mono" size="sm">{{ queue.url }}</TText>
                   </TStack>
                   <TStack direction="horizontal" justify="space-between" wrap gap="0.5rem">
-                    <span class="muted">ARN</span>
-                    <span class="mono" style="font-size: 0.78rem;">{{ queue.arn || '—' }}</span>
+                    <TText tone="muted">ARN</TText>
+                    <TText family="mono" size="sm">{{ queue.arn || '—' }}</TText>
                   </TStack>
                 </TStack>
               </TCard>
 
               <TCard variant="outline">
                 <template #header>
-                  <strong>Configuration</strong>
+                  <TText weight="semibold">Configuration</TText>
                 </template>
                 <TStack direction="horizontal" gap="0.5rem" wrap>
                   <TTag size="sm" variant="soft">
@@ -213,21 +214,21 @@ watch(() => props.queueName, () => load());
                   </TTag>
                 </TStack>
                 <template #footer>
-                  <span class="muted" style="font-size: 0.75rem;">
+                  <TText tone="muted" size="xs">
                     Created {{ formatDate(queue.createdAt) }} · last polled
                     {{ formatDate(queue.lastPolledAt) }}
-                  </span>
+                  </TText>
                 </template>
               </TCard>
 
               <TCard variant="outline">
                 <template #header>
-                  <strong>Throughput</strong>
+                  <TText weight="semibold">Throughput</TText>
                 </template>
                 <TStack direction="vertical" gap="0.5rem">
                   <TStack direction="horizontal" justify="space-between" align="center">
-                    <span class="muted">Processed share (this session)</span>
-                    <span class="mono">{{ depthRatio }}%</span>
+                    <TText tone="muted">Processed share (this session)</TText>
+                    <TText family="mono">{{ depthRatio }}%</TText>
                   </TStack>
                   <TProgress :value="depthRatio" />
                 </TStack>

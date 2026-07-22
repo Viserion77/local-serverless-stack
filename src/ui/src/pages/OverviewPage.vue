@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import {
-  TCard, TStack, TBadge, TGrid, TStat, TTag, TDivider, TButton, TSpinner,
+  TCard, TStack, TBadge, TGrid, TStat, TTag, TDivider, TButton, TSpinner, TText, TIcon,
 } from '@treeui/vue';
 import { RouterLink } from 'vue-router';
 import { api } from '../services/api';
@@ -101,10 +101,10 @@ onBeforeUnmount(() => {
     <TCard variant="outline" class="overview-hero">
       <TStack direction="vertical" gap="1rem">
         <TStack direction="horizontal" gap="0.75rem" align="center" wrap>
-          <span style="font-size: 1.75rem;">⚡</span>
+          <TIcon name="zap" />
           <TStack direction="vertical" gap="0.125rem">
-            <strong style="font-size: 1.5rem;">Local Serverless Stack</strong>
-            <span class="muted">One LocalStack. Every microservice. Zero docker juggling.</span>
+            <TText size="xl" weight="semibold">Local Serverless Stack</TText>
+            <TText tone="muted">One LocalStack. Every microservice. Zero docker juggling.</TText>
           </TStack>
         </TStack>
         <p style="max-width: 70ch; line-height: 1.55;">
@@ -135,39 +135,39 @@ onBeforeUnmount(() => {
       </TStack>
     </TCard>
 
-    <div v-if="loading && !health" style="display: flex; justify-content: center; padding: 2rem;">
+    <TStack v-if="loading && !health" direction="horizontal" justify="center" align="center">
       <TSpinner label="Loading overview..." />
-    </div>
+    </TStack>
 
     <template v-else>
       <!-- Status + Config side by side -->
       <TGrid :columns="2" gap="1rem">
         <TCard variant="outline">
           <template #header>
-            <strong>Server status</strong>
+            <TText weight="semibold">Server status</TText>
           </template>
           <TStack direction="vertical" gap="0.75rem">
             <TStack direction="horizontal" justify="space-between" align="center">
-              <span class="muted">LocalStack</span>
+              <TText tone="muted">LocalStack</TText>
               <TBadge :tone="health?.localstack ? 'success' : 'danger'" variant="soft">
                 {{ health?.localstack ? 'Running' : 'Offline' }}
               </TBadge>
             </TStack>
             <TStack direction="horizontal" justify="space-between" align="center">
-              <span class="muted">Endpoint</span>
-              <span class="mono">{{ config?.localstack?.endpoint || '—' }}</span>
+              <TText tone="muted">Endpoint</TText>
+              <TText family="mono">{{ config?.localstack?.endpoint || '—' }}</TText>
             </TStack>
             <TStack direction="horizontal" justify="space-between" align="center">
-              <span class="muted">Image</span>
-              <span class="mono" style="font-size: 0.8rem;">{{ config?.localstack?.image || '—' }}</span>
+              <TText tone="muted">Image</TText>
+              <TText family="mono" size="sm">{{ config?.localstack?.image || '—' }}</TText>
             </TStack>
             <TStack direction="horizontal" justify="space-between" align="center">
-              <span class="muted">Mode</span>
+              <TText tone="muted">Mode</TText>
               <TTag size="sm" variant="soft">{{ config?.localstack?.mode || '—' }}</TTag>
             </TStack>
             <TDivider />
             <TStack direction="horizontal" justify="space-between" align="center">
-              <span class="muted">Dynamo Proxy</span>
+              <TText tone="muted">Dynamo Proxy</TText>
               <TStack direction="horizontal" gap="0.375rem" align="center">
                 <TBadge
                   v-if="proxyEnabled"
@@ -180,13 +180,13 @@ onBeforeUnmount(() => {
               </TStack>
             </TStack>
             <TStack direction="horizontal" justify="space-between" align="center">
-              <span class="muted">Auto-package</span>
+              <TText tone="muted">Auto-package</TText>
               <TBadge :tone="autoPackage ? 'info' : 'neutral'" variant="soft">
                 {{ autoPackage ? 'on' : 'off' }}
               </TBadge>
             </TStack>
             <TStack direction="horizontal" justify="space-between" align="center">
-              <span class="muted">Persistence</span>
+              <TText tone="muted">Persistence</TText>
               <TBadge :tone="persistence ? 'info' : 'neutral'" variant="soft">
                 {{ persistence ? 'on' : 'off' }}
               </TBadge>
@@ -196,19 +196,19 @@ onBeforeUnmount(() => {
 
         <TCard variant="outline">
           <template #header>
-            <strong>LESC configuration</strong>
+            <TText weight="semibold">LESC configuration</TText>
           </template>
           <TStack direction="vertical" gap="0.75rem">
             <TStack direction="horizontal" justify="space-between" align="center">
-              <span class="muted">Default region</span>
-              <span class="mono">{{ config?.region || '—' }}</span>
+              <TText tone="muted">Default region</TText>
+              <TText family="mono">{{ config?.region || '—' }}</TText>
             </TStack>
             <TStack direction="horizontal" justify="space-between" align="center">
-              <span class="muted">Server port</span>
-              <span class="mono">{{ config?.serverPort || '—' }}</span>
+              <TText tone="muted">Server port</TText>
+              <TText family="mono">{{ config?.serverPort || '—' }}</TText>
             </TStack>
             <TStack direction="horizontal" justify="space-between" align="start" wrap>
-              <span class="muted">LocalStack services</span>
+              <TText tone="muted">LocalStack services</TText>
               <TStack direction="horizontal" gap="0.25rem" wrap justify="flex-end">
                 <TTag
                   v-for="svc in (config?.services || [])"
@@ -218,12 +218,12 @@ onBeforeUnmount(() => {
                 >
                   {{ svc }}
                 </TTag>
-                <span v-if="!(config?.services || []).length" class="muted">—</span>
+                <TText v-if="!(config?.services || []).length" tone="muted">—</TText>
               </TStack>
             </TStack>
             <TStack direction="horizontal" justify="space-between" align="center">
-              <span class="muted">Seeds dir</span>
-              <span class="mono" style="font-size: 0.75rem;">{{ config?.seedsDir || '—' }}</span>
+              <TText tone="muted">Seeds dir</TText>
+              <TText family="mono" size="xs">{{ config?.seedsDir || '—' }}</TText>
             </TStack>
             <TStack
               v-if="config?.configPath"
@@ -231,8 +231,8 @@ onBeforeUnmount(() => {
               justify="space-between"
               align="center"
             >
-              <span class="muted">Config file</span>
-              <span class="mono" style="font-size: 0.75rem;">{{ config.configPath }}</span>
+              <TText tone="muted">Config file</TText>
+              <TText family="mono" size="xs">{{ config.configPath }}</TText>
             </TStack>
           </TStack>
         </TCard>
@@ -286,10 +286,10 @@ onBeforeUnmount(() => {
       <TCard variant="outline">
         <template #header>
           <TStack direction="horizontal" justify="space-between" align="center">
-            <strong>What's covered</strong>
-            <span class="muted" style="font-size: 0.75rem;">
+            <TText weight="semibold">What's covered</TText>
+            <TText tone="muted" size="xs">
               Resource types LSS understands today
-            </span>
+            </TText>
           </TStack>
         </template>
         <TGrid :columns="2" gap="0.75rem">
@@ -301,10 +301,8 @@ onBeforeUnmount(() => {
             <TStack direction="horizontal" gap="0.75rem" align="center" justify="space-between">
               <TStack direction="vertical" gap="0.125rem">
                 <TStack direction="horizontal" gap="0.5rem" align="center">
-                  <span style="font-size: 1.05rem;">
-                    {{ item.status === 'covered' ? '✓' : '⏳' }}
-                  </span>
-                  <strong>{{ item.type }}</strong>
+                  <TIcon :name="item.status === 'covered' ? 'check' : 'clock'" />
+                  <TText weight="semibold">{{ item.type }}</TText>
                   <TBadge
                     :tone="item.status === 'covered' ? 'success' : 'neutral'"
                     variant="soft"
@@ -312,16 +310,16 @@ onBeforeUnmount(() => {
                     {{ item.status === 'covered' ? 'Supported' : 'Planned' }}
                   </TBadge>
                 </TStack>
-                <span class="muted" style="font-size: 0.825rem;">
+                <TText tone="muted" size="sm">
                   {{ item.description }}
-                </span>
+                </TText>
               </TStack>
               <RouterLink
                 v-if="item.to"
                 :to="item.to"
                 style="text-decoration: none;"
               >
-                <TButton size="sm" variant="ghost">Open →</TButton>
+                <TButton size="sm" variant="ghost">Open <TIcon name="arrow-right" /></TButton>
               </RouterLink>
             </TStack>
           </TCard>

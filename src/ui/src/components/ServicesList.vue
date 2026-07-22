@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
-import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TInput, TFormField, TBadge, TTable, TEmptyState,
-  TStack, TModal, TConfirmDialog, TSpinner, TTag, useToast,
+  TStack, TModal, TConfirmDialog, TSpinner, TTag, TText, TIcon, TLink, useToast,
 } from '@treeui/vue';
 import type { TreeBadgeTone } from '@treeui/vue';
 
@@ -175,7 +174,7 @@ onBeforeUnmount(() => {
   <TCard variant="outline">
     <template #header>
       <TStack direction="horizontal" gap="0.75rem" align="center" justify="space-between">
-        <strong>Microservices</strong>
+        <TText weight="semibold">Microservices</TText>
         <TStack direction="horizontal" gap="0.5rem" align="center">
           <TFormField hint="Absolute path to a Serverless project" :htmlFor="'register-path'">
             <TInput
@@ -197,9 +196,9 @@ onBeforeUnmount(() => {
       </TStack>
     </template>
 
-    <div v-if="loading" style="display: flex; justify-content: center; padding: 2rem;">
+    <TStack v-if="loading" direction="horizontal" justify="center" align="center">
       <TSpinner label="Loading services..." />
-    </div>
+    </TStack>
 
     <TEmptyState
       v-else-if="!services.length"
@@ -207,16 +206,13 @@ onBeforeUnmount(() => {
       description="Register your first microservice using the form above."
     />
 
-    <TTable v-else :columns="columns" :rows="rows">
+    <TTable v-else :columns="columns" :rows="rows" aria-label="Registered microservices">
       <template #cell-name="{ row }">
-        <RouterLink
-          :to="`/services/${encodeURIComponent(String(row.name))}`"
-          style="color: inherit; text-decoration: none;"
-        >
-          <strong style="text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;">
+        <TLink :to="`/services/${encodeURIComponent(String(row.name))}`">
+          <TText weight="semibold">
             {{ row.name }}
-          </strong>
-        </RouterLink>
+          </TText>
+        </TLink>
       </template>
 
       <template #cell-status="{ row }">
@@ -226,7 +222,7 @@ onBeforeUnmount(() => {
       </template>
 
       <template #cell-root="{ row }">
-        <span class="mono">{{ row.root }}</span>
+        <TText family="mono">{{ row.root }}</TText>
       </template>
 
       <template #cell-resourceBreakdown="{ row }">
@@ -236,64 +232,64 @@ onBeforeUnmount(() => {
             size="sm"
             variant="soft"
           >
-            λ {{ (row.resourceBreakdown as any).lambdas }}
+            <TIcon name="code" /> {{ (row.resourceBreakdown as any).lambdas }}
           </TTag>
           <TTag
             v-if="(row.resourceBreakdown as any)?.tables"
             size="sm"
             variant="soft"
           >
-            🗄 {{ (row.resourceBreakdown as any).tables }}
+            <TIcon name="database" /> {{ (row.resourceBreakdown as any).tables }}
           </TTag>
           <TTag
             v-if="(row.resourceBreakdown as any)?.queues"
             size="sm"
             variant="soft"
           >
-            📨 {{ (row.resourceBreakdown as any).queues }}
+            <TIcon name="inbox" /> {{ (row.resourceBreakdown as any).queues }}
           </TTag>
           <TTag
             v-if="(row.resourceBreakdown as any)?.topics"
             size="sm"
             variant="soft"
           >
-            📣 {{ (row.resourceBreakdown as any).topics }}
+            <TIcon name="megaphone" /> {{ (row.resourceBreakdown as any).topics }}
           </TTag>
           <TTag
             v-if="(row.resourceBreakdown as any)?.buckets"
             size="sm"
             variant="soft"
           >
-            🪣 {{ (row.resourceBreakdown as any).buckets }}
+            <TIcon name="archive" /> {{ (row.resourceBreakdown as any).buckets }}
           </TTag>
           <TTag
             v-if="(row.resourceBreakdown as any)?.buses"
             size="sm"
             variant="soft"
           >
-            🔀 {{ (row.resourceBreakdown as any).buses }}
+            <TIcon name="shuffle" /> {{ (row.resourceBreakdown as any).buses }}
           </TTag>
           <TTag
             v-if="(row.resourceBreakdown as any)?.eventRules"
             size="sm"
             variant="soft"
           >
-            🎯 {{ (row.resourceBreakdown as any).eventRules }}
+            <TIcon name="target" /> {{ (row.resourceBreakdown as any).eventRules }}
           </TTag>
           <TTag
             v-if="(row.resourceBreakdown as any)?.collections"
             size="sm"
             variant="soft"
           >
-            🔍 {{ (row.resourceBreakdown as any).collections }}
+            <TIcon name="search" /> {{ (row.resourceBreakdown as any).collections }}
           </TTag>
-          <span
+          <TText
             v-if="!row.resourcesCount"
-            class="muted"
-            style="font-size: 0.75rem;"
+            tone="muted"
+            size="xs"
           >
             none
-          </span>
+          </TText>
         </TStack>
       </template>
 

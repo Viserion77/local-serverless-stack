@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import {
-  TCard, TButton, TStack, TBadge, TConfirmDialog, useToast,
+  TCard, TButton, TStack, TBadge, TConfirmDialog, TText, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 
@@ -97,7 +97,7 @@ async function redo() {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" justify="space-between" align="center">
-          <strong>Seed file</strong>
+          <TText weight="semibold">Seed file</TText>
           <TBadge tone="info" variant="soft">
             {{ seedItemCount }} item{{ seedItemCount === 1 ? '' : 's' }}
           </TBadge>
@@ -106,28 +106,28 @@ async function redo() {
 
       <TStack direction="vertical" gap="0.5rem">
         <TStack direction="horizontal" justify="space-between" align="center">
-          <span class="muted">Path</span>
-          <span class="mono" style="font-size: 0.8rem;">{{ seedFile }}</span>
+          <TText tone="muted">Path</TText>
+          <TText family="mono" size="sm">{{ seedFile }}</TText>
         </TStack>
         <TStack direction="horizontal" justify="space-between" align="center">
-          <span class="muted">Current rows in table</span>
-          <span class="mono">{{ tableItemCount }}</span>
+          <TText tone="muted">Current rows in table</TText>
+          <TText family="mono">{{ tableItemCount }}</TText>
         </TStack>
       </TStack>
     </TCard>
 
     <TCard variant="outline">
       <template #header>
-        <strong>Actions</strong>
+        <TText weight="semibold">Actions</TText>
       </template>
 
       <TStack direction="vertical" gap="0.75rem">
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
           <TStack direction="vertical" gap="0.125rem">
-            <strong>Apply seed</strong>
-            <span class="muted" style="font-size: 0.825rem;">
+            <TText weight="semibold">Apply seed</TText>
+            <TText tone="muted" size="sm">
               Inserts every item from the seed file. Existing items with the same key are overwritten.
-            </span>
+            </TText>
           </TStack>
           <TButton
             variant="solid"
@@ -141,10 +141,10 @@ async function redo() {
 
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
           <TStack direction="vertical" gap="0.125rem">
-            <strong>Redo seed</strong>
-            <span class="muted" style="font-size: 0.825rem;">
+            <TText weight="semibold">Redo seed</TText>
+            <TText tone="muted" size="sm">
               Purges the table first, then re-applies the seed file. Use when stale rows are blocking a fresh load.
-            </span>
+            </TText>
           </TStack>
           <TButton
             variant="soft"
@@ -158,10 +158,10 @@ async function redo() {
 
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
           <TStack direction="vertical" gap="0.125rem">
-            <strong>Purge table</strong>
-            <span class="muted" style="font-size: 0.825rem;">
+            <TText weight="semibold">Purge table</TText>
+            <TText tone="muted" size="sm">
               Deletes every item currently in this table. The seed file is not touched.
-            </span>
+            </TText>
           </TStack>
           <TButton
             variant="danger"
