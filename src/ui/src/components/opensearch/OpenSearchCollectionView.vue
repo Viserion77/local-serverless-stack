@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import {
   TCard, TButton, TBadge, TStack, TTable, TEmptyState, TSpinner, TAlert,
-  TInput, TSelect, TFormField, TText, TIcon,
+  TInput, TSelect, TFormField, TText, TIcon, TCodeBlock,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type {
@@ -219,10 +219,7 @@ watch(() => props.name, load);
         </template>
 
         <template #cell-source="{ row }">
-          <pre
-            class="mono"
-            style="white-space: pre-wrap; word-break: break-word; font-size: 0.78rem; background: var(--tree-color-surface-muted, #f6f7f9); padding: 0.5rem; border-radius: 6px; max-height: 280px; overflow: auto; margin: 0;"
-          >{{ row.source }}</pre>
+          <TCodeBlock :code="row.source" label="Search document" max-block-size="24rem" wrap copyable />
         </template>
       </TTable>
     </TCard>

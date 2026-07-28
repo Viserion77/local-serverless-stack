@@ -3,7 +3,8 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import {
   TCard, TButton, TBadge, TStack, TGrid, TStat, TSpinner, TAlert,
-  TTag, TEmptyState, TModal, TConfirmDialog, TText, TIcon, useToast,
+  TTag, TEmptyState, TModal, TConfirmDialog, TText, TIcon, TCodeBlock, useToast,
+  TDescriptionList, TDescriptionItem,
 } from '@treeui/vue';
 import type { TreeBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
@@ -196,28 +197,23 @@ watch(() => props.serviceName, load);
         <template #header>
           <TText weight="semibold">Metadata</TText>
         </template>
-        <TStack direction="vertical" gap="0.5rem">
-          <TStack direction="horizontal" justify="space-between">
-            <TText tone="muted">Path</TText>
+        <TDescriptionList>
+          <TDescriptionItem label="Path">
             <TText family="mono">{{ service.root }}</TText>
-          </TStack>
-          <TStack direction="horizontal" justify="space-between">
-            <TText tone="muted">Region</TText>
+          </TDescriptionItem>
+          <TDescriptionItem label="Region">
             <TText family="mono">{{ service.region || '—' }}</TText>
-          </TStack>
-          <TStack direction="horizontal" justify="space-between">
-            <TText tone="muted">Invoke port</TText>
+          </TDescriptionItem>
+          <TDescriptionItem label="Invoke port">
             <TText family="mono">{{ service.invokePort ?? '—' }}</TText>
-          </TStack>
-          <TStack direction="horizontal" justify="space-between">
-            <TText tone="muted">PID</TText>
+          </TDescriptionItem>
+          <TDescriptionItem label="PID">
             <TText family="mono">{{ service.pid ?? '—' }}</TText>
-          </TStack>
-          <TStack direction="horizontal" justify="space-between">
-            <TText tone="muted">Last updated</TText>
+          </TDescriptionItem>
+          <TDescriptionItem label="Last updated">
             <span>{{ formatDate(service.lastUpdated) }}</span>
-          </TStack>
-        </TStack>
+          </TDescriptionItem>
+        </TDescriptionList>
       </TCard>
 
       <TCard variant="outline">
@@ -400,7 +396,7 @@ watch(() => props.serviceName, load);
       size="lg"
       @update:open="(v: boolean) => { if (!v) closeLogs(); }"
     >
-      <pre class="logs-pre">{{ logs.join('\n') || '— no output yet —' }}</pre>
+      <TCodeBlock :code="logs.join('\n') || '— no output yet —'" label="Service log" max-block-size="60vh" wrap copyable />
     </TModal>
 
     <TConfirmDialog

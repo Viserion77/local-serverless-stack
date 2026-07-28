@@ -209,8 +209,47 @@ export interface BrandingInfo {
   };
 }
 
+export interface SelfEngineInfo {
+  port: number;
+  dataDir: string;
+  account: string;
+  idleUnloadMs: number;
+  memoryBudgetMb: number;
+  fsync: boolean;
+  fallbackEndpoint: string | null;
+}
+
+export interface LambdaRuntimeInfo {
+  enabled: boolean;
+  execution: 'auto' | 'artifact' | 'source';
+  // null = mode-dependent default (source → on, artifact → off).
+  watch: boolean | null;
+  invokePortOffset: number;
+  invokeHost: string;
+}
+
+// Per-service packaging override with env VALUES redacted to key names.
+export interface ServicePackagingInfo {
+  packageCommand?: string;
+  packageArgs?: string[];
+  packageTimeoutMs?: number;
+  packageEnvKeys: string[];
+}
+
+export interface ServiceRuntimeInfo {
+  enabled?: boolean;
+  apiPort?: number;
+  invokePort?: number;
+  execution?: string;
+  watch?: boolean;
+}
+
 export interface LssConfigSnapshot {
   serverPort: number;
+  engine: {
+    kind: 'localstack' | 'self';
+    endpoint: string;
+  };
   localstack: {
     mode: string;
     endpoint: string;
@@ -219,6 +258,12 @@ export interface LssConfigSnapshot {
     version: string;
     image: string;
     hasAuthToken: boolean;
+  };
+  selfEngine: SelfEngineInfo;
+  aossSidecar: {
+    enabled: boolean;
+    port: number;
+    endpoint: string;
   };
   dynamoProxy: {
     enabled: boolean;
@@ -229,11 +274,93 @@ export interface LssConfigSnapshot {
   persistence: boolean;
   debug: boolean;
   seedsDir: string;
+  stateDir: string | null;
   autoPackage: boolean;
   packageCommand: string;
   packageTimeoutMs: number;
+  packageArgs: string[];
+  packageEnvKeys: string[];
+  servicePackaging: Record<string, ServicePackagingInfo>;
+  lambdaRuntime: LambdaRuntimeInfo;
+  serviceRuntime: Record<string, ServiceRuntimeInfo>;
+  secretSeedCount: number;
+  // Config keys currently masked by an env var (env wins over the file).
+  envOverrides: string[];
   configPath: string;
+  projectRoot: string;
   branding: BrandingInfo;
+}
+
+// Writable subset for PUT /api/config. A top-level null deletes the key from
+// the file; object blocks merge one level deep and a null subkey deletes it.
+export interface LssConfigUpdate {
+  serverPort?: number;
+  localstackPort?: number;
+  localstackEndpoint?: string | null;
+  mode?: 'managed' | 'external';
+  localstackEdition?: 'community' | 'pro';
+  localstackVersion?: string | null;
+  localstackImage?: string | null;
+  enableDynamoProxy?: boolean;
+  dynamoProxyPort?: number;
+  region?: string;
+  services?: string[] | null;
+  persistence?: boolean;
+  debug?: boolean;
+  seedsDir?: string | null;
+  stateDir?: string | null;
+  autoPackage?: boolean;
+  packageCommand?: string | null;
+  packageArgs?: string[];
+  packageTimeoutMs?: number;
+  engine?: 'localstack' | 'self';
+  lambdaRuntime?: {
+    enabled?: boolean;
+    execution?: 'auto' | 'artifact' | 'source';
+    watch?: boolean | null;
+    invokePortOffset?: number;
+    invokeHost?: string | null;
+  };
+  selfEngine?: {
+    port?: number;
+    account?: string;
+    idleUnloadMs?: number;
+    memoryBudgetMb?: number;
+    fsync?: boolean;
+    fallbackEndpoint?: string | null;
+  };
+  aossSidecar?: {
+    enabled?: boolean;
+    port?: number;
+  };
+  branding?: {
+    title?: string | null;
+    subtitle?: string | null;
+    defaultTheme?: 'dark' | 'light';
+  };
+}
+
+export interface ConfigUpdateResponse {
+  config: LssConfigSnapshot;
+  configPath: string;
+  // Boot-materialized keys that changed — need `lss stop && lss start`.
+  restartRequired: string[];
+  // Patch keys whose file value is masked by an env var right now.
+  envOverridden: string[];
+}
+
+export interface ConfigReloadResponse {
+  config: LssConfigSnapshot;
+  configPath: string;
+  restartRequired: string[];
+}
+
+export interface PortEntry {
+  name: string;
+  kind: 'orchestrator' | 'engine' | 'sidecar' | 'proxy' | 'service-api' | 'service-invoke';
+  port: number;
+  url: string;
+  description: string;
 }
 
 export interface ResourceOwner {
@@ -468,6 +595,14 @@ export const api = {
   // Health & config
   checkHealth: () => request<HealthInfo>('/api/health'),
   getConfig: () => request<LssConfigSnapshot>('/api/config'),
+  updateConfig: (patch: LssConfigUpdate) =>
+    request<ConfigUpdateResponse>('/api/config', {
+      method: 'PUT',
+      body: JSON.stringify(patch),
+    }),
+  reloadConfig: () =>
+    request<ConfigReloadResponse>('/api/config/reload', { method: 'POST' }),
+  getPorts: () => request<{ ports: PortEntry[] }>('/api/config/ports'),
   getBranding: () => request<BrandingInfo>('/api/config/branding'),
 
   // Services

@@ -45,7 +45,7 @@ LSS features come in two layers:
   - `autoPackage` — runs `sls package` on demand when the template is missing
   - Automatic event source mappings: SQS / DynamoDB streams / S3 notifications / EventBridge rules → Lambda — with AWS-faithful failure semantics (`FilterCriteria` enforced, `ReportBatchItemFailures` partial batches, `maximumRetryAttempts` incl. the `-1` "until the record ages out" default)
   - Per-instance isolation — `stateDir` + port-scoped PID/log paths let many LSS instances coexist (one per project)
-  - Config: `lss.config.json` / `.lssrc` + env overrides (`LSS_*`); public-safe `GET /api/config` snapshot (never leaks the auth token)
+  - Config: `lss.config.json` / `.lssrc` + env overrides (`LSS_*`); public-safe `GET /api/config` snapshot (never leaks the auth token); editable from the dashboard via `PUT /api/config` (writes the file for you to commit) + `POST /api/config/reload`; `GET /api/config/ports` lists every exposed port
 - **Lambda runtime & API Gateway emulation** (serverless-offline replacement — same `30xx`/`130xx` ports)
   - Function + route registry: REST (`http`, payload v1), HTTP API (`httpApi`, payload v2) and authorizers — persisted and rehydrated on restart
   - Per-service worker processes: lazy/warm handler loading, function env/timeout/context, per-invocation log capture, crash restart
@@ -64,7 +64,8 @@ LSS features come in two layers:
   - **Seeds** (`/api/seeds`): auto-seed on table creation + on-demand run/clear, seed-file ↔ live-table mismatch diagnostic
   - **Resources** (`/api/resources`, `…/owners`): provisioned resources mapped to owning services
   - **Health** (`/api/health`): orchestrator + active engine + dynamo-proxy status
-- **Dashboard (Vue 3 SPA)** — nine tabs: **Overview**, **Services** (status/start/stop/logs + per-service resource breakdown incl. EventBridge buses & rules and OpenSearch collections), **Lambdas** (registry + invoke + logs), **APIs**, **Queues**, **S3**, **DynamoDB**, **OpenSearch**, **Secrets** — plus a region selector and theme toggle
+- **Dashboard (Vue 3 SPA)** — ten tabs: **Overview** (health, config, exposed-ports map), **Services** (status/start/stop/logs + per-service resource breakdown incl. EventBridge buses & rules and OpenSearch collections), **Lambdas** (registry + invoke + logs), **APIs**, **Queues**, **S3**, **DynamoDB**, **OpenSearch**, **Secrets**, **Settings** — plus a region selector and theme toggle
+  - **Settings**: edit `lss.config.json` from the dashboard — only changed fields are written (you review and commit the diff), hot-reload for lazy keys, explicit restart-required and env-var-masked flags, plus a reload-from-disk button
   - **Branding**: navbar title/subtitle, logo, favicon, default theme and any TreeUI color token per theme, via the `branding` config key
 - **serverless-lss plugin** — auto-registers each service on `sls package`/`offline`; orchestrator URL precedence (`ORCHESTRATOR_URL` > `LSS_DASHBOARD_PORT` > `custom.orchestrator` > 3100)
 - **Programmatic client (`LssClient`)** — the CLI/dashboard surface from code: HTTP namespaces `seeds`, `queues`, `dynamo`, `buckets`, `resources`, `services`, `lambdas`, `apis`, `config`, `health` + `lifecycle` (`start`/`stop`/`status`/`logs`/`waitUntilReady`, shells out to the CLI)
@@ -319,12 +320,15 @@ Details (`mode`, `localstackEdition`, `localstackVersion`, `localstackImage`):
 
 ## Dashboard
 
-The Vue 3 dashboard at `http://localhost:3100` has seven tabs — **Overview** (health,
-config snapshot), **Services** (status, start/stop, live logs, per-service resource
-breakdown incl. EventBridge buses & rules), **Lambdas** (registry + invoke), **APIs**
-(emulated HTTP routes), **Queues** (send/receive/purge, consumers), **S3** (objects,
-upload/download), **DynamoDB** (items explorer, editor, TTL, seeds). A region selector
-lets you inspect resources in any region.
+The Vue 3 dashboard at `http://localhost:3100` has ten tabs — **Overview** (health,
+config snapshot, exposed-ports map), **Services** (status, start/stop, live logs,
+per-service resource breakdown incl. EventBridge buses & rules), **Lambdas** (registry +
+invoke), **APIs** (emulated HTTP routes), **Queues** (send/receive/purge, consumers),
+**S3** (objects, upload/download), **DynamoDB** (items explorer, editor, TTL, seeds),
+**OpenSearch**, **Secrets**, and **Settings** — which edits `lss.config.json` in place
+(only changed fields are written, so you review and commit the diff), hot-reloads what it
+can, and flags the keys that need `lss stop && lss start` or are masked by env vars.
+A region selector lets you inspect resources in any region.
 
 It can carry your team's identity via the `branding` config key: navbar title/subtitle,
 logo and favicon (URL or a file next to `lss.config.json`), default theme, and any

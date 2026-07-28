@@ -32,6 +32,33 @@
       "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
       "problemMatcher": []
     },
+    {
+      "label": "dev @ example self-hosted (watch, sem build)",
+      "detail": "npm run dev lendo examples/self-hosted/lss.config.json — orquestrador forçado em :3100 (a UI dev espera essa porta); registre com LSS_DASHBOARD_PORT=3100 npm run register:all. UI em :3101",
+      "type": "shell",
+      "command": "LSS_DASHBOARD_PORT=3100 LSS_CONFIG_PATH=examples/self-hosted/lss.config.json npm run dev",
+      "isBackground": true,
+      "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
+      "problemMatcher": []
+    },
+    {
+      "label": "dev @ example localstack-free (watch, sem build)",
+      "detail": "npm run dev lendo examples/localstack-free/lss.config.json — orquestrador forçado em :3100 (a UI dev espera essa porta); exige Docker. UI em :3101",
+      "type": "shell",
+      "command": "LSS_DASHBOARD_PORT=3100 LSS_CONFIG_PATH=examples/localstack-free/lss.config.json npm run dev",
+      "isBackground": true,
+      "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
+      "problemMatcher": []
+    },
+    {
+      "label": "dev @ example localstack-ultimate (watch, sem build)",
+      "detail": "Carrega examples/localstack-ultimate/.env (token) + lss.config.json e roda npm run dev — orquestrador forçado em :3100 (a UI dev espera essa porta); exige Docker. UI em :3101",
+      "type": "shell",
+      "command": "set -a; [ -f examples/localstack-ultimate/.env ] && . examples/localstack-ultimate/.env; set +a; LSS_DASHBOARD_PORT=3100 LSS_CONFIG_PATH=examples/localstack-ultimate/lss.config.json npm run dev",
+      "isBackground": true,
+      "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
+      "problemMatcher": []
+    },
 
     // ------------------------------------------------------------------
     // Tests & validation
@@ -164,6 +191,18 @@
       "problemMatcher": []
     },
     {
+      "label": "example self-hosted: restart (rebuild local)",
+      "detail": "build: all > stop > start — o CLI roda o dist/ compilado, então este é o caminho para ver mudanças locais no exemplo",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "build: all",
+        "example self-hosted: stop",
+        "example self-hosted: start (no Docker)"
+      ],
+      "icon": { "id": "refresh", "color": "terminal.ansiYellow" },
+      "problemMatcher": []
+    },
+    {
       "label": "example self-hosted: demo completo",
       "detail": "start > register > pipeline > catalog — o diferencial do LSS em uma task",
       "dependsOrder": "sequence",
@@ -203,6 +242,18 @@
       "command": "npm run lss:stop",
       "options": { "cwd": "${workspaceFolder}/examples/localstack-free" },
       "icon": { "id": "debug-stop", "color": "terminal.ansiRed" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example localstack-free: restart (rebuild local)",
+      "detail": "build: all > stop > start — o CLI roda o dist/ compilado, então este é o caminho para ver mudanças locais no exemplo",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "build: all",
+        "example localstack-free: stop",
+        "example localstack-free: start (Docker)"
+      ],
+      "icon": { "id": "refresh", "color": "terminal.ansiYellow" },
       "problemMatcher": []
     },
 
@@ -270,6 +321,18 @@
       "command": "npm run lss:stop",
       "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
       "icon": { "id": "debug-stop", "color": "terminal.ansiRed" },
+      "problemMatcher": []
+    },
+    {
+      "label": "example localstack-ultimate: restart (rebuild local)",
+      "detail": "build: all > stop > start — o CLI roda o dist/ compilado, então este é o caminho para ver mudanças locais no exemplo",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "build: all",
+        "example localstack-ultimate: stop",
+        "example localstack-ultimate: start (Docker + token)"
+      ],
+      "icon": { "id": "refresh", "color": "terminal.ansiYellow" },
       "problemMatcher": []
     }
   ]

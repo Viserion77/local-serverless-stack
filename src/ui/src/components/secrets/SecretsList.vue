@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import {
   TCard, TButton, TStack, TGrid, TStat, TEmptyState,
-  TSpinner, TAlert, TTag, TTable, TInput, TModal, TBadge, TText, useToast,
+  TSpinner, TAlert, TTag, TTable, TInput, TModal, TBadge, TText, TCodeBlock, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { SecretSummary, SecretDetail, SecretValue } from '../../services/api';
@@ -240,22 +240,9 @@ onBeforeUnmount(() => {
             </TButton>
             <TButton v-if="revealed" size="sm" variant="ghost" @click="copyValue">Copy</TButton>
           </TStack>
-          <pre v-if="revealed" class="secret-value">{{ revealed.secretString ?? `(binary, base64) ${revealed.secretBinary}` }}</pre>
+          <TCodeBlock v-if="revealed" :code="revealed.secretString ?? `(binary, base64) ${revealed.secretBinary}`" label="Secret value" max-block-size="24rem" wrap copyable />
         </div>
       </TStack>
     </TModal>
   </TStack>
 </template>
-
-<style scoped>
-.secret-value {
-  margin-top: 0.6rem;
-  padding: 0.6rem 0.75rem;
-  border-radius: 6px;
-  background: var(--tree-color-surface-sunken, rgba(127, 127, 127, 0.1));
-  font-family: var(--tree-font-mono, monospace);
-  font-size: 0.8rem;
-  white-space: pre-wrap;
-  word-break: break-all;
-}
-</style>

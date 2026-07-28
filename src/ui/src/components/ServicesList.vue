@@ -2,7 +2,7 @@
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue';
 import {
   TCard, TButton, TInput, TFormField, TBadge, TTable, TEmptyState,
-  TStack, TModal, TConfirmDialog, TSpinner, TTag, TText, TIcon, TLink, useToast,
+  TStack, TModal, TConfirmDialog, TSpinner, TTag, TText, TIcon, TLink, TCodeBlock, useToast,
 } from '@treeui/vue';
 import type { TreeBadgeTone } from '@treeui/vue';
 
@@ -337,7 +337,7 @@ onBeforeUnmount(() => {
       :description="logsService ? `Status: ${logsStatus}` : ''"
       size="lg"
     >
-      <pre class="logs-pre">{{ logs.join('\n') || '— no output yet —' }}</pre>
+      <TCodeBlock :code="logs.join('\n') || '— no output yet —'" label="Service log" max-block-size="60vh" wrap copyable />
     </TModal>
 
     <TConfirmDialog

@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import {
   TButton, TBadge, TStack, TTabs, TTabList, TTab, TTabPanel, TSpinner, TAlert,
   TCard, TTag, TEmptyState, TGrid, TStat, TProgress, TDivider,
-  TText, TIcon, useToast,
+  TText, TIcon, TDescriptionList, TDescriptionItem, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { QueueSnapshot } from '../../services/api';
@@ -183,16 +183,14 @@ watch(() => props.queueName, () => load());
                 <template #header>
                   <TText weight="semibold">Identity</TText>
                 </template>
-                <TStack direction="vertical" gap="0.5rem">
-                  <TStack direction="horizontal" justify="space-between" wrap gap="0.5rem">
-                    <TText tone="muted">Queue URL</TText>
+                <TDescriptionList>
+                  <TDescriptionItem label="Queue URL">
                     <TText family="mono" size="sm">{{ queue.url }}</TText>
-                  </TStack>
-                  <TStack direction="horizontal" justify="space-between" wrap gap="0.5rem">
-                    <TText tone="muted">ARN</TText>
+                  </TDescriptionItem>
+                  <TDescriptionItem label="ARN">
                     <TText family="mono" size="sm">{{ queue.arn || '—' }}</TText>
-                  </TStack>
-                </TStack>
+                  </TDescriptionItem>
+                </TDescriptionList>
               </TCard>
 
               <TCard variant="outline">
@@ -226,10 +224,11 @@ watch(() => props.queueName, () => load());
                   <TText weight="semibold">Throughput</TText>
                 </template>
                 <TStack direction="vertical" gap="0.5rem">
-                  <TStack direction="horizontal" justify="space-between" align="center">
-                    <TText tone="muted">Processed share (this session)</TText>
-                    <TText family="mono">{{ depthRatio }}%</TText>
-                  </TStack>
+                  <TDescriptionList>
+                    <TDescriptionItem label="Processed share (this session)">
+                      <TText family="mono">{{ depthRatio }}%</TText>
+                    </TDescriptionItem>
+                  </TDescriptionList>
                   <TProgress :value="depthRatio" />
                 </TStack>
                 <template #footer>

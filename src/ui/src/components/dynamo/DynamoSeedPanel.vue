@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import {
-  TCard, TButton, TStack, TBadge, TConfirmDialog, TText, useToast,
+  TCard, TButton, TStack, TBadge, TConfirmDialog, TText, TDescriptionList, TDescriptionItem, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 
@@ -104,16 +104,14 @@ async function redo() {
         </TStack>
       </template>
 
-      <TStack direction="vertical" gap="0.5rem">
-        <TStack direction="horizontal" justify="space-between" align="center">
-          <TText tone="muted">Path</TText>
+      <TDescriptionList>
+        <TDescriptionItem label="Path">
           <TText family="mono" size="sm">{{ seedFile }}</TText>
-        </TStack>
-        <TStack direction="horizontal" justify="space-between" align="center">
-          <TText tone="muted">Current rows in table</TText>
+        </TDescriptionItem>
+        <TDescriptionItem label="Current rows in table">
           <TText family="mono">{{ tableItemCount }}</TText>
-        </TStack>
-      </TStack>
+        </TDescriptionItem>
+      </TDescriptionList>
     </TCard>
 
     <TCard variant="outline">

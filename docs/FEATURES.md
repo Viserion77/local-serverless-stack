@@ -37,7 +37,10 @@ by the live integration suite (`npm run test:integration`).
 | `LSS_CONFIG_PATH` passthrough | The CLI hands the chosen config to the spawned server so both loaders agree on ports/seedsDir/region/mode. | unit (`config-manager`) + integration |
 | Managed vs external mode | `mode: managed` runs a LocalStack container; `external` connects to a running one. | unit (`config-manager`) |
 | Edition / version / image / services / persistence / region | All configurable; sensible defaults (community/latest, us-east-1, dynamodb+sqs+sns+s3+lambda+events). | unit (`config-manager`) |
-| `GET /api/config` | Public-safe config snapshot for the UI (never leaks the auth token — only `hasAuthToken`). | unit (`routes/config`) + integration |
+| `GET /api/config` | Public-safe full config snapshot for the UI: engine kind/endpoint, self-engine + aoss sidecar + lambda-runtime blocks, packaging, `envOverrides` (keys masked by env vars). Secret values never appear — auth token → `hasAuthToken`, `packageEnv` → key names, `secrets` → count. | unit (`routes/config`) + integration |
+| `PUT /api/config` | Edit the config from the dashboard Settings tab: writes only the patched keys into the loaded config file (creating `lss.config.json` when none is loaded), `null` deletes, object blocks merge one level deep; hot-reloads and reports `restartRequired` (boot-materialized keys) + `envOverridden` (file value masked by env). `localstackAuthToken`/`secrets` are rejected. | unit (`config-manager`, `routes/config`) |
+| `POST /api/config/reload` | Re-read the config file from disk after a hand edit, without restarting; same `restartRequired` classification. | unit (`config-manager`, `routes/config`) |
+| `GET /api/config/ports` | Every local port the stack exposes (orchestrator, active engine, aoss sidecar, DynamoDB proxy, per-service HTTP API + invoke listeners) — backs the Overview "Exposed ports" card. | unit (`routes/config`) |
 
 ## 3. Resource provisioning (from CloudFormation)
 
@@ -115,10 +118,12 @@ port. Asserted by: unit (`dev/dynamo-proxy`).
 
 `GET /api/health` reports orchestrator + engine + dynamo-proxy status (the `localstack` field reports the
 active engine's health — LocalStack or self — kept under that name for compatibility). The Vue dashboard
-(served as a SPA) surfaces nine tabs — Overview / Services / Lambdas / APIs / Queues / S3 / DynamoDB /
-OpenSearch / Secrets — with a region selector and theme toggle; the Services list and service detail pages
-include the per-service resource breakdown with EventBridge buses & rules and OpenSearch collections (UI is
-exercised manually, not in the automated suites).
+(served as a SPA) surfaces ten tabs — Overview / Services / Lambdas / APIs / Queues / S3 / DynamoDB /
+OpenSearch / Secrets / **Settings** — with a region selector and theme toggle; the Services list and service
+detail pages include the per-service resource breakdown with EventBridge buses & rules and OpenSearch
+collections (UI is exercised manually, not in the automated suites). The Overview shows an **Exposed ports**
+card (`GET /api/config/ports`); the Settings tab edits `lss.config.json` via `PUT /api/config` (dirty fields
+only, restart-required and env-masked keys flagged) and re-reads it via `POST /api/config/reload`.
 
 The **OpenSearch explorer** (`GET /api/opensearch/collections`, `…/collections/:name/indices`,
 `POST /…/collections/:name/search`) and the **Secrets explorer** (`GET /api/secrets`, `GET /api/secrets/:name`,

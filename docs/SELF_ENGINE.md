@@ -39,6 +39,12 @@ AWS_ENDPOINT=http://localhost:14566
 Desktop/WSL2), silently hijacking traffic. If you need the engine on 4566 for
 drop-in compatibility, set `selfEngine.port` explicitly.
 
+The active engine kind, its endpoint and the resolved `selfEngine` block are
+exposed on `GET /api/config`, and the engine port shows up (next to every other
+listener) on `GET /api/config/ports` — surfaced in the dashboard's Overview
+"Exposed ports" card and editable in the Settings tab (a `selfEngine` change is
+boot-materialized, so it is flagged `restartRequired`).
+
 ## What keeps working
 
 The wire API is the seam: the provisioner, the dashboards/explorers, seeds,

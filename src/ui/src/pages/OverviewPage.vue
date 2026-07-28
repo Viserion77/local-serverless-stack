@@ -2,15 +2,17 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import {
   TCard, TStack, TBadge, TGrid, TStat, TTag, TDivider, TButton, TSpinner, TText, TIcon,
+  TDescriptionList, TDescriptionItem,
 } from '@treeui/vue';
 import { RouterLink } from 'vue-router';
 import { api } from '../services/api';
 import type {
-  HealthInfo, LambdaSummary, LssConfigSnapshot, ServiceApiInfo, ServiceSummary,
+  HealthInfo, LambdaSummary, LssConfigSnapshot, PortEntry, ServiceApiInfo, ServiceSummary,
 } from '../services/api';
 
 const health = ref<HealthInfo | null>(null);
 const config = ref<LssConfigSnapshot | null>(null);
+const ports = ref<PortEntry[]>([]);
 const services = ref<ServiceSummary[]>([]);
 const lambdas = ref<LambdaSummary[]>([]);
 const apis = ref<ServiceApiInfo[]>([]);
@@ -26,13 +28,14 @@ let timer: number | null = null;
 
 async function loadAll() {
   try {
-    const [h, c, s, r, l, a] = await Promise.all([
+    const [h, c, s, r, l, a, p] = await Promise.all([
       api.checkHealth(),
       api.getConfig(),
       api.listServices(),
       api.listResources(),
       api.listLambdas().catch(() => [] as LambdaSummary[]),
       api.listApis().catch(() => [] as ServiceApiInfo[]),
+      api.getPorts().catch(() => ({ ports: [] as PortEntry[] })),
     ]);
     health.value = h;
     config.value = c;
@@ -40,6 +43,7 @@ async function loadAll() {
     resources.value = r;
     lambdas.value = l;
     apis.value = a;
+    ports.value = p.ports;
   } catch (error) {
     console.error('Overview load failed:', error);
   } finally {
@@ -57,6 +61,23 @@ const proxyEnabled = computed(() => Boolean(health.value?.dynamoProxy?.enabled))
 const proxyRunning = computed(() => Boolean(health.value?.dynamoProxy?.running));
 const autoPackage = computed(() => Boolean(config.value?.autoPackage));
 const persistence = computed(() => Boolean(config.value?.persistence));
+
+const portKindTone: Record<PortEntry['kind'], 'info' | 'success' | 'warning' | 'neutral'> = {
+  orchestrator: 'info',
+  engine: 'success',
+  sidecar: 'info',
+  proxy: 'warning',
+  'service-api': 'info',
+  'service-invoke': 'neutral',
+};
+const portKindLabel: Record<PortEntry['kind'], string> = {
+  orchestrator: 'orchestrator',
+  engine: 'engine',
+  sidecar: 'sidecar',
+  proxy: 'proxy',
+  'service-api': 'HTTP API',
+  'service-invoke': 'invoke',
+};
 
 const coveredResources = [
   {
@@ -146,28 +167,25 @@ onBeforeUnmount(() => {
           <template #header>
             <TText weight="semibold">Server status</TText>
           </template>
-          <TStack direction="vertical" gap="0.75rem">
-            <TStack direction="horizontal" justify="space-between" align="center">
-              <TText tone="muted">LocalStack</TText>
+          <TDescriptionList>
+            <TDescriptionItem label="LocalStack">
               <TBadge :tone="health?.localstack ? 'success' : 'danger'" variant="soft">
                 {{ health?.localstack ? 'Running' : 'Offline' }}
               </TBadge>
-            </TStack>
-            <TStack direction="horizontal" justify="space-between" align="center">
-              <TText tone="muted">Endpoint</TText>
+            </TDescriptionItem>
+            <TDescriptionItem label="Endpoint">
               <TText family="mono">{{ config?.localstack?.endpoint || '—' }}</TText>
-            </TStack>
-            <TStack direction="horizontal" justify="space-between" align="center">
-              <TText tone="muted">Image</TText>
+            </TDescriptionItem>
+            <TDescriptionItem label="Image">
               <TText family="mono" size="sm">{{ config?.localstack?.image || '—' }}</TText>
-            </TStack>
-            <TStack direction="horizontal" justify="space-between" align="center">
-              <TText tone="muted">Mode</TText>
+            </TDescriptionItem>
+            <TDescriptionItem label="Mode">
               <TTag size="sm" variant="soft">{{ config?.localstack?.mode || '—' }}</TTag>
-            </TStack>
-            <TDivider />
-            <TStack direction="horizontal" justify="space-between" align="center">
-              <TText tone="muted">Dynamo Proxy</TText>
+            </TDescriptionItem>
+          </TDescriptionList>
+          <TDivider />
+          <TDescriptionList>
+            <TDescriptionItem label="Dynamo Proxy">
               <TStack direction="horizontal" gap="0.375rem" align="center">
                 <TBadge
                   v-if="proxyEnabled"
@@ -178,37 +196,40 @@ onBeforeUnmount(() => {
                 </TBadge>
                 <TBadge v-else tone="neutral" variant="soft">Disabled</TBadge>
               </TStack>
-            </TStack>
-            <TStack direction="horizontal" justify="space-between" align="center">
-              <TText tone="muted">Auto-package</TText>
+            </TDescriptionItem>
+            <TDescriptionItem label="Auto-package">
               <TBadge :tone="autoPackage ? 'info' : 'neutral'" variant="soft">
                 {{ autoPackage ? 'on' : 'off' }}
               </TBadge>
-            </TStack>
-            <TStack direction="horizontal" justify="space-between" align="center">
-              <TText tone="muted">Persistence</TText>
+            </TDescriptionItem>
+            <TDescriptionItem label="Persistence">
               <TBadge :tone="persistence ? 'info' : 'neutral'" variant="soft">
                 {{ persistence ? 'on' : 'off' }}
               </TBadge>
-            </TStack>
-          </TStack>
+            </TDescriptionItem>
+          </TDescriptionList>
         </TCard>
 
         <TCard variant="outline">
           <template #header>
-            <TText weight="semibold">LESC configuration</TText>
+            <TStack direction="horizontal" justify="space-between" align="center">
+              <TText weight="semibold">LSS configuration</TText>
+              <RouterLink to="/settings" style="text-decoration: none;">
+                <TButton size="sm" variant="ghost">Edit <TIcon name="arrow-right" /></TButton>
+              </RouterLink>
+            </TStack>
           </template>
-          <TStack direction="vertical" gap="0.75rem">
-            <TStack direction="horizontal" justify="space-between" align="center">
-              <TText tone="muted">Default region</TText>
+          <TDescriptionList>
+            <TDescriptionItem label="Engine">
+              <TTag size="sm" variant="soft">{{ config?.engine?.kind || '—' }}</TTag>
+            </TDescriptionItem>
+            <TDescriptionItem label="Default region">
               <TText family="mono">{{ config?.region || '—' }}</TText>
-            </TStack>
-            <TStack direction="horizontal" justify="space-between" align="center">
-              <TText tone="muted">Server port</TText>
+            </TDescriptionItem>
+            <TDescriptionItem label="Server port">
               <TText family="mono">{{ config?.serverPort || '—' }}</TText>
-            </TStack>
-            <TStack direction="horizontal" justify="space-between" align="start" wrap>
-              <TText tone="muted">LocalStack services</TText>
+            </TDescriptionItem>
+            <TDescriptionItem label="LocalStack services">
               <TStack direction="horizontal" gap="0.25rem" wrap justify="flex-end">
                 <TTag
                   v-for="svc in (config?.services || [])"
@@ -220,23 +241,42 @@ onBeforeUnmount(() => {
                 </TTag>
                 <TText v-if="!(config?.services || []).length" tone="muted">—</TText>
               </TStack>
-            </TStack>
-            <TStack direction="horizontal" justify="space-between" align="center">
-              <TText tone="muted">Seeds dir</TText>
+            </TDescriptionItem>
+            <TDescriptionItem label="Seeds dir">
               <TText family="mono" size="xs">{{ config?.seedsDir || '—' }}</TText>
-            </TStack>
-            <TStack
-              v-if="config?.configPath"
-              direction="horizontal"
-              justify="space-between"
-              align="center"
-            >
-              <TText tone="muted">Config file</TText>
+            </TDescriptionItem>
+            <TDescriptionItem v-if="config?.configPath" label="Config file">
               <TText family="mono" size="xs">{{ config.configPath }}</TText>
-            </TStack>
-          </TStack>
+            </TDescriptionItem>
+          </TDescriptionList>
         </TCard>
       </TGrid>
+
+      <!-- Every local port the stack exposes -->
+      <TCard variant="outline">
+        <template #header>
+          <TStack direction="horizontal" justify="space-between" align="center">
+            <TText weight="semibold">Exposed ports</TText>
+            <TText tone="muted" size="xs">
+              What to point your SDKs, curl and browser at
+            </TText>
+          </TStack>
+        </template>
+        <TDescriptionList v-if="ports.length">
+          <TDescriptionItem
+            v-for="entry in ports"
+            :key="`${entry.kind}-${entry.name}-${entry.port}`"
+            :label="entry.name"
+          >
+            <TStack direction="horizontal" gap="0.5rem" align="center" wrap justify="flex-end">
+              <TText tone="muted" size="xs">{{ entry.description }}</TText>
+              <TBadge :tone="portKindTone[entry.kind]" variant="soft">{{ portKindLabel[entry.kind] }}</TBadge>
+              <TText family="mono" size="sm">{{ entry.url }}</TText>
+            </TStack>
+          </TDescriptionItem>
+        </TDescriptionList>
+        <TText v-else tone="muted" size="sm">No ports reported — is the orchestrator healthy?</TText>
+      </TCard>
 
       <!-- Totalizers -->
       <TGrid :columns="5" gap="1rem">

@@ -1155,3 +1155,369 @@ describe('branding', () => {
     expect(cm.getBrandingAssetFile('logo')).toBe(resolved);
   });
 });
+
+describe('getEnvOverriddenKeys', () => {
+  it('is empty when no override env var is set', () => {
+    expect(freshConfigManager().getEnvOverriddenKeys()).toEqual([]);
+  });
+
+  it('lists keys masked by loadFromEnv-applied env vars', () => {
+    process.env.AWS_REGION = 'sa-east-1';
+    process.env.LSS_LAMBDA_WATCH = 'true';
+    process.env.LSS_ENABLE_DYNAMO_PROXY = '1';
+    const keys = freshConfigManager().getEnvOverriddenKeys();
+    expect(keys).toEqual(expect.arrayContaining(['region', 'lambdaRuntime', 'enableDynamoProxy']));
+    expect(keys).not.toContain('serverPort');
+  });
+
+  it('ignores empty-string env vars — loadFromEnv does not apply them, so they mask nothing', () => {
+    process.env.LSS_DEBUG = '';
+    process.env.AWS_REGION = '';
+    expect(freshConfigManager().getEnvOverriddenKeys()).toEqual([]);
+  });
+
+  it('does not list the deprecated unprefixed ENABLE_DYNAMO_PROXY — a file value always beats it', () => {
+    process.env.ENABLE_DYNAMO_PROXY = '1';
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify({ enableDynamoProxy: false }));
+    const cm = freshConfigManager();
+    // The saved value takes effect (getter prefers the config), so no mask.
+    expect(cm.isEnableDynamoProxy()).toBe(false);
+    expect(cm.getEnvOverriddenKeys()).toEqual([]);
+  });
+});
+
+describe('reloadFromDisk', () => {
+  const cwdFile = path.join(process.cwd(), 'lss.config.json');
+
+  it('picks up file changes; boot-materialized keys land in restartRequired, lazy keys do not', () => {
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    let content = JSON.stringify({ serverPort: 3100, seedsDir: './seeds' });
+    fs.readFileSync.mockImplementation(() => content);
+    const cm = freshConfigManager();
+    expect(cm.getServerPort()).toBe(3100);
+
+    content = JSON.stringify({ serverPort: 3200, seedsDir: './other-seeds' });
+    const result = cm.reloadFromDisk();
+    expect(cm.getServerPort()).toBe(3200);
+    expect(cm.getSeedsDir()).toBe(path.resolve(process.cwd(), './other-seeds'));
+    expect(result.path).toBe(cwdFile);
+    expect(result.restartRequired).toEqual(['serverPort']);
+  });
+
+  it('returns an empty restartRequired when only lazily-consumed keys changed', () => {
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    let content = JSON.stringify({ autoPackage: false });
+    fs.readFileSync.mockImplementation(() => content);
+    const cm = freshConfigManager();
+    content = JSON.stringify({ autoPackage: true });
+    const result = cm.reloadFromDisk();
+    expect(cm.isAutoPackage()).toBe(true);
+    expect(result.restartRequired).toEqual([]);
+  });
+
+  it('resets to defaults when the config file disappeared', () => {
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify({ serverPort: 9000 }));
+    const cm = freshConfigManager();
+    expect(cm.getServerPort()).toBe(9000);
+    fs.existsSync.mockReturnValue(false);
+    const result = cm.reloadFromDisk();
+    expect(result.path).toBe('');
+    expect(cm.getServerPort()).toBe(3100);
+    expect(result.restartRequired).toEqual(['serverPort']);
+  });
+
+  it('is a no-op reload when no config file was ever loaded', () => {
+    const cm = freshConfigManager();
+    const result = cm.reloadFromDisk();
+    expect(result.path).toBe('');
+    expect(result.restartRequired).toEqual([]);
+  });
+
+  it('refuses to reload when the file no longer parses — the working config stays intact', () => {
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    let content = JSON.stringify({ serverPort: 9000, seedsDir: '/abs/seeds' });
+    fs.readFileSync.mockImplementation(() => content);
+    const cm = freshConfigManager();
+    expect(cm.getServerPort()).toBe(9000);
+
+    content = '{ "serverPort": 9000, '; // hand-edit typo
+    let thrown: { name: string; details: string[] } | undefined;
+    try {
+      cm.reloadFromDisk();
+    } catch (e) {
+      thrown = e as { name: string; details: string[] };
+    }
+    expect(thrown?.name).toBe('ConfigValidationError');
+    expect(thrown?.details[0]).toContain('not valid JSON');
+    // Nothing was discarded: the previous config still answers.
+    expect(cm.getServerPort()).toBe(9000);
+    expect(cm.getSeedsDir()).toBe('/abs/seeds');
+    expect(cm.getConfigPath()).toBe(cwdFile);
+  });
+});
+
+describe('updateConfig', () => {
+  const cwdFile = path.join(process.cwd(), 'lss.config.json');
+  // Simulated file on "disk": writeFileSync stores it, readFileSync serves it,
+  // so the write→reload round trip behaves like a real filesystem.
+  let fileContent: string | null;
+
+  function setupFile(initial: Record<string, unknown> | null): CM {
+    fileContent = initial === null ? null : JSON.stringify(initial);
+    fs.existsSync.mockImplementation((p) => p === cwdFile && fileContent !== null);
+    fs.readFileSync.mockImplementation(() => {
+      if (fileContent === null) throw new Error('ENOENT');
+      return fileContent;
+    });
+    fs.writeFileSync.mockImplementation((_p, data) => {
+      fileContent = String(data);
+    });
+    return freshConfigManager();
+  }
+
+  function written(): Record<string, unknown> {
+    return JSON.parse(fileContent as string);
+  }
+
+  function updateErr(cm: CM, patch: unknown): { name: string; details: string[] } {
+    try {
+      cm.updateConfig(patch as never);
+    } catch (e) {
+      return e as { name: string; details: string[] };
+    }
+    throw new Error('expected updateConfig to throw');
+  }
+
+  it('rejects a non-object patch', () => {
+    const err = updateErr(setupFile({}), ['not', 'an', 'object']);
+    expect(err.name).toBe('ConfigValidationError');
+    expect(err.details[0]).toContain('JSON object');
+  });
+
+  it('rejects the blocked keys (auth token and secrets) and unknown keys', () => {
+    const err = updateErr(setupFile({}), {
+      localstackAuthToken: 'tok',
+      secrets: { a: 'x' },
+      bogusKey: 1,
+    });
+    expect(err.details).toHaveLength(3);
+    expect(err.details[0]).toContain('"localstackAuthToken" cannot be edited');
+    expect(err.details[1]).toContain('"secrets" cannot be edited');
+    expect(err.details[2]).toContain('unknown config key "bogusKey"');
+  });
+
+  it('aggregates every value-shape error instead of failing on the first', () => {
+    const err = updateErr(setupFile({}), {
+      serverPort: 0, // port out of range
+      dynamoProxyPort: 1.5, // port not an integer
+      packageTimeoutMs: 0, // positiveInt
+      persistence: 'yes', // boolean
+      region: '', // empty string
+      mode: 'bogus', // enum
+      services: 'dynamodb,sqs', // stringArray (not an array)
+      packageArgs: [1], // stringArray (non-string element)
+      packageEnv: { A: 1 }, // stringRecord (non-string value)
+      lambdaRuntime: [], // object (array is not a plain object)
+    });
+    expect(err.details).toEqual([
+      '"serverPort" must be an integer port between 1 and 65535',
+      '"dynamoProxyPort" must be an integer port between 1 and 65535',
+      '"packageTimeoutMs" must be a positive integer',
+      '"persistence" must be a boolean',
+      '"region" must be a non-empty string',
+      '"mode" must be one of: managed, external',
+      '"services" must be an array of strings',
+      '"packageArgs" must be an array of strings',
+      '"packageEnv" must be an object of string values',
+      '"lambdaRuntime" must be an object',
+    ]);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('validates subkeys of fixed-shape object blocks — garbage never reaches the file', () => {
+    const cm = setupFile({});
+    expect(updateErr(cm, { selfEngine: { dataDir: 123 } }).details).toEqual([
+      '"selfEngine.dataDir" must be a non-empty string',
+    ]);
+    expect(updateErr(cm, { selfEngine: { port: 'abc' } }).details).toEqual([
+      '"selfEngine.port" must be an integer port between 1 and 65535',
+    ]);
+    expect(updateErr(cm, { lambdaRuntime: { execution: 'bogus' } }).details).toEqual([
+      '"lambdaRuntime.execution" must be one of: auto, artifact, source',
+    ]);
+    expect(updateErr(cm, { lambdaRuntime: { turbo: true } }).details).toEqual([
+      'unknown config key "lambdaRuntime.turbo"',
+    ]);
+    expect(updateErr(cm, { branding: { themeColors: { dark: 'red' } } }).details).toEqual([
+      '"branding.themeColors.dark" must be an object of string values',
+    ]);
+    expect(updateErr(cm, { branding: { themeColors: { dusk: {} } } }).details).toEqual([
+      'unknown config key "branding.themeColors.dusk"',
+    ]);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('validates entries of map-shaped blocks (servicePackaging/serviceRuntime)', () => {
+    const cm = setupFile({});
+    expect(updateErr(cm, { servicePackaging: { access: 'broken' } }).details).toEqual([
+      '"servicePackaging.access" must be an object',
+    ]);
+    expect(updateErr(cm, { servicePackaging: { access: { packageTimeoutMs: 'x' } } }).details).toEqual([
+      '"servicePackaging.access.packageTimeoutMs" must be a positive integer',
+    ]);
+    expect(updateErr(cm, { servicePackaging: { access: { unknownKey: 1 } } }).details).toEqual([
+      'unknown config key "servicePackaging.access.unknownKey"',
+    ]);
+    expect(updateErr(cm, { serviceRuntime: { access: { apiPort: 0 } } }).details).toEqual([
+      '"serviceRuntime.access.apiPort" must be an integer port between 1 and 65535',
+    ]);
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('accepts valid nested values, null subkeys and null map entries', () => {
+    const cm = setupFile({
+      lambdaRuntime: { watch: true },
+      servicePackaging: { access: { packageArgs: ['--a'] }, billing: { packageTimeoutMs: 1 } },
+    });
+    cm.updateConfig({
+      selfEngine: { port: 15000, fsync: true, fallbackEndpoint: 'http://localhost:4566' },
+      lambdaRuntime: { watch: null, execution: 'source' },
+      servicePackaging: {
+        // packageArgs: null inside a map entry is tolerated by validation; the
+        // entry replaces wholesale and every consumer reads it through `??`.
+        access: { packageCommand: 'npx sls package', packageEnv: { A: '1' }, packageArgs: null },
+        billing: null,
+      },
+      branding: { themeColors: { dark: { 'brand-primary': '#111' } } },
+    });
+    expect(written()).toMatchObject({
+      selfEngine: { port: 15000, fsync: true, fallbackEndpoint: 'http://localhost:4566' },
+      lambdaRuntime: { execution: 'source' },
+      servicePackaging: { access: { packageCommand: 'npx sls package', packageEnv: { A: '1' } } },
+      branding: { themeColors: { dark: { 'brand-primary': '#111' } } },
+    });
+    // watch deleted, billing entry deleted.
+    expect(written().lambdaRuntime).not.toHaveProperty('watch');
+    expect(written().servicePackaging).not.toHaveProperty('billing');
+  });
+
+  it('writes valid keys, preserves unknown file keys, reloads, and classifies restart vs lazy', () => {
+    const cm = setupFile({ region: 'us-east-1', someCustomKey: true });
+    const result = cm.updateConfig({
+      serverPort: 3200,
+      region: 'eu-west-1',
+      mode: 'external',
+      services: ['dynamodb'],
+      debug: true,
+      packageTimeoutMs: 1000,
+      packageEnv: { A: '1' },
+    });
+    expect(written()).toMatchObject({
+      serverPort: 3200,
+      region: 'eu-west-1',
+      mode: 'external',
+      services: ['dynamodb'],
+      debug: true,
+      packageTimeoutMs: 1000,
+      packageEnv: { A: '1' },
+      someCustomKey: true,
+    });
+    // Pretty-printed with a trailing newline so the diff the human commits is clean.
+    expect(fileContent!.endsWith('\n')).toBe(true);
+    // The in-memory config followed the write.
+    expect(cm.getServerPort()).toBe(3200);
+    expect(cm.getRegion()).toBe('eu-west-1');
+    expect(result.path).toBe(cwdFile);
+    // Boot-materialized keys need stop/start; packageTimeoutMs/packageEnv are lazy.
+    expect(result.restartRequired).toEqual(['serverPort', 'mode', 'region', 'services', 'debug']);
+    expect(result.envOverridden).toEqual([]);
+  });
+
+  it('null deletes a top-level key from the file', () => {
+    const cm = setupFile({ debug: true });
+    const result = cm.updateConfig({ debug: null });
+    expect(written()).not.toHaveProperty('debug');
+    expect(cm.isDebug()).toBe(false);
+    expect(result.restartRequired).toEqual(['debug']);
+  });
+
+  it('merges object blocks one level deep: siblings survive, null deletes the subkey', () => {
+    const cm = setupFile({
+      branding: { title: 'Old', subtitle: 'Bye', logo: './logo.svg' },
+    });
+    cm.updateConfig({ branding: { title: 'New', subtitle: null } });
+    expect(written().branding).toEqual({ title: 'New', logo: './logo.svg' });
+  });
+
+  it('replaces an object block whose existing file value is not an object', () => {
+    const cm = setupFile({ lambdaRuntime: 'broken' });
+    cm.updateConfig({ lambdaRuntime: { enabled: false } });
+    expect(written().lambdaRuntime).toEqual({ enabled: false });
+    expect(cm.isLambdaRuntimeEnabled()).toBe(false);
+  });
+
+  it('creates lss.config.json in the project root when no config file is loaded', () => {
+    const cm = setupFile(null);
+    expect(cm.getConfigPath()).toBe('');
+    const result = cm.updateConfig({ serverPort: 4000 });
+    expect(fs.writeFileSync).toHaveBeenCalledWith(cwdFile, expect.any(String));
+    expect(written()).toEqual({ serverPort: 4000 });
+    expect(result.path).toBe(cwdFile);
+    expect(cm.getServerPort()).toBe(4000);
+  });
+
+  it('falls back to the target path when the reload does not find the written file', () => {
+    fileContent = null;
+    fs.existsSync.mockReturnValue(false);
+    fs.readFileSync.mockImplementation(() => {
+      throw new Error('ENOENT');
+    });
+    fs.writeFileSync.mockImplementation(() => undefined);
+    const cm = freshConfigManager();
+    const result = cm.updateConfig({ serverPort: 4100 });
+    expect(result.path).toBe(cwdFile);
+    // Nothing was loaded back, so the resolved value kept its default.
+    expect(cm.getServerPort()).toBe(3100);
+    expect(result.restartRequired).toEqual([]);
+  });
+
+  it('refuses to clobber an existing file that is not valid JSON', () => {
+    fileContent = '{ not valid json';
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockImplementation(() => fileContent as string);
+    fs.writeFileSync.mockImplementation(() => undefined);
+    // Boot parse fails too (warns and continues), so no config is loaded.
+    const cm = freshConfigManager();
+    const err = updateErr(cm, { debug: true });
+    expect(err.details[0]).toContain('not valid JSON');
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('writes to the explicitly loaded config path, not the cwd candidate', () => {
+    process.env.LSS_CONFIG_PATH = '/custom/lss.json';
+    fileContent = JSON.stringify({ region: 'us-east-1' });
+    fs.existsSync.mockImplementation((p) => p === '/custom/lss.json');
+    fs.readFileSync.mockImplementation(() => fileContent as string);
+    fs.writeFileSync.mockImplementation((_p, data) => {
+      fileContent = String(data);
+    });
+    const cm = freshConfigManager();
+    cm.updateConfig({ debug: true });
+    expect(fs.writeFileSync).toHaveBeenCalledWith('/custom/lss.json', expect.any(String));
+  });
+
+  it('flags patch keys currently masked by an env var (file written, env still wins)', () => {
+    process.env.AWS_REGION = 'sa-east-1';
+    const cm = setupFile({});
+    const result = cm.updateConfig({ region: 'eu-west-1', branding: { title: 'X' } });
+    expect(written().region).toBe('eu-west-1');
+    // Resolved region did not move (env wins), so no restart is flagged — the
+    // env mask is reported instead. branding has no env override channel.
+    expect(cm.getRegion()).toBe('sa-east-1');
+    expect(result.restartRequired).toEqual([]);
+    expect(result.envOverridden).toEqual(['region']);
+  });
+});

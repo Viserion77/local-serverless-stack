@@ -281,6 +281,242 @@ export interface LSSConfig {
   branding?: BrandingConfig;
 }
 
+// ---------------------------------------------------------------------------
+// Dashboard editing support (PUT /api/config, POST /api/config/reload)
+// ---------------------------------------------------------------------------
+
+// Value shape accepted for each editable top-level key. On update, `object`
+// blocks are merged one level deep (subkeys replace; a null subkey deletes the
+// subkey) so a partial edit never drops sibling settings like `branding.logo`;
+// every other kind replaces the key wholesale. A top-level null deletes the key.
+interface ConfigKeySpec {
+  kind: 'port' | 'positiveInt' | 'boolean' | 'string' | 'stringArray' | 'stringRecord' | 'object';
+  enum?: readonly string[];
+  // Fixed-shape object blocks: every subkey is validated against its own spec
+  // and unknown subkeys are rejected — a garbage nested value would otherwise
+  // be written to disk and crash consumers like getSelfEngineConfig().
+  subKeys?: Record<string, ConfigKeySpec>;
+  // Map-shaped object blocks keyed by service name (servicePackaging,
+  // serviceRuntime): each entry must be an object whose subkeys match these.
+  entrySubKeys?: Record<string, ConfigKeySpec>;
+}
+
+// Two config keys are deliberately absent (and rejected on write):
+// `localstackAuthToken` — the supported channel is the LOCALSTACK_AUTH_TOKEN
+// env var, the token must never transit the dashboard API — and `secrets`,
+// which holds seed material that belongs in the file/env only.
+const BLOCKED_CONFIG_KEYS: ReadonlySet<string> = new Set(['localstackAuthToken', 'secrets']);
+
+const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
+  serverPort: { kind: 'port' },
+  localstackPort: { kind: 'port' },
+  localstackEndpoint: { kind: 'string' },
+  mode: { kind: 'string', enum: ['managed', 'external'] },
+  localstackEdition: { kind: 'string', enum: ['community', 'pro'] },
+  localstackVersion: { kind: 'string' },
+  localstackImage: { kind: 'string' },
+  enableDynamoProxy: { kind: 'boolean' },
+  dynamoProxyPort: { kind: 'port' },
+  region: { kind: 'string' },
+  services: { kind: 'stringArray' },
+  persistence: { kind: 'boolean' },
+  debug: { kind: 'boolean' },
+  seedsDir: { kind: 'string' },
+  stateDir: { kind: 'string' },
+  autoPackage: { kind: 'boolean' },
+  packageCommand: { kind: 'string' },
+  packageArgs: { kind: 'stringArray' },
+  packageEnv: { kind: 'stringRecord' },
+  servicePackaging: {
+    kind: 'object',
+    entrySubKeys: {
+      packageCommand: { kind: 'string' },
+      packageArgs: { kind: 'stringArray' },
+      packageEnv: { kind: 'stringRecord' },
+      packageTimeoutMs: { kind: 'positiveInt' },
+    },
+  },
+  packageTimeoutMs: { kind: 'positiveInt' },
+  lambdaRuntime: {
+    kind: 'object',
+    subKeys: {
+      enabled: { kind: 'boolean' },
+      execution: { kind: 'string', enum: ['auto', 'artifact', 'source'] },
+      watch: { kind: 'boolean' },
+      invokePortOffset: { kind: 'positiveInt' },
+      invokeHost: { kind: 'string' },
+    },
+  },
+  serviceRuntime: {
+    kind: 'object',
+    entrySubKeys: {
+      enabled: { kind: 'boolean' },
+      apiPort: { kind: 'port' },
+      invokePort: { kind: 'port' },
+      execution: { kind: 'string', enum: ['auto', 'artifact', 'source'] },
+      watch: { kind: 'boolean' },
+    },
+  },
+  engine: { kind: 'string', enum: ['localstack', 'self'] },
+  selfEngine: {
+    kind: 'object',
+    subKeys: {
+      port: { kind: 'port' },
+      dataDir: { kind: 'string' },
+      account: { kind: 'string' },
+      idleUnloadMs: { kind: 'positiveInt' },
+      memoryBudgetMb: { kind: 'positiveInt' },
+      fsync: { kind: 'boolean' },
+      fallbackEndpoint: { kind: 'string' },
+    },
+  },
+  aossSidecar: {
+    kind: 'object',
+    subKeys: {
+      enabled: { kind: 'boolean' },
+      port: { kind: 'port' },
+    },
+  },
+  branding: {
+    kind: 'object',
+    subKeys: {
+      title: { kind: 'string' },
+      subtitle: { kind: 'string' },
+      logo: { kind: 'string' },
+      favicon: { kind: 'string' },
+      defaultTheme: { kind: 'string', enum: ['dark', 'light'] },
+      colors: { kind: 'stringRecord' },
+      themeColors: {
+        kind: 'object',
+        subKeys: {
+          dark: { kind: 'stringRecord' },
+          light: { kind: 'stringRecord' },
+        },
+      },
+    },
+  },
+};
+
+// Env vars that mask each file key while set (loadFromEnv applies them AFTER
+// the file, and some getters fall back to env at call time). Surfaced so the
+// UI can flag fields whose saved value will not take effect until the env var
+// is unset.
+const CONFIG_ENV_OVERRIDES: Record<string, string[]> = {
+  serverPort: ['LSS_DASHBOARD_PORT', 'PORT'],
+  localstackPort: ['LSS_LOCALSTACK_PORT'],
+  localstackEndpoint: ['LSS_LOCALSTACK_ENDPOINT'],
+  mode: ['LSS_LOCALSTACK_MODE'],
+  localstackEdition: ['LSS_LOCALSTACK_EDITION'],
+  localstackVersion: ['LSS_LOCALSTACK_VERSION'],
+  localstackImage: ['LSS_LOCALSTACK_IMAGE'],
+  localstackAuthToken: ['LOCALSTACK_AUTH_TOKEN'],
+  // Note: the deprecated unprefixed ENABLE_DYNAMO_PROXY is NOT listed — it is
+  // only a getter-time fallback (isEnableDynamoProxy) that a file value always
+  // beats, so it never masks a saved value.
+  enableDynamoProxy: ['LSS_ENABLE_DYNAMO_PROXY'],
+  dynamoProxyPort: ['LSS_DYNAMO_PROXY_PORT'],
+  region: ['AWS_REGION'],
+  services: ['LSS_SERVICES'],
+  persistence: ['LSS_PERSISTENCE'],
+  debug: ['LSS_DEBUG'],
+  seedsDir: ['LSS_SEEDS_DIR'],
+  autoPackage: ['LSS_AUTO_PACKAGE'],
+  packageCommand: ['LSS_PACKAGE_COMMAND'],
+  packageTimeoutMs: ['LSS_PACKAGE_TIMEOUT_MS'],
+  lambdaRuntime: ['LSS_LAMBDA_RUNTIME', 'LSS_LAMBDA_EXECUTION', 'LSS_LAMBDA_WATCH', 'LSS_INVOKE_HOST'],
+  engine: ['LSS_ENGINE'],
+  selfEngine: ['LSS_ENGINE_PORT'],
+};
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string | null {
+  switch (spec.kind) {
+    case 'port':
+      return Number.isInteger(value) && (value as number) >= 1 && (value as number) <= 65535
+        ? null
+        : `"${key}" must be an integer port between 1 and 65535`;
+    case 'positiveInt':
+      return Number.isInteger(value) && (value as number) > 0
+        ? null
+        : `"${key}" must be a positive integer`;
+    case 'boolean':
+      return typeof value === 'boolean' ? null : `"${key}" must be a boolean`;
+    case 'string':
+      if (typeof value !== 'string' || value.length === 0) {
+        return `"${key}" must be a non-empty string`;
+      }
+      return spec.enum && !spec.enum.includes(value)
+        ? `"${key}" must be one of: ${spec.enum.join(', ')}`
+        : null;
+    case 'stringArray':
+      return Array.isArray(value) && value.every(v => typeof v === 'string')
+        ? null
+        : `"${key}" must be an array of strings`;
+    case 'stringRecord':
+      return isPlainObject(value) && Object.values(value).every(v => typeof v === 'string')
+        ? null
+        : `"${key}" must be an object of string values`;
+    case 'object': {
+      if (!isPlainObject(value)) {
+        return `"${key}" must be an object`;
+      }
+      // null subvalues are always allowed — they delete the subkey on merge.
+      if (spec.subKeys) {
+        for (const [subKey, subValue] of Object.entries(value)) {
+          const subSpec = spec.subKeys[subKey];
+          if (!subSpec) return `unknown config key "${key}.${subKey}"`;
+          if (subValue === null) continue;
+          const error = validateValue(`${key}.${subKey}`, subValue, subSpec);
+          if (error) return error;
+        }
+      }
+      if (spec.entrySubKeys) {
+        for (const [entryKey, entryValue] of Object.entries(value)) {
+          if (entryValue === null) continue;
+          if (!isPlainObject(entryValue)) return `"${key}.${entryKey}" must be an object`;
+          for (const [subKey, subValue] of Object.entries(entryValue)) {
+            const subSpec = spec.entrySubKeys[subKey];
+            if (!subSpec) return `unknown config key "${key}.${entryKey}.${subKey}"`;
+            if (subValue === null) continue;
+            const error = validateValue(`${key}.${entryKey}.${subKey}`, subValue, subSpec);
+            if (error) return error;
+          }
+        }
+      }
+      return null;
+    }
+  }
+}
+
+// Thrown by updateConfig so the route can answer 400 with every problem at
+// once instead of failing on the first.
+export class ConfigValidationError extends Error {
+  readonly details: string[];
+
+  constructor(details: string[]) {
+    super(details.join('; '));
+    this.name = 'ConfigValidationError';
+    this.details = details;
+  }
+}
+
+export interface ConfigReloadResult {
+  // Path of the config file now loaded ('' when none was found).
+  path: string;
+  // Boot-materialized keys whose resolved value changed — the running process
+  // keeps the old value until a full `lss stop && lss start`.
+  restartRequired: string[];
+}
+
+export interface ConfigUpdateResult extends ConfigReloadResult {
+  // Patch keys currently masked by an env var: the file was written, but the
+  // env value keeps winning until it is unset.
+  envOverridden: string[];
+}
+
 export class ConfigManager {
   private static instance: ConfigManager;
   private config: LSSConfig = {};
@@ -736,6 +972,186 @@ export class ConfigManager {
         dark: branding.themeColors?.dark ?? {},
         light: branding.themeColors?.light ?? {},
       },
+    };
+  }
+
+  // Config keys currently masked by an environment variable (env wins over the
+  // file). The UI flags these fields so a save that "doesn't stick" is
+  // explained instead of silent.
+  getEnvOverriddenKeys(): string[] {
+    // Truthy check on purpose: loadFromEnv only applies truthy env values, so
+    // a variable exported as an empty string does not actually override the
+    // file and must not be reported as masking it.
+    return Object.keys(CONFIG_ENV_OVERRIDES).filter(key =>
+      CONFIG_ENV_OVERRIDES[key].some(name => Boolean(process.env[name])),
+    );
+  }
+
+  // Resolved values that are materialized into listeners, containers, engines
+  // or child processes at boot. Everything NOT listed here is consumed lazily
+  // (per request/registration/seed run) and follows a reload immediately.
+  private resolvedBootValues(): Record<string, unknown> {
+    const selfEngine = this.getSelfEngineConfig();
+    const aossSidecar = this.getAossSidecarConfig();
+    return {
+      serverPort: this.getServerPort(),
+      localstackPort: this.getLocalStackPort(),
+      localstackEndpoint: this.getLocalStackEndpoint(),
+      mode: this.getMode(),
+      localstackEdition: this.getLocalStackEdition(),
+      localstackVersion: this.getLocalStackVersion(),
+      localstackImage: this.getLocalStackImage(),
+      enableDynamoProxy: this.isEnableDynamoProxy(),
+      dynamoProxyPort: this.getDynamoProxyPort(),
+      region: this.getRegion(),
+      services: this.getServices(),
+      persistence: this.isPersistence(),
+      debug: this.isDebug(),
+      stateDir: this.getStateDir(),
+      engine: this.getEngineKind(),
+      // Only the block's OWN settings: region/persistence (self engine) and the
+      // stateDir-derived dataDir (aoss) are tracked under their own keys above,
+      // so one change never flags two entries.
+      selfEngine: {
+        port: selfEngine.port,
+        dataDir: selfEngine.dataDir,
+        account: selfEngine.account,
+        idleUnloadMs: selfEngine.idleUnloadMs,
+        memoryBudgetMb: selfEngine.memoryBudgetMb,
+        fsync: selfEngine.fsync,
+        fallbackEndpoint: selfEngine.fallbackEndpoint,
+      },
+      aossSidecar: { enabled: aossSidecar.enabled, port: aossSidecar.port },
+    };
+  }
+
+  private static diffKeys(
+    before: Record<string, unknown>,
+    after: Record<string, unknown>,
+  ): string[] {
+    return Object.keys(before).filter(
+      key => JSON.stringify(before[key]) !== JSON.stringify(after[key]),
+    );
+  }
+
+  private resetAndReload(): void {
+    this.config = {};
+    this.configPath = '';
+    this.loadConfig();
+  }
+
+  /**
+   * Re-read the config file from disk — after a hand edit, or after
+   * updateConfig() wrote it. Runs the exact boot sequence (file search + env
+   * override pass), so the result matches what a fresh process would resolve.
+   * Boot-materialized keys that changed are reported as restartRequired: the
+   * running listeners/engine keep the old value until `lss stop && lss start`.
+   */
+  reloadFromDisk(): ConfigReloadResult {
+    // A hand-edit typo must not silently discard the working config: when the
+    // loaded file still exists but no longer parses, keep the current config
+    // and fail loudly instead of letting loadConfig fall through to the next
+    // search candidate (the user-global home config, or nothing at all).
+    if (this.configPath && fs.existsSync(this.configPath)) {
+      try {
+        JSON.parse(fs.readFileSync(this.configPath, 'utf-8'));
+      } catch {
+        throw new ConfigValidationError([
+          `${this.configPath} is not valid JSON — fix the file and reload again`,
+        ]);
+      }
+    }
+    const before = this.resolvedBootValues();
+    this.resetAndReload();
+    return {
+      path: this.configPath,
+      restartRequired: ConfigManager.diffKeys(before, this.resolvedBootValues()),
+    };
+  }
+
+  /**
+   * Validate a partial config patch, write it into the loaded config file (or
+   * create lss.config.json in the project root when none is loaded) and reload
+   * in-memory. The raw file is re-read and patched key-by-key — never the
+   * env-resolved in-memory config — so env-var overrides are not baked into
+   * the file on save. The human commits the file; LSS never touches git.
+   */
+  updateConfig(patch: Record<string, unknown>): ConfigUpdateResult {
+    if (!isPlainObject(patch)) {
+      throw new ConfigValidationError(['config patch must be a JSON object of top-level lss.config.json keys']);
+    }
+    const errors: string[] = [];
+    for (const [key, value] of Object.entries(patch)) {
+      if (BLOCKED_CONFIG_KEYS.has(key)) {
+        errors.push(`"${key}" cannot be edited via the API — set it in the config file or environment directly`);
+        continue;
+      }
+      const spec = EDITABLE_CONFIG_KEYS[key];
+      if (!spec) {
+        errors.push(`unknown config key "${key}"`);
+        continue;
+      }
+      if (value === null) continue; // null deletes the key (or subkey) from the file
+      const error = validateValue(key, value, spec);
+      if (error) errors.push(error);
+    }
+    if (errors.length > 0) {
+      throw new ConfigValidationError(errors);
+    }
+
+    // Snapshot the resolved boot values BEFORE any mutation, so a failure
+    // later in this method can never compare against poisoned state.
+    const before = this.resolvedBootValues();
+
+    const target = this.configPath || path.join(this.getProjectRoot(), 'lss.config.json');
+    let fileConfig: Record<string, unknown> = {};
+    if (fs.existsSync(target)) {
+      try {
+        fileConfig = JSON.parse(fs.readFileSync(target, 'utf-8'));
+      } catch {
+        // Never clobber a file the user may be hand-editing mid-typo.
+        throw new ConfigValidationError([
+          `${target} exists but is not valid JSON — fix or remove it before saving from the dashboard`,
+        ]);
+      }
+    }
+
+    for (const [key, value] of Object.entries(patch)) {
+      if (value === null) {
+        delete fileConfig[key];
+      } else if (EDITABLE_CONFIG_KEYS[key].kind === 'object') {
+        // One-level merge so a partial block edit (e.g. branding.title) never
+        // drops sibling settings the UI does not round-trip (branding.logo).
+        const existing = isPlainObject(fileConfig[key])
+          ? (fileConfig[key] as Record<string, unknown>)
+          : {};
+        const merged: Record<string, unknown> = { ...existing };
+        for (const [subKey, subValue] of Object.entries(value as Record<string, unknown>)) {
+          if (subValue === null) {
+            delete merged[subKey];
+          } else {
+            merged[subKey] = subValue;
+          }
+        }
+        fileConfig[key] = merged;
+      } else {
+        fileConfig[key] = value;
+      }
+    }
+
+    fs.writeFileSync(target, `${JSON.stringify(fileConfig, null, 2)}\n`);
+
+    this.resetAndReload();
+    return {
+      // The written file is a search candidate, so the reload finds it again;
+      // fall back to the target path defensively.
+      path: this.configPath || target,
+      restartRequired: ConfigManager.diffKeys(before, this.resolvedBootValues()),
+      // Truthy check to mirror loadFromEnv: an empty-string env var does not
+      // actually override the file, so it must not be reported as a mask.
+      envOverridden: Object.keys(patch).filter(key =>
+        (CONFIG_ENV_OVERRIDES[key] ?? []).some(name => Boolean(process.env[name])),
+      ),
     };
   }
 

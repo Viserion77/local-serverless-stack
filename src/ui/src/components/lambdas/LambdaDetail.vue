@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   TButton, TBadge, TStack, TTabs, TTabList, TTab, TTabPanel, TSpinner, TAlert,
-  TCard, TTag, TEmptyState, TGrid, TStat, TTable, TTextarea, TFormField,
+  TCard, TCodeBlock, TTag, TEmptyState, TGrid, TStat, TTable, TTextarea, TFormField,
   TSelect, TDivider, TText, TIcon, useToast,
 } from '@treeui/vue';
 import type { TreeBadgeTone } from '@treeui/vue';
@@ -296,20 +296,15 @@ watch(() => props.functionName, () => {
                 <TStack direction="vertical" gap="0.75rem">
                   <template v-if="lastResult.ok">
                     <TText weight="semibold" size="sm">Response payload</TText>
-                    <pre class="logs-pre">{{ resultPayloadPretty }}</pre>
+                    <TCodeBlock :code="resultPayloadPretty" label="Response payload" max-block-size="24rem" wrap copyable />
                   </template>
                   <template v-else>
                     <TText weight="semibold" size="sm">Function error</TText>
-                    <pre class="logs-pre">{{
-                      [
-                        `${lastResult.functionError?.errorType || 'Error'}: ${lastResult.functionError?.errorMessage || ''}`,
-                        ...(lastResult.functionError?.trace || []),
-                      ].join('\n')
-                    }}</pre>
+                    <TCodeBlock :code="[`${lastResult.functionError?.errorType || 'Error'}: ${lastResult.functionError?.errorMessage || ''}`, ...(lastResult.functionError?.trace || [])].join('\n')" label="Function error" max-block-size="60vh" wrap copyable />
                   </template>
                   <TDivider />
                   <TText weight="semibold" size="sm">Captured logs</TText>
-                  <pre class="logs-pre">{{ lastResult.logs.join('\n') || '— no output —' }}</pre>
+                  <TCodeBlock :code="lastResult.logs.join('\n') || '— no output —'" label="Captured logs" max-block-size="60vh" wrap copyable />
                 </TStack>
               </TCard>
             </TStack>
@@ -439,7 +434,7 @@ watch(() => props.functionName, () => {
                         </TText>
                       </TStack>
                     </a>
-                    <pre v-if="expandedLogs[idx]" class="logs-pre">{{ rec.logs.join('\n') || '— no output —' }}</pre>
+                    <TCodeBlock v-if="expandedLogs[idx]" :code="rec.logs.join('\n') || '— no output —'" label="Invocation log" max-block-size="60vh" wrap copyable />
                   </TStack>
                 </TCard>
               </TStack>

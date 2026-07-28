@@ -16,30 +16,9 @@ body {
   width: 100%;
 }
 
-.brand-logo {
-  height: 2rem;
-  width: auto;
-  max-width: 10rem;
-  object-fit: contain;
-  border-radius: var(--tree-radius-sm);
-}
-
-/* Mono shim, token-backed. TText now uses the `family="mono"` prop (0.20), so this class only
-   styles the raw <pre> code/log blocks (the TREEUX-003 shim, until TCodeBlock ships). */
+/* Mono shim, token-backed. TText uses `family="mono"` and code/log blocks use TCodeBlock now; this
+   class only remains on the raw code/JSON <textarea>s (editable input) and one clickable mono
+   table cell — neither is a TText, so `family` doesn't apply. */
 .mono {
   font-family: var(--tree-font-family-mono);
-}
-
-.logs-pre {
-  margin: 0;
-  padding: 1rem;
-  background: #0b0c10;
-  color: #d1d5db;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, Monaco, monospace;
-  font-size: 0.85rem;
-  overflow: auto;
-  min-height: 320px;
-  max-height: 60vh;
-  white-space: pre-wrap;
-  border-radius: 0.375rem;
 }

@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterView, useRoute, useRouter } from 'vue-router';
 import {
-  TStack, TStackItem, TText, TIcon, TPage, TBadge, TToastProvider, TButton, TSelect,
+  TStack, TStackItem, TBrandLockup, TIcon, TPage, TBadge, TToastProvider, TButton, TSelect,
   TAppShell, TNavMenu, TDropdown,
 } from '@treeui/vue';
 import type { TNavMenuItem } from '@treeui/vue';
@@ -45,6 +45,7 @@ const navItems: TNavMenuItem[] = [
   { label: 'DynamoDB', value: '/dynamo' },
   { label: 'OpenSearch', value: '/opensearch' },
   { label: 'Secrets', value: '/secrets' },
+  { label: 'Settings', value: '/settings' },
 ];
 
 function onNavSelect(value: string) {
@@ -89,24 +90,23 @@ onBeforeUnmount(() => {
   <TToastProvider position="top-right">
     <TAppShell collapsible sidebar-width="16rem" sidebar-label="Primary navigation">
       <!-- Brand in #header-start (over the sidebar rail, animates with the collapse) and controls in
-           #header-end (0.20 slot, pinned trailing) — the shell header grid owns the layout, no local
-           CSS. The brand-logo <img> is the documented interim until TreeUI ships TBrandLockup
-           (TREEUX-009). -->
-      <template #header-start>
-        <TStack direction="horizontal" gap="0.625rem" align="center">
-          <img
-            v-if="branding.logoUrl"
-            :src="branding.logoUrl"
-            :alt="`${branding.title} logo`"
-            class="brand-logo"
-          />
-          <TStack direction="vertical" gap="0.125rem">
-            <TText weight="semibold">{{ branding.title }}</TText>
-            <TText v-if="branding.subtitle" tone="muted" size="xs">
-              {{ branding.subtitle }}
-            </TText>
-          </TStack>
-        </TStack>
+           #header-end (0.20 slot, pinned trailing) — the shell header grid owns the layout. The brand
+           is TBrandLockup (0.21): the #logo slot keeps the arbitrary-ratio branding image uncropped,
+           and it hides the wordmark when the shell collapses. -->
+      <template #header-start="{ collapsed }">
+        <TBrandLockup
+          :title="branding.title"
+          :subtitle="branding.subtitle"
+          :collapsed="collapsed"
+        >
+          <template #logo>
+            <img
+              v-if="branding.logoUrl"
+              :src="branding.logoUrl"
+              :alt="`${branding.title} logo`"
+            />
+          </template>
+        </TBrandLockup>
       </template>
 
       <template #header-end>

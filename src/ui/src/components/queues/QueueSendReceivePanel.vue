@@ -3,7 +3,7 @@ import { ref, computed } from 'vue';
 import {
   TCard, TButton, TStack, TInput, TTextarea, TFormField, TAlert, TBadge,
   TDivider, TTable, TEmptyState, TSpinner, TConfirmDialog, TSelect,
-  TText, TIcon, useToast,
+  TText, TIcon, TCodeBlock, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type {
@@ -448,10 +448,7 @@ function copyToClipboard(text: string) {
             </div>
 
             <TDivider />
-            <pre
-              class="mono"
-              style="white-space: pre-wrap; word-break: break-word; font-size: 0.78rem; background: var(--tree-color-surface-muted, #f6f7f9); padding: 0.5rem; border-radius: 6px; max-height: 280px; overflow: auto;"
-            >{{ formatJsonIfPossible(m.body) }}</pre>
+            <TCodeBlock :code="formatJsonIfPossible(m.body)" label="Message body" max-block-size="24rem" wrap copyable />
           </TStack>
         </div>
       </template>

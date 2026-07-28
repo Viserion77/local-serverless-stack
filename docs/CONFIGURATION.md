@@ -502,6 +502,37 @@ If `localstackEdition` is `pro` and no token is found, the orchestrator fails fa
    npx lss start
    ```
 
+## Editing configuration from the dashboard
+
+The **Settings** tab of the dashboard edits `lss.config.json` in place. Saving writes only
+the fields you actually changed into the loaded config file (or creates `lss.config.json`
+in the project root when none is loaded) and hot-reloads the in-memory config — the file
+is yours to review and commit; LSS never touches git.
+
+The HTTP surface behind it:
+
+| Endpoint | What it does |
+|---|---|
+| `GET /api/config` | Full public-safe snapshot: engine kind + endpoint, LocalStack block, self-engine block, aoss sidecar, lambda runtime, packaging, branding, `configPath`/`projectRoot`, and `envOverrides` (keys currently masked by env vars). Secret **values** never appear: the auth token collapses to `hasAuthToken`, `packageEnv` maps collapse to key names, the `secrets` seed map collapses to a count. |
+| `PUT /api/config` | Persist a partial patch. Scalar/array keys replace; `null` deletes the key (the default returns). Object blocks (`lambdaRuntime`, `selfEngine`, `aossSidecar`, `branding`, …) merge **one level deep** — a partial edit never drops sibling settings like `branding.logo` — and a `null` subkey deletes just that subkey. Nested keys are validated too (`selfEngine.port` must be a port, `lambdaRuntime.execution` must be a known mode, unknown subkeys are rejected). Invalid patches answer `400` with every problem listed in `details` and nothing touches the file. |
+| `POST /api/config/reload` | Re-read the config file from disk after a hand edit, without restarting the orchestrator. A file that no longer parses answers `400` and the working in-memory config stays untouched. |
+| `GET /api/config/ports` | Every local port the stack exposes: orchestrator, active engine (LocalStack edge or self engine), aoss sidecar, DynamoDB proxy, plus each registered service's HTTP API and Lambda invoke listeners. Shown on the dashboard Overview. |
+
+Two keys are **never editable via the API**: `localstackAuthToken` (use the
+`LOCALSTACK_AUTH_TOKEN` env var — the token must not transit the dashboard) and `secrets`
+(seed material — edit the file directly).
+
+Both `PUT` and `reload` classify what changed:
+
+- **Lazily-consumed keys** (`seedsDir`, `autoPackage`, packaging settings, `branding`,
+  `lambdaRuntime`/`serviceRuntime` for the *next* registration) take effect immediately.
+- **Boot-materialized keys** (ports, `engine`, LocalStack mode/image, `persistence`,
+  `region`, `stateDir`, `selfEngine`, `aossSidecar`) come back in `restartRequired` — the
+  running process keeps the old value until `lss stop && lss start` (the
+  `restart (rebuild local)` VSCode tasks chain build + stop + start for the examples).
+- Patch keys currently masked by an env var come back in `envOverridden`: the file was
+  written, but the env value keeps winning until it is unset.
+
 ## Checking Current Configuration
 
 Start the orchestrator and check the logs:
