@@ -8,6 +8,7 @@ import {
 import type { TreeBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
 import type { QueueSnapshot } from '../services/api';
+import { engineLabel } from '../services/engine';
 
 const router = useRouter();
 const queues = ref<QueueSnapshot[]>([]);
@@ -135,7 +136,7 @@ onBeforeUnmount(() => {
       <TEmptyState
         v-else-if="!queues.length"
         title="No queues found"
-        description="Register a microservice that defines SQS resources or create queues directly in LocalStack."
+        :description="`Register a microservice that defines SQS resources, or create queues directly on the ${engineLabel}.`"
       />
 
       <TTable v-else :columns="columns" :rows="rows" aria-label="SQS queues">

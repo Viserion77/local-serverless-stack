@@ -7,6 +7,7 @@ import {
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { BucketSnapshot } from '../../services/api';
+import { engineLabel } from '../../services/engine';
 
 const router = useRouter();
 const buckets = ref<BucketSnapshot[]>([]);
@@ -105,7 +106,7 @@ onBeforeUnmount(() => {
       <TEmptyState
         v-else-if="!buckets.length"
         title="No buckets found"
-        description="Register a microservice that defines S3 resources or create buckets directly in LocalStack."
+        :description="`Register a microservice that defines S3 resources, or create buckets directly on the ${engineLabel}.`"
       />
 
       <TTable v-else :columns="columns" :rows="rows" aria-label="S3 buckets">

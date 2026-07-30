@@ -207,10 +207,6 @@ function startOrchestrator() {
   if (cfg.serverPort) {
     env.PORT = cfg.serverPort;
   }
-  /* istanbul ignore else: getConfig() always defaults localstackPort to 4566, so the else is unreachable */
-  if (cfg.localstackPort) {
-    env.LSS_LOCALSTACK_PORT = cfg.localstackPort;
-  }
   if (enableDynamoProxy) {
     env.LSS_ENABLE_DYNAMO_PROXY = 'true';
   }
@@ -218,26 +214,36 @@ function startOrchestrator() {
   if (cfg.dynamoProxyPort) {
     env.LSS_DYNAMO_PROXY_PORT = cfg.dynamoProxyPort;
   }
-  /* istanbul ignore else: mode resolves to cfg.mode which getConfig() defaults to 'managed', so the else is unreachable */
-  if (mode) {
-    env.LSS_LOCALSTACK_MODE = mode;
-  }
-  /* istanbul ignore else: edition resolves to localstackEdition which getConfig() defaults to 'community', so the else is unreachable */
-  if (edition) {
-    env.LSS_LOCALSTACK_EDITION = edition;
-  }
-  /* istanbul ignore else: getConfig() always defaults localstackVersion to 'latest', so the else is unreachable */
-  if (cfg.localstackVersion) {
-    env.LSS_LOCALSTACK_VERSION = cfg.localstackVersion;
-  }
-  if (cfg.localstackImage) {
-    env.LSS_LOCALSTACK_IMAGE = cfg.localstackImage;
-  }
-  if (authToken) {
-    env.LOCALSTACK_AUTH_TOKEN = authToken;
-  }
   if (engine === 'self') {
+    // Self engine: not one LocalStack variable is exported. They would be dead
+    // weight in the child's environment, they leak "there is a LocalStack here"
+    // into a mode whose whole point is that there isn't, and every key exported
+    // this way is reported by GET /api/config as env-overridden — which greys
+    // it out in the dashboard's Settings tab for a value the user never set.
     env.LSS_ENGINE = 'self';
+  } else {
+    /* istanbul ignore else: getConfig() always defaults localstackPort to 4566, so the else is unreachable */
+    if (cfg.localstackPort) {
+      env.LSS_LOCALSTACK_PORT = cfg.localstackPort;
+    }
+    /* istanbul ignore else: mode resolves to cfg.mode which getConfig() defaults to 'managed', so the else is unreachable */
+    if (mode) {
+      env.LSS_LOCALSTACK_MODE = mode;
+    }
+    /* istanbul ignore else: edition resolves to localstackEdition which getConfig() defaults to 'community', so the else is unreachable */
+    if (edition) {
+      env.LSS_LOCALSTACK_EDITION = edition;
+    }
+    /* istanbul ignore else: getConfig() always defaults localstackVersion to 'latest', so the else is unreachable */
+    if (cfg.localstackVersion) {
+      env.LSS_LOCALSTACK_VERSION = cfg.localstackVersion;
+    }
+    if (cfg.localstackImage) {
+      env.LSS_LOCALSTACK_IMAGE = cfg.localstackImage;
+    }
+    if (authToken) {
+      env.LOCALSTACK_AUTH_TOKEN = authToken;
+    }
   }
   // Hand the same config file to the server so its ConfigManager reads the
   // identical serverPort/localstackPort/seedsDir/region/mode (not just the

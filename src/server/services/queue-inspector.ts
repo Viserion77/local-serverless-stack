@@ -505,10 +505,19 @@ export class QueueInspector {
     }
   }
 
+  // Paginated: ListQueues answers at most 1000 URLs per page. A large monorepo
+  // (one queue + one DLQ per bounded context) crosses that, and a truncated
+  // list would drop consumers from the dashboard and from await-idle.
   private async fetchQueueUrls(region?: string): Promise<string[]> {
     try {
-      const response = await this.sqsClientFor(region).send(new ListQueuesCommand({}));
-      return response.QueueUrls || [];
+      const urls: string[] = [];
+      let nextToken: string | undefined;
+      do {
+        const response = await this.sqsClientFor(region).send(new ListQueuesCommand({ NextToken: nextToken }));
+        urls.push(...(response.QueueUrls || []));
+        nextToken = response.NextToken;
+      } while (nextToken);
+      return urls;
     } catch {
       return [];
     }

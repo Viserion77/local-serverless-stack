@@ -447,11 +447,20 @@ export class SeedManager {
     }
   }
 
+  // Paginated: ListTables caps a page at 100 names, so a monorepo with more
+  // tables than that would silently report every seed file past the cap as
+  // "no matching live table".
   private async listTables(region?: string): Promise<string[]> {
     try {
       const client = this.clientFor(region);
-      const res = await client.send(new ListTablesCommand({}));
-      return res.TableNames ?? [];
+      const names: string[] = [];
+      let exclusiveStartTableName: string | undefined;
+      do {
+        const res = await client.send(new ListTablesCommand({ ExclusiveStartTableName: exclusiveStartTableName }));
+        names.push(...(res.TableNames ?? []));
+        exclusiveStartTableName = res.LastEvaluatedTableName;
+      } while (exclusiveStartTableName);
+      return names;
     } catch {
       return [];
     }

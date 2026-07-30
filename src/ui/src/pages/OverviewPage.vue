@@ -6,6 +6,7 @@ import {
 } from '@treeui/vue';
 import { RouterLink } from 'vue-router';
 import { api } from '../services/api';
+import { engineLabel, isSelfEngine } from '../services/engine';
 import type {
   HealthInfo, LambdaSummary, LssConfigSnapshot, PortEntry, ServiceApiInfo, ServiceSummary,
 } from '../services/api';
@@ -56,7 +57,15 @@ const totalServices = computed(() => services.value.length);
 const lambdasOnline = computed(() => lambdas.value.filter(l => l.status === 'online').length);
 const totalLambdas = computed(() => lambdas.value.length);
 const apiRoutesTotal = computed(() => apis.value.reduce((s, a) => s + a.routes.length, 0));
-const localstackTone = computed(() => health.value?.localstack ? 'success' : 'danger');
+// `localstack` is the deprecated alias for engineRunning; both mean "the
+// ACTIVE engine is healthy", which on this stack may well be the self engine.
+const engineRunning = computed(() => health.value?.engineRunning ?? health.value?.localstack ?? false);
+const engineTone = computed(() => (engineRunning.value ? 'success' : 'danger'));
+const tagline = computed(() =>
+  isSelfEngine.value
+    ? 'Every AWS service in one process. No Docker, no token.'
+    : 'One LocalStack. Every microservice. Zero docker juggling.',
+);
 const proxyEnabled = computed(() => Boolean(health.value?.dynamoProxy?.enabled));
 const proxyRunning = computed(() => Boolean(health.value?.dynamoProxy?.running));
 const autoPackage = computed(() => Boolean(config.value?.autoPackage));
@@ -125,18 +134,18 @@ onBeforeUnmount(() => {
           <TIcon name="zap" />
           <TStack direction="vertical" gap="0.125rem">
             <TText size="xl" weight="semibold">Local Serverless Stack</TText>
-            <TText tone="muted">One LocalStack. Every microservice. Zero docker juggling.</TText>
+            <TText tone="muted">{{ tagline }}</TText>
           </TStack>
         </TStack>
         <p style="max-width: 70ch; line-height: 1.55;">
           A single control plane for your local serverless workflow. Register a Serverless Framework project
-          and LSS parses its CloudFormation template, provisions the resources in a shared LocalStack
-          instance, wires up event-source mappings, and gives you live visibility into every queue, table,
-          and topic — without spinning up a separate LocalStack per service.
+          and LSS parses its CloudFormation template, provisions the resources on the shared
+          {{ engineLabel }}, wires up event-source mappings, and gives you live visibility into every
+          queue, table, and topic — without one emulator per service.
         </p>
         <TStack direction="horizontal" gap="0.5rem" wrap>
-          <TBadge :tone="localstackTone" variant="soft">
-            LocalStack {{ health?.localstack ? 'running' : 'offline' }}
+          <TBadge :tone="engineTone" variant="soft">
+            {{ engineLabel }} {{ engineRunning ? 'running' : 'offline' }}
           </TBadge>
           <TBadge
             v-if="proxyEnabled"
@@ -168,19 +177,26 @@ onBeforeUnmount(() => {
             <TText weight="semibold">Server status</TText>
           </template>
           <TDescriptionList>
-            <TDescriptionItem label="LocalStack">
-              <TBadge :tone="health?.localstack ? 'success' : 'danger'" variant="soft">
-                {{ health?.localstack ? 'Running' : 'Offline' }}
+            <TDescriptionItem :label="engineLabel">
+              <TBadge :tone="engineTone" variant="soft">
+                {{ engineRunning ? 'Running' : 'Offline' }}
               </TBadge>
             </TDescriptionItem>
             <TDescriptionItem label="Endpoint">
-              <TText family="mono">{{ config?.localstack?.endpoint || '—' }}</TText>
+              <TText family="mono">{{ config?.engine?.endpoint || '—' }}</TText>
             </TDescriptionItem>
-            <TDescriptionItem label="Image">
-              <TText family="mono" size="sm">{{ config?.localstack?.image || '—' }}</TText>
-            </TDescriptionItem>
-            <TDescriptionItem label="Mode">
-              <TTag size="sm" variant="soft">{{ config?.localstack?.mode || '—' }}</TTag>
+            <!-- Container image and managed/external mode only exist for a
+                 LocalStack engine; the self engine runs in this process. -->
+            <template v-if="!isSelfEngine">
+              <TDescriptionItem label="Image">
+                <TText family="mono" size="sm">{{ config?.localstack?.image || '—' }}</TText>
+              </TDescriptionItem>
+              <TDescriptionItem label="Mode">
+                <TTag size="sm" variant="soft">{{ config?.localstack?.mode || '—' }}</TTag>
+              </TDescriptionItem>
+            </template>
+            <TDescriptionItem v-else label="Runs in">
+              <TTag size="sm" variant="soft">this process — no Docker</TTag>
             </TDescriptionItem>
           </TDescriptionList>
           <TDivider />
@@ -229,7 +245,7 @@ onBeforeUnmount(() => {
             <TDescriptionItem label="Server port">
               <TText family="mono">{{ config?.serverPort || '—' }}</TText>
             </TDescriptionItem>
-            <TDescriptionItem label="LocalStack services">
+            <TDescriptionItem label="Emulated services">
               <TStack direction="horizontal" gap="0.25rem" wrap justify="flex-end">
                 <TTag
                   v-for="svc in (config?.services || [])"

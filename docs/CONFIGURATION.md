@@ -69,7 +69,9 @@ Both files should contain valid JSON with the following optional properties:
 
 - **selfEngine** (object, optional — only used when `engine` is `"self"`)
   - `port` (default 14566, env `LSS_ENGINE_PORT`), `dataDir` (default
-    `~/.lss/engine`, or `<stateDir>/engine` when `stateDir` is set), `account`,
+    `~/.lss/projects/<project-slug>-<hash>/engine`, or `<stateDir>/engine` when
+    `stateDir` is set — the home fallback is scoped per project so two checkouts
+    never share one set of tables), `account`,
     `idleUnloadMs`, `memoryBudgetMb`, `fsync`, `fallbackEndpoint` (forward
     unimplemented AWS calls to a LocalStack instance during migration).
   - Full reference: [SELF_ENGINE.md](SELF_ENGINE.md).
@@ -85,7 +87,7 @@ Both files should contain valid JSON with the following optional properties:
     opt out — aoss provisioning then fails with a hint pointing back here.
   - `port` (number, default `14567` — one above the self engine's 14566): the
     sidecar's endpoint is `http://localhost:<port>`.
-  - Data persists under `~/.lss/aoss` (or `<stateDir>/aoss` when `stateDir` is
+  - Data persists under `~/.lss/projects/<project-slug>-<hash>/aoss` (or `<stateDir>/aoss` when `stateDir` is
     set), independent of the LocalStack container's lifecycle.
   - Example — move the sidecar off a busy port:
     ```jsonc
@@ -144,7 +146,14 @@ Both files should contain valid JSON with the following optional properties:
   - Example: `["dynamodb", "sqs", "sns", "lambda", "s3", "secretsmanager"]`
 
 - **persistence** (boolean, default: true)
-  - Whether to persist LocalStack data between restarts
+  - Whether engine data survives a restart.
+  - LocalStack engine: sets `PERSISTENCE` on the container.
+  - Self engine: `false` swaps the file-backed store for an **in-memory** one — no
+    `dataDir` is created, no catalog, WAL or blob is written, and every boot starts
+    from an empty engine. That is the mode to use for an automated test run that
+    needs a guaranteed clean slate and no leftover files. (The residency knobs —
+    `selfEngine.idleUnloadMs` / `memoryBudgetMb` — are inert there: with no
+    snapshot on disk, evicting a table would be data loss rather than eviction.)
   - Example: `true`
 
 - **debug** (boolean, default: false)
@@ -162,11 +171,27 @@ Both files should contain valid JSON with the following optional properties:
     `lss seed [table]` / `lss seed:clear [table]` or the seed panel in the
     dashboard's DynamoDB tab (open a table → Seed).
 
+- **LSS_ENGINE_DATA_DIR** (env var, no config-file equivalent beyond `selfEngine.dataDir`)
+  - Overrides where the self engine keeps its state, without touching a config file.
+    Together with `LSS_ENGINE_PORT` and `LSS_DASHBOARD_PORT` it is everything a second
+    instance needs:
+    ```bash
+    LSS_DASHBOARD_PORT=3250 LSS_ENGINE_PORT=14766 \
+      LSS_ENGINE_DATA_DIR=/tmp/lss-run-7/engine npx lss start --self-engine
+    ```
+  - Reported as an env override by `GET /api/config`, like every other `LSS_*` var.
+
 - **stateDir** (string, optional)
   - Directory where this instance keeps its state (PID/lock/log files), resolved
     relative to the working directory. Setting it isolates an instance so
     `lss stop --config <path>` targets it and not your dev instance — useful for
     e2e stacks running next to a normal one.
+  - It is also where the engine's `dataDir` and the aoss sidecar's data dir land.
+    Without it they fall back to a **per-project** directory under
+    `~/.lss/projects/<project-slug>-<hash>/`, derived from the absolute project
+    root — so two checkouts of the same repo, or two examples, never share state.
+    Setting `stateDir` (the examples use `.lss`) keeps everything inside the
+    project and is still the recommended default.
 
 - **autoPackage** (boolean, default: false)
   - When registering a service, if `.serverless/cloudformation-template-update-stack.json` is missing, run the configured `packageCommand` in the service directory and retry.
@@ -240,8 +265,38 @@ Both files should contain valid JSON with the following optional properties:
     Docker Desktop instead of the devcontainer; set this to the Docker network
     gateway reachable from the LocalStack container (for example `"172.19.0.1"`).
     Only relevant on the LocalStack engine.
+  - `lazy` (boolean, default `true`): fork a service's runtime worker on its **first
+    invocation** instead of at registration. A worker is a Node process costing ~48 MB
+    resident, so a 40-service monorepo paid ~1.9 GB before a single handler ran;
+    deferring the fork brings a 40-service stack from ~2.0 GB to ~130 MB at rest and
+    costs one cold start (~20 ms, measured) per service actually exercised. Handler
+    resolution (and artifact extraction) still happens at registration, so a broken
+    packaging is still reported there. Set `false` to restore the eager behaviour.
+  - `idleTimeoutMs` (number, default `60000` — one minute): stop a worker that has
+    served nothing for this long, returning the service to the lazy state; the next
+    invocation re-forks it (~20 ms). LSS is a development stack, not a production
+    workload — a handler only needs to be resident while it is being used, and a
+    session that touches every service would otherwise end up as expensive as eager
+    mode. An in-flight invocation is never interrupted. Set `0` to keep workers
+    alive forever.
+  - `maxWarmWorkers` (number, default: one per GB of system RAM, clamped to
+    `2..12`): hard ceiling on resident workers. When a fork pushes past it, the
+    least-recently-invoked idle worker is unloaded. This is what makes host memory a
+    function of the services **in flight** rather than the services **registered**:
+    a burst that touches all 40 services of a monorepo inside the idle window still
+    settles at `maxWarmWorkers × ~48 MB`. Set `0` to remove the ceiling.
+
+  > **Measured** on a synthetic 40-service / 400-lambda / 400-table stack: 128 MB
+  > resident with everything registered and nothing invoked; 329 MB right after
+  > invoking all 40 with `maxWarmWorkers: 4`; back to 132 MB once the idle timeout
+  > elapsed — and the next request still answered in 23 ms.
   - Env overrides: `LSS_LAMBDA_RUNTIME`, `LSS_LAMBDA_EXECUTION`, `LSS_LAMBDA_WATCH`,
     `LSS_INVOKE_HOST`.
+
+  > **Reading the runtime state.** `GET /api/services` reports `runtimeStatus` plus
+  > `runtimeWarm`, and `GET /api/lambdas` reports `status` plus `warm`. `status`
+  > stays `online` for a lazily-registered service — it *will* serve an invoke;
+  > `warm: false` is what tells you no worker process is alive yet.
 
   Docker-in-Docker/devcontainer example:
   ```jsonc

@@ -810,6 +810,37 @@ describe('bin/cli.js helpers', () => {
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Self Engine: http://localhost:14566'));
     });
 
+    // The self engine's whole premise is "no LocalStack here". Exporting
+    // LSS_LOCALSTACK_* would also make GET /api/config report those keys as
+    // env-overridden, greying them out in the Settings tab for values the user
+    // never set.
+    it('exports no LocalStack env var in self-engine mode', () => {
+      jest.useFakeTimers();
+      mockFs.existsSync.mockImplementation((p: any) => {
+        const s = String(p);
+        return s.endsWith('index.js') || s.endsWith('lss.config.json');
+      });
+      mockFs.readFileSync.mockReturnValue(
+        JSON.stringify({ engine: 'self', localstackPort: 4600, localstackVersion: '3.0', localstackImage: 'my/img' }),
+      );
+      mockSpawn.mockReturnValue(makeChild() as any);
+      const cli = loadCli(['node', 'cli.js', 'start']);
+      cli.startOrchestrator();
+      const [, , opts] = mockSpawn.mock.calls[0];
+      const env = (opts as any).env;
+      expect(env.LSS_ENGINE).toBe('self');
+      for (const key of [
+        'LSS_LOCALSTACK_PORT',
+        'LSS_LOCALSTACK_MODE',
+        'LSS_LOCALSTACK_EDITION',
+        'LSS_LOCALSTACK_VERSION',
+        'LSS_LOCALSTACK_IMAGE',
+        'LOCALSTACK_AUTH_TOKEN',
+      ]) {
+        expect(env[key]).toBeUndefined();
+      }
+    });
+
     it('engine "self" from the config file selects the self engine with its configured port', () => {
       jest.useFakeTimers();
       mockFs.existsSync.mockImplementation((p: any) => {

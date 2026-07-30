@@ -6,6 +6,7 @@ import {
   ServicePackageConfig,
 } from '../services/config-manager.js';
 import { FunctionRegistry } from '../services/function-registry.js';
+import { applyRegionToExplorers } from '../services/explorer-region.js';
 
 const router = Router();
 
@@ -85,6 +86,12 @@ function buildConfigSnapshot(cm: ConfigManager) {
       watch: raw.lambdaRuntime?.watch ?? null,
       invokePortOffset: cm.getInvokePortOffset(),
       invokeHost: cm.getInvokeHost(),
+      // Residency policy: how many worker processes this stack may hold and for
+      // how long. Resolved (not raw) because maxWarmWorkers' default is derived
+      // from the host's RAM — the number that matters is the effective one.
+      lazy: cm.isLambdaRuntimeLazy(),
+      idleTimeoutMs: cm.getLambdaIdleTimeoutMs(),
+      maxWarmWorkers: cm.getLambdaMaxWarmWorkers(),
     },
     serviceRuntime: raw.serviceRuntime ?? {},
     secretSeedCount: Object.keys(cm.getSecretSeeds()).length,
@@ -109,6 +116,10 @@ router.put('/', (req: Request, res: Response) => {
   const cm = ConfigManager.getInstance();
   try {
     const result = cm.updateConfig(req.body);
+    // `region` is lazily consumed, so a patch that changes it takes effect at
+    // once — the explorers' default has to follow or they keep answering for
+    // the previous region.
+    applyRegionToExplorers(cm.getRegion());
     res.json({
       config: buildConfigSnapshot(cm),
       configPath: result.path,
@@ -132,6 +143,7 @@ router.post('/reload', (_req: Request, res: Response) => {
   const cm = ConfigManager.getInstance();
   try {
     const result = cm.reloadFromDisk();
+    applyRegionToExplorers(cm.getRegion());
     res.json({
       config: buildConfigSnapshot(cm),
       configPath: result.path,

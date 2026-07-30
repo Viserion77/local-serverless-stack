@@ -44,11 +44,13 @@ LSS features come in two layers:
   - CloudFormation parsing from `sls package` → auto-provisions tables, queues (incl. `RedrivePolicy`), topics, buckets (incl. `CorsConfiguration`), secrets, EventBridge buses/rules, raw ApiGatewayV2 routes and OpenSearch collections
   - `autoPackage` — runs `sls package` on demand when the template is missing
   - Automatic event source mappings: SQS / DynamoDB streams / S3 notifications / EventBridge rules → Lambda — with AWS-faithful failure semantics (`FilterCriteria` enforced, `ReportBatchItemFailures` partial batches, `maximumRetryAttempts` incl. the `-1` "until the record ages out" default)
-  - Per-instance isolation — `stateDir` + port-scoped PID/log paths let many LSS instances coexist (one per project)
+  - Per-instance isolation — `stateDir` + port-scoped PID/log paths let many LSS instances coexist (one per project); with no `stateDir` the engine/aoss/artifact directories fall back to a **per-project** path under `~/.lss/projects/`, so two checkouts never share state
+  - Explorers honour the configured `region` when a caller omits `?region=`, and page through `ListTables`/`ListQueues` (400 tables list as 400, not the first 100)
   - Config: `lss.config.json` / `.lssrc` + env overrides (`LSS_*`); public-safe `GET /api/config` snapshot (never leaks the auth token); editable from the dashboard via `PUT /api/config` (writes the file for you to commit) + `POST /api/config/reload`; `GET /api/config/ports` lists every exposed port
 - **Lambda runtime & API Gateway emulation** (serverless-offline replacement — same `30xx`/`130xx` ports)
   - Function + route registry: REST (`http`, payload v1), HTTP API (`httpApi`, payload v2) and authorizers — persisted and rehydrated on restart
   - Per-service worker processes: lazy/warm handler loading, function env/timeout/context, per-invocation log capture, crash restart
+  - **Bounded memory by default**: `lambdaRuntime.lazy` forks a worker on the first invocation instead of at registration, `idleTimeoutMs` (60 s) unloads it once it goes quiet, and `maxWarmWorkers` (one per GB of RAM) caps how many may be resident at once — so host memory tracks the services *in flight*, not the services *registered*. Measured on 40 services / 400 lambdas / 400 tables: **2.0 GB → 128 MB** at rest, ~20 ms cold start per service used
   - Execution modes: `artifact` (extracted zip) · `source` (direct require/import; TS via native type-stripping → esbuild/tsx/ts-node) · `auto`
   - Lambda Invoke API on `130xx` (`X-Amz-Invocation-Type` RequestResponse/Event/DryRun, `X-Amz-Function-Error`)
   - API Gateway proxy on `30xx`: route precedence (literal > `{param}` > `{proxy+}` > `$default`, method > ANY), payload v1/v2, CORS preflight, `port-conflict` status

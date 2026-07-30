@@ -112,6 +112,23 @@ describe('listQueues', () => {
     expect(await inspector.listQueues()).toEqual([]);
   });
 
+  // ListQueues answers at most 1000 URLs per page; a truncated list would drop
+  // queues (and their consumers) from the dashboard and from await-idle.
+  it('follows NextToken across pages', async () => {
+    sqsMock
+      .on(ListQueuesCommand, { NextToken: undefined })
+      .resolves({ QueueUrls: [URL_Q], NextToken: 'page-2' })
+      .on(ListQueuesCommand, { NextToken: 'page-2' })
+      .resolves({ QueueUrls: [URL_FIFO] });
+    sqsMock.on(GetQueueAttributesCommand).resolves({
+      Attributes: { ApproximateNumberOfMessages: '0', ApproximateNumberOfMessagesNotVisible: '0', QueueArn: ARN_Q },
+    });
+    lambdaMock.on(ListEventSourceMappingsCommand).resolves({ EventSourceMappings: [] });
+
+    const queues = await inspector.listQueues();
+    expect(queues.map(q => q.name)).toEqual(['q', 'q.fifo']);
+  });
+
   it('builds snapshots for each queue and drops the ones that fail', async () => {
     sqsMock.on(ListQueuesCommand).resolves({ QueueUrls: [URL_Q, URL_FIFO] });
     sqsMock.on(GetQueueAttributesCommand, { QueueUrl: URL_Q }).resolves({

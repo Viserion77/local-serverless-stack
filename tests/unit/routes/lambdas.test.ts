@@ -93,6 +93,9 @@ describe('GET /api/lambdas', () => {
         triggers: ['http'],
         invokePort: 13001,
         status: 'online',
+        // The stubbed RuntimeInfo carries no `warm`, so the route reports the
+        // conservative default: ready, but no worker forked yet.
+        warm: false,
         executionMode: 'source',
         invocations: 2,
         errors: 1,

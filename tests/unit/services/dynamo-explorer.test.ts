@@ -69,6 +69,22 @@ describe('listTables / summarize', () => {
     expect(await explorer.listTables()).toEqual([]);
   });
 
+  // ListTables caps a page at 100 names. A monorepo with 40 services x 10
+  // tables has 400 — without following LastEvaluatedTableName the dashboard
+  // silently showed the first quarter.
+  it('follows LastEvaluatedTableName across pages', async () => {
+    ddbMock
+      .on(ListTablesCommand, { ExclusiveStartTableName: undefined })
+      .resolves({ TableNames: ['a', 'b'], LastEvaluatedTableName: 'b' })
+      .on(ListTablesCommand, { ExclusiveStartTableName: 'b' })
+      .resolves({ TableNames: ['c'], LastEvaluatedTableName: 'c' })
+      .on(ListTablesCommand, { ExclusiveStartTableName: 'c' })
+      .resolves({ TableNames: ['d'] });
+
+    expect(await explorer.listTableNames()).toEqual(['a', 'b', 'c', 'd']);
+    expect(ddbMock.commandCalls(ListTablesCommand)).toHaveLength(3);
+  });
+
   it('summarizes each table with full metadata (GSI/LSI/stream/ttl/billing/created)', async () => {
     ddbMock.on(ListTablesCommand).resolves({ TableNames: ['t1'] });
     ddbMock.on(DescribeTableCommand).resolves({

@@ -15,7 +15,9 @@ export interface WatchStatus {
 
 interface WatchedService {
   root: string;
-  watcher: fs.FSWatcher;
+  // One entry per watched subtree (see watch()): the service root itself,
+  // non-recursively, plus a recursive watch on each interesting child dir.
+  watchers: fs.FSWatcher[];
   debounce?: NodeJS.Timeout;
   pendingFullReload: boolean;
   status: WatchStatus;
@@ -48,24 +50,47 @@ export class SourceWatcher {
     this.handlers = handlers;
   }
 
+  // One recursive watch on the service root is the obvious implementation and
+  // the expensive one: on Linux, Node registers an inotify watch per directory
+  // in the subtree, and node_modules dominates it (measured on the shipped
+  // example: 1756 directories, of which 4 hold source). Forty services would
+  // ask the kernel for ~70k watches — past fs.inotify.max_user_watches on a
+  // stock machine — to observe 160 interesting directories. IGNORED_SEGMENTS
+  // only ever filtered the events, never the watches.
+  //
+  // So: watch the root non-recursively (that is where serverless.yml and
+  // package.json live) and add one recursive watch per child directory that
+  // isn't ignored.
   watch(serviceName: string, root: string): void {
     this.unwatch(serviceName);
-    try {
-      const watcher = fs.watch(root, { recursive: true }, (_event, filename) => {
-        this.onChange(serviceName, filename ? String(filename) : '');
+    const watchers: fs.FSWatcher[] = [];
+    const add = (dir: string, recursive: boolean, prefix: string): void => {
+      const watcher = fs.watch(dir, { recursive }, (_event, filename) => {
+        const name = filename ? String(filename) : '';
+        this.onChange(serviceName, name && prefix ? path.join(prefix, name) : name);
       });
       watcher.on('error', err => {
         console.warn(`⚠️  Watcher for "${serviceName}" failed: ${err.message}`);
         this.unwatch(serviceName);
       });
+      watchers.push(watcher);
+    };
+
+    try {
+      add(root, false, '');
+      for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+        if (!entry.isDirectory() || IGNORED_SEGMENTS.has(entry.name)) continue;
+        add(path.join(root, entry.name), true, entry.name);
+      }
       this.watched.set(serviceName, {
         root,
-        watcher,
+        watchers,
         pendingFullReload: false,
         status: { watching: true },
       });
-      console.log(`👀 Watching ${root} for changes (service "${serviceName}")`);
+      console.log(`👀 Watching ${root} for changes (service "${serviceName}", ${watchers.length} watch(es))`);
     } catch (err) {
+      for (const watcher of watchers) watcher.close();
       console.warn(`⚠️  Could not watch ${root}: ${err instanceof Error ? err.message : err}`);
     }
   }
@@ -74,7 +99,7 @@ export class SourceWatcher {
     const watched = this.watched.get(serviceName);
     if (!watched) return;
     if (watched.debounce) clearTimeout(watched.debounce);
-    watched.watcher.close();
+    for (const watcher of watched.watchers) watcher.close();
     this.watched.delete(serviceName);
   }
 

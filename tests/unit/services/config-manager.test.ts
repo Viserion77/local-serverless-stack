@@ -4,6 +4,7 @@
 // and env overrides we mock fs, set process.env, then jest.resetModules() +
 // re-require to construct a fresh singleton under those conditions.
 import path from 'path';
+import { projectCacheSegment } from '../../../src/server/services/project-scope';
 
 jest.mock('fs');
 const fs = require('fs') as jest.Mocked<typeof import('fs')>;
@@ -39,6 +40,7 @@ const LSS_ENV_VARS = [
   'LSS_INVOKE_HOST',
   'LSS_ENGINE',
   'LSS_ENGINE_PORT',
+  'LSS_ENGINE_DATA_DIR',
   'HOME',
 ];
 
@@ -698,6 +700,46 @@ describe('lambdaRuntime config', () => {
     expect(cm.getInvokePortOffset()).toBe(10000);
   });
 
+  // A worker per registered service costs ~48 MB resident, and LSS is a
+  // development stack: a handler is only resident while it is being used.
+  it('lazy defaults to true and idleTimeoutMs to one minute', () => {
+    const cm = freshConfigManager();
+    expect(cm.isLambdaRuntimeLazy()).toBe(true);
+    expect(cm.getLambdaIdleTimeoutMs()).toBe(60_000);
+  });
+
+  it('reads lazy/idleTimeoutMs from the config file', () => {
+    const cm = cmWith({ lambdaRuntime: { lazy: false, idleTimeoutMs: 900000 } });
+    expect(cm.isLambdaRuntimeLazy()).toBe(false);
+    expect(cm.getLambdaIdleTimeoutMs()).toBe(900000);
+  });
+
+  it('treats an explicit 0 or a bad value as "keep workers alive forever"', () => {
+    expect(cmWith({ lambdaRuntime: { idleTimeoutMs: 0 } }).getLambdaIdleTimeoutMs()).toBe(0);
+    expect(cmWith({ lambdaRuntime: { idleTimeoutMs: -1 } }).getLambdaIdleTimeoutMs()).toBe(0);
+    expect(cmWith({ lambdaRuntime: { idleTimeoutMs: 'soon' } as never }).getLambdaIdleTimeoutMs()).toBe(0);
+  });
+
+  // The ceiling is what makes host memory a function of services in flight
+  // rather than services registered.
+  it('maxWarmWorkers defaults to one per GB of RAM, clamped to 2..12', () => {
+    const totalmem = jest.spyOn(require('os'), 'totalmem');
+    totalmem.mockReturnValue(8 * 1024 ** 3);
+    expect(freshConfigManager().getLambdaMaxWarmWorkers()).toBe(8);
+    totalmem.mockReturnValue(1 * 1024 ** 3); // tiny host → floor of 2
+    expect(freshConfigManager().getLambdaMaxWarmWorkers()).toBe(2);
+    totalmem.mockReturnValue(64 * 1024 ** 3); // big host → cap of 12
+    expect(freshConfigManager().getLambdaMaxWarmWorkers()).toBe(12);
+    totalmem.mockRestore();
+  });
+
+  it('honors an explicit maxWarmWorkers, including 0 (no ceiling)', () => {
+    expect(cmWith({ lambdaRuntime: { maxWarmWorkers: 3 } }).getLambdaMaxWarmWorkers()).toBe(3);
+    expect(cmWith({ lambdaRuntime: { maxWarmWorkers: 0 } }).getLambdaMaxWarmWorkers()).toBe(0);
+    // Garbage falls back to the RAM-derived default rather than uncapping.
+    expect(cmWith({ lambdaRuntime: { maxWarmWorkers: -2 } }).getLambdaMaxWarmWorkers()).toBeGreaterThan(0);
+  });
+
   it('LSS_LAMBDA_RUNTIME=true / "1" enables, anything else disables', () => {
     process.env.LSS_LAMBDA_RUNTIME = 'true';
     expect(freshConfigManager().isLambdaRuntimeEnabled()).toBe(true);
@@ -939,10 +981,23 @@ describe('engine selection (self engine)', () => {
     expect(resolved.account).toBe('111111111111');
   });
 
+  // Port + data dir from the environment is all a second instance needs: no
+  // config file to write, nothing shared with the dev stack.
+  it('LSS_ENGINE_DATA_DIR overrides the resolved dataDir', () => {
+    process.env.LSS_ENGINE_DATA_DIR = '/tmp/lss-run-7/engine';
+    const cm = cmWith({ engine: 'self', selfEngine: { dataDir: '/from/file' } });
+    expect(cm.getSelfEngineConfig().dataDir).toBe('/tmp/lss-run-7/engine');
+  });
+
   it('getSelfEngineConfig applies every default', () => {
-    const resolved = freshConfigManager().getSelfEngineConfig();
+    const cm = freshConfigManager();
+    const resolved = cm.getSelfEngineConfig();
     expect(resolved.port).toBe(14566);
-    expect(resolved.dataDir).toBe(path.join(require('os').homedir(), '.lss', 'engine'));
+    // With no stateDir the fallback root is scoped to this project — a flat
+    // ~/.lss/engine made every checkout on the machine share one engine state.
+    expect(resolved.dataDir).toBe(
+      path.join(require('os').homedir(), '.lss', 'projects', projectCacheSegment(cm.getProjectRoot()), 'engine'),
+    );
     expect(resolved.account).toBe('000000000000');
     expect(resolved.idleUnloadMs).toBe(300000);
     expect(resolved.memoryBudgetMb).toBe(128);
@@ -1027,12 +1082,15 @@ describe('getAossSidecarConfig', () => {
     return freshConfigManager();
   }
 
-  it('defaults: enabled on the LocalStack engine, port 14567, dataDir under ~/.lss', () => {
-    const resolved = freshConfigManager().getAossSidecarConfig();
+  it('defaults: enabled on the LocalStack engine, port 14567, per-project dataDir under ~/.lss', () => {
+    const cm = freshConfigManager();
+    const resolved = cm.getAossSidecarConfig();
     expect(resolved.enabled).toBe(true);
     expect(resolved.port).toBe(14567);
     expect(resolved.endpoint).toBe('http://localhost:14567');
-    expect(resolved.dataDir).toBe(path.join(require('os').homedir(), '.lss', 'aoss'));
+    expect(resolved.dataDir).toBe(
+      path.join(require('os').homedir(), '.lss', 'projects', projectCacheSegment(cm.getProjectRoot()), 'aoss'),
+    );
   });
 
   it('defaults dataDir under stateDir when stateDir is set (test isolation)', () => {
@@ -1335,6 +1393,19 @@ describe('updateConfig', () => {
       '"lambdaRuntime" must be an object',
     ]);
     expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  // idleTimeoutMs accepts 0 (meaning "never unload"), so it validates as
+  // nonNegativeInt rather than positiveInt.
+  it('rejects a negative or fractional idleTimeoutMs but accepts 0', () => {
+    expect(updateErr(setupFile({}), { lambdaRuntime: { idleTimeoutMs: -5 } }).details).toEqual([
+      '"lambdaRuntime.idleTimeoutMs" must be an integer >= 0',
+    ]);
+    expect(updateErr(setupFile({}), { lambdaRuntime: { idleTimeoutMs: 1.5 } }).details).toEqual([
+      '"lambdaRuntime.idleTimeoutMs" must be an integer >= 0',
+    ]);
+    const cm = setupFile({});
+    expect(() => cm.updateConfig({ lambdaRuntime: { idleTimeoutMs: 0 } })).not.toThrow();
   });
 
   it('validates subkeys of fixed-shape object blocks — garbage never reaches the file', () => {

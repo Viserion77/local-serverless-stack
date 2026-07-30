@@ -9,6 +9,7 @@ import {
 import type { TreeBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
 import type { ServiceDetail, ServiceResource } from '../services/api';
+import { engineLabel } from '../services/engine';
 
 const props = defineProps<{ serviceName: string }>();
 const router = useRouter();
@@ -402,7 +403,7 @@ watch(() => props.serviceName, load);
     <TConfirmDialog
       v-model:open="deleteDialogOpen"
       :title="`Delete service “${serviceName}”?`"
-      description="This removes the service from the cache and cleans up its provisioned resources in LocalStack."
+      :description="`This removes the service from the cache and cleans up its provisioned resources on the ${engineLabel}.`"
       confirm-label="Delete"
       cancel-label="Cancel"
       confirm-variant="danger"

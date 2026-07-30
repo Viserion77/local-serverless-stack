@@ -1,6 +1,7 @@
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
+import { projectCacheSegment } from './project-scope.js';
 import type { SecretSeedValue } from './secret-value.js';
 
 // Symlink-stable spelling of a directory (e.g. macOS /tmp -> /private/tmp),
@@ -113,6 +114,23 @@ export interface LambdaRuntimeConfig {
   // resolve to this machine — e.g. Docker-in-Docker devcontainers, where the
   // correct host is the docker network gateway (e.g. "172.17.0.1").
   invokeHost?: string;
+  // Fork a service's worker on its first invocation instead of at registration
+  // (default: true). Each worker is a Node process costing ~48 MB resident, so
+  // a 40-service monorepo paid ~1.9 GB before a single handler ran. Deferring
+  // the fork costs one cold start (~200 ms) per service actually exercised.
+  // Set false to restore the eager behaviour.
+  lazy?: boolean;
+  // Stop a worker that has served nothing for this long, returning it to the
+  // lazy state (default: 60000 — one minute). LSS is a development stack, not a
+  // production workload: a handler only needs to be resident while it is being
+  // used, and a cold start costs ~20 ms. Set 0 to keep workers alive forever.
+  idleTimeoutMs?: number;
+  // Hard ceiling on how many workers may be resident at once. When a fork
+  // pushes past it, the least-recently-invoked idle worker is unloaded. This is
+  // the guarantee that a burst across every service in a large monorepo cannot
+  // exhaust the host's memory: the ceiling is on services in flight, not on
+  // services registered. Default: one per GB of system RAM, clamped to 2..12.
+  maxWarmWorkers?: number;
 }
 
 // Per-service runtime overrides, keyed like `servicePackaging` (directory
@@ -290,7 +308,7 @@ export interface LSSConfig {
 // subkey) so a partial edit never drops sibling settings like `branding.logo`;
 // every other kind replaces the key wholesale. A top-level null deletes the key.
 interface ConfigKeySpec {
-  kind: 'port' | 'positiveInt' | 'boolean' | 'string' | 'stringArray' | 'stringRecord' | 'object';
+  kind: 'port' | 'positiveInt' | 'nonNegativeInt' | 'boolean' | 'string' | 'stringArray' | 'stringRecord' | 'object';
   enum?: readonly string[];
   // Fixed-shape object blocks: every subkey is validated against its own spec
   // and unknown subkeys are rejected — a garbage nested value would otherwise
@@ -345,6 +363,9 @@ const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
       watch: { kind: 'boolean' },
       invokePortOffset: { kind: 'positiveInt' },
       invokeHost: { kind: 'string' },
+      lazy: { kind: 'boolean' },
+      idleTimeoutMs: { kind: 'nonNegativeInt' },
+      maxWarmWorkers: { kind: 'nonNegativeInt' },
     },
   },
   serviceRuntime: {
@@ -425,7 +446,7 @@ const CONFIG_ENV_OVERRIDES: Record<string, string[]> = {
   packageTimeoutMs: ['LSS_PACKAGE_TIMEOUT_MS'],
   lambdaRuntime: ['LSS_LAMBDA_RUNTIME', 'LSS_LAMBDA_EXECUTION', 'LSS_LAMBDA_WATCH', 'LSS_INVOKE_HOST'],
   engine: ['LSS_ENGINE'],
-  selfEngine: ['LSS_ENGINE_PORT'],
+  selfEngine: ['LSS_ENGINE_PORT', 'LSS_ENGINE_DATA_DIR'],
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -442,6 +463,11 @@ function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string
       return Number.isInteger(value) && (value as number) > 0
         ? null
         : `"${key}" must be a positive integer`;
+    // 0 is meaningful for these (idleTimeoutMs: 0 = never unload).
+    case 'nonNegativeInt':
+      return Number.isInteger(value) && (value as number) >= 0
+        ? null
+        : `"${key}" must be an integer >= 0`;
     case 'boolean':
       return typeof value === 'boolean' ? null : `"${key}" must be a boolean`;
     case 'string':
@@ -671,6 +697,15 @@ export class ConfigManager {
         port: parseInt(process.env.LSS_ENGINE_PORT, 10),
       };
     }
+    // Give every instance its own engine state without editing a config file:
+    // `LSS_ENGINE_DATA_DIR=... LSS_ENGINE_PORT=... lss start` is enough to run a
+    // second stack (a test run, a second checkout) beside the dev one.
+    if (process.env.LSS_ENGINE_DATA_DIR) {
+      this.config.selfEngine = {
+        ...this.config.selfEngine,
+        dataDir: process.env.LSS_ENGINE_DATA_DIR,
+      };
+    }
   }
 
   getConfig(): LSSConfig {
@@ -826,6 +861,30 @@ export class ConfigManager {
     return this.config.lambdaRuntime?.invokePortOffset ?? 10000;
   }
 
+  // Defer forking a service's worker to its first invocation. On by default:
+  // one Node process per registered service is ~48 MB, which a 40-service
+  // monorepo pays entirely up front for handlers it may never call.
+  isLambdaRuntimeLazy(): boolean {
+    return this.config.lambdaRuntime?.lazy ?? true;
+  }
+
+  // A worker only stays resident while it is being used. 0 disables unloading.
+  getLambdaIdleTimeoutMs(): number {
+    const raw = this.config.lambdaRuntime?.idleTimeoutMs;
+    if (raw === undefined) return 60_000;
+    return typeof raw === 'number' && raw > 0 ? raw : 0;
+  }
+
+  // Ceiling on resident workers. Default: one per GB of system RAM, clamped to
+  // 2..12 — the point is that the host's memory is bounded by how many services
+  // are in flight, never by how many are registered. 0 disables the ceiling.
+  getLambdaMaxWarmWorkers(): number {
+    const raw = this.config.lambdaRuntime?.maxWarmWorkers;
+    if (typeof raw === 'number' && raw >= 0) return Math.floor(raw);
+    const gib = Math.floor(os.totalmem() / (1024 ** 3));
+    return Math.max(2, Math.min(12, gib));
+  }
+
   getInvokeHost(): string {
     if (this.config.lambdaRuntime?.invokeHost) {
       return this.config.lambdaRuntime.invokeHost;
@@ -869,7 +928,7 @@ export class ConfigManager {
     const selfEngine = this.config.selfEngine ?? {};
     const stateDir = this.getStateDir();
     const rawDataDir = selfEngine.dataDir
-      ?? (stateDir ? path.join(stateDir, 'engine') : path.join(os.homedir(), '.lss', 'engine'));
+      ?? (stateDir ? path.join(stateDir, 'engine') : this.homeStateDir('engine'));
     return {
       port: selfEngine.port ?? 14566,
       dataDir: path.isAbsolute(rawDataDir) ? rawDataDir : path.resolve(process.cwd(), rawDataDir),
@@ -893,9 +952,18 @@ export class ConfigManager {
       port,
       endpoint: `http://localhost:${port}`,
       // Mirrors the self-engine default so both persistence roots sit side by
-      // side (<stateDir>/aoss for test isolation, else ~/.lss/aoss).
-      dataDir: stateDir ? path.join(stateDir, 'aoss') : path.join(os.homedir(), '.lss', 'aoss'),
+      // side (<stateDir>/aoss for test isolation, else the per-project dir
+      // under ~/.lss).
+      dataDir: stateDir ? path.join(stateDir, 'aoss') : this.homeStateDir('aoss'),
     };
+  }
+
+  // Fallback state root when the config declares no stateDir. Scoped to this
+  // project: a flat ~/.lss/<kind> meant every project on the machine shared one
+  // set of DynamoDB tables, queues and OpenSearch indices, so opening a second
+  // repo silently showed the first one's data.
+  private homeStateDir(kind: string): string {
+    return path.join(os.homedir(), '.lss', 'projects', projectCacheSegment(this.getProjectRoot()), kind);
   }
 
   // The AWS endpoint every SDK-based consumer (provisioner, explorers, seeds)

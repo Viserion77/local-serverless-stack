@@ -62,6 +62,10 @@ export class SelfEngineBackend implements EngineBackend {
       idleUnloadMs: config.idleUnloadMs,
       memoryBudgetMb: config.memoryBudgetMb,
       fsync: config.fsync,
+      // `persistence: false` must mean it: no dataDir, no catalogs, no WAL —
+      // otherwise tables and queues survive a restart and the run leaves a
+      // `.lss/engine/` tree behind.
+      persistence: config.persistence,
     });
     this.store = store;
     const bus = new EngineBus();

@@ -147,6 +147,17 @@ describe('listLiveTables / listTables', () => {
     ddbMock.on(ListTablesCommand).rejects(new Error('down'));
     expect(await manager.listLiveTables()).toEqual([]);
   });
+
+  // Past the 100-name page cap the seed↔table mismatch diagnostic would report
+  // every table beyond the first page as "seed file with no live table".
+  it('follows LastEvaluatedTableName across pages', async () => {
+    ddbMock
+      .on(ListTablesCommand, { ExclusiveStartTableName: undefined })
+      .resolves({ TableNames: ['A'], LastEvaluatedTableName: 'A' })
+      .on(ListTablesCommand, { ExclusiveStartTableName: 'A' })
+      .resolves({ TableNames: ['B'] });
+    expect(await manager.listLiveTables()).toEqual(['A', 'B']);
+  });
 });
 
 describe('list', () => {

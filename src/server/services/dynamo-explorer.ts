@@ -71,7 +71,15 @@ export class DynamoExplorer {
   private clients = new Map<string, DynamoDBClient>();
   private defaultRegion: string = 'us-east-1';
 
-  private constructor() {}
+  // Seed the default from the active engine config (same as S3Explorer /
+  // QueueInspector). Without this a project on any region but us-east-1 got an
+  // empty table list from every caller that omits `?region=` — the CLI, the
+  // LssClient and a bare curl all hit that path; only the dashboard was safe
+  // because it always sends the region it read from /api/config.
+  private constructor() {
+    const region = LocalStackManager.getInstance().getConfig().region;
+    if (region) this.defaultRegion = region;
+  }
 
   static getInstance(): DynamoExplorer {
     if (!DynamoExplorer.instance) DynamoExplorer.instance = new DynamoExplorer();
@@ -94,11 +102,25 @@ export class DynamoExplorer {
   }
 
   async listTables(region?: string): Promise<DynamoTableSummary[]> {
-    const client = this.clientFor(region);
-    const list = await client.send(new ListTablesCommand({}));
-    const names = list.TableNames ?? [];
+    const names = await this.listTableNames(region);
     const summaries = await Promise.all(names.map((name: string) => this.summarize(name, region)));
     return summaries.filter((s: DynamoTableSummary | null): s is DynamoTableSummary => s !== null);
+  }
+
+  // ListTables answers at most 100 names per page (AWS's hard limit, faithfully
+  // reproduced by the self engine). A monorepo with 40 services x 10 tables has
+  // 400 — following LastEvaluatedTableName is the difference between the
+  // dashboard showing everything and silently showing the first quarter.
+  async listTableNames(region?: string): Promise<string[]> {
+    const client = this.clientFor(region);
+    const names: string[] = [];
+    let exclusiveStartTableName: string | undefined;
+    do {
+      const page = await client.send(new ListTablesCommand({ ExclusiveStartTableName: exclusiveStartTableName }));
+      names.push(...(page.TableNames ?? []));
+      exclusiveStartTableName = page.LastEvaluatedTableName;
+    } while (exclusiveStartTableName);
+    return names;
   }
 
   private async summarize(name: string, region?: string): Promise<DynamoTableSummary | null> {

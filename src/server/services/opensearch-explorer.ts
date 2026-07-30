@@ -53,7 +53,13 @@ export class OpenSearchExplorer {
   private clients = new Map<string, OpenSearchServerlessClient>();
   private defaultRegion: string = 'us-east-1';
 
-  private constructor() {}
+  // Seeded from the active engine config so a caller that omits `?region=`
+  // (CLI, LssClient, curl) still reads the project's own region — see the
+  // matching note in DynamoExplorer.
+  private constructor() {
+    const region = LocalStackManager.getInstance().getConfig().region;
+    if (region) this.defaultRegion = region;
+  }
 
   static getInstance(): OpenSearchExplorer {
     if (!OpenSearchExplorer.instance) OpenSearchExplorer.instance = new OpenSearchExplorer();

@@ -20,6 +20,10 @@ function describeFunction(ref: ReturnType<FunctionRegistry['listFunctions']>[num
     triggers: ref.fn.triggers,
     invokePort: ref.service.invokePort,
     status: info.status,
+    // False while the service's worker has not been forked yet (lazy start or
+    // idle unload) — the function is still invocable, the first call just pays
+    // a cold start.
+    warm: info.warm ?? false,
     executionMode: info.resolvedMode,
     invocations: history.length,
     errors: history.filter(h => !h.ok).length,

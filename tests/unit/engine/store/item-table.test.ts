@@ -233,6 +233,39 @@ describe('compaction', () => {
     await table.compact();
     expect(fs.existsSync(snapshotPath('db/t'))).toBe(false);
   });
+
+  // Compaction used to be reachable only through dehydrate(), which the idle
+  // sweep and the LRU budget drive — so a table under sustained write load
+  // never compacted and its WAL grew for the whole session (replayed in full on
+  // the next boot). A hot table has to fold its own WAL back into the snapshot.
+  test('a hot table self-compacts once the WAL outgrows the resident data', async () => {
+    const table = makeStore().table('db/hot');
+    await table.hydrate();
+
+    // Rewrite the same few keys with a large payload: resident size stays flat
+    // while the WAL keeps growing, which is exactly the runaway case.
+    const payload = 'x'.repeat(64 * 1024);
+    for (let i = 0; i < 200; i++) {
+      table.put(`k${i % 4}`, `${i}:${payload}`);
+      await table.flush();
+    }
+
+    // Give the background compaction its turn.
+    for (let i = 0; i < 50 && fs.statSync(walPath('db/hot')).size > 8 * 1024 * 1024; i++) {
+      await sleep(20);
+    }
+
+    const walSize = fs.statSync(walPath('db/hot')).size;
+    const totalWritten = 200 * payload.length; // ~13 MB of appends
+    expect(walSize).toBeLessThan(totalWritten / 2);
+    expect(fs.existsSync(snapshotPath('db/hot'))).toBe(true);
+
+    // The fold must be lossless: a fresh store replays snapshot + WAL tail.
+    const replayed = makeStore().table('db/hot');
+    await replayed.hydrate();
+    expect(replayed.size()).toBe(4);
+    expect(replayed.get('k3')).toBe(`199:${payload}`);
+  });
 });
 
 describe('dehydrate / destroy', () => {

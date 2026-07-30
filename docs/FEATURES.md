@@ -34,7 +34,10 @@ by the live integration suite (`npm run test:integration`).
 |---|---|---|
 | `lss.config.json` / `.lssrc` | File config for ports, mode, edition, services, seeds, etc.; env vars override. | unit (`config-manager`, `cli`) |
 | `stateDir` | Per-instance PID/log directory so an isolated test instance never collides with the dev instance. | unit (`cli`, `config-manager`) + integration |
+| `LSS_ENGINE_DATA_DIR` | Points the self engine's state at an explicit directory from the environment. With `LSS_DASHBOARD_PORT` and `LSS_ENGINE_PORT` it is everything a second instance needs — no config file to write, nothing shared with the dev stack. | unit (`config-manager`) |
 | `LSS_CONFIG_PATH` passthrough | The CLI hands the chosen config to the spawned server so both loaders agree on ports/seedsDir/region/mode. | unit (`config-manager`) + integration |
+| Per-project state, no `stateDir` | With no `stateDir`, the engine `dataDir`, the aoss sidecar data dir and the artifact-extraction dir all fall back to `~/.lss/projects/<project-slug>-<hash>/…` instead of one shared path — two checkouts (or two examples) never read each other's tables, and re-registering in one no longer `rm -rf`s the code another instance's worker is running from. | unit (`config-manager`, `cache-manager`) |
+| No LocalStack env in self mode | `lss start` with `engine: "self"` exports **no** `LSS_LOCALSTACK_*` / `LOCALSTACK_AUTH_TOKEN` to the orchestrator (and therefore to every forked worker). Besides the leak, each exported key was reported by `GET /api/config` as env-overridden, greying it out in the Settings tab for a value the user never set. | unit (`cli`) |
 | Managed vs external mode | `mode: managed` runs a LocalStack container; `external` connects to a running one. | unit (`config-manager`) |
 | Edition / version / image / services / persistence / region | All configurable; sensible defaults (community/latest, us-east-1, dynamodb+sqs+sns+s3+lambda+events). | unit (`config-manager`) |
 | `GET /api/config` | Public-safe full config snapshot for the UI: engine kind/endpoint, self-engine + aoss sidecar + lambda-runtime blocks, packaging, `envOverrides` (keys masked by env vars). Secret values never appear — auth token → `hasAuthToken`, `packageEnv` → key names, `secrets` → count. | unit (`routes/config`) + integration |
@@ -84,6 +87,14 @@ LocalStack. `autoPackage` can run the packaging command on demand when the templ
 `POST /tables/:name/items{,/get,/delete}` — list/describe (key schema, GSI/LSI, stream, TTL), scan/query with
 filters, and item CRUD. Asserted by: unit (`dynamo-explorer`, `routes/dynamo`) + integration.
 
+**Region default and paging.** Every explorer (`dynamo`, `buckets`, `secrets`, `opensearch`, `queues`) accepts
+`?region=`; when it is omitted the configured `region` is used, not a hardcoded `us-east-1`. The dashboard
+always sends the region it read from `/api/config`, so a wrong default only ever hit the callers that omit it —
+the CLI, the `LssClient` and plain curl — which silently saw an empty stack on any project outside us-east-1.
+Table and queue listings follow their pagination tokens (`ListTables` caps a page at 100 names, `ListQueues` at
+1000), so a monorepo with 40 services × 10 tables lists all 400 instead of the first 100. Asserted by: unit
+(`explorer-region`, `dynamo-explorer`, `seed-manager`, `queue-inspector`, `resource-provisioner`).
+
 ## 7. S3 explorer (`/api/buckets`)
 
 `GET /`, `GET /:name`, `GET /:name/objects`, `GET /:name/objects/content`, `POST /:name/objects`,
@@ -116,8 +127,13 @@ port. Asserted by: unit (`dev/dynamo-proxy`).
 
 ## 10. Health & dashboard
 
-`GET /api/health` reports orchestrator + engine + dynamo-proxy status (the `localstack` field reports the
-active engine's health — LocalStack or self — kept under that name for compatibility). The Vue dashboard
+`GET /api/health` reports orchestrator + engine + dynamo-proxy status. Liveness of the **active** engine
+(LocalStack or self) is `engineRunning`; the older `localstack` field is a deprecated alias for it, kept for
+existing clients — it says "localstack" even when the self engine is what is running. `engine.kind` tells the
+two apart, and the dashboard reads it so no screen says "LocalStack" on a self-engine stack.
+
+Any `/api/*` path no router claims answers **404 with a JSON body**, not the SPA's `200 text/html` — a mistyped
+API path used to read as success to curl, to the `LssClient` and to any test asserting on the response. The Vue dashboard
 (served as a SPA) surfaces ten tabs — Overview / Services / Lambdas / APIs / Queues / S3 / DynamoDB /
 OpenSearch / Secrets / **Settings** — with a region selector and theme toggle; the Services list and service
 detail pages include the per-service resource breakdown with EventBridge buses & rules and OpenSearch
@@ -169,6 +185,7 @@ serverless-offline process running. See `docs/PRD_API_LAMBDA_EMULATION.md` for t
 |---|---|---|
 | Function & route registry | `sls package` registers functions, REST (`http`, payload v1) and HTTP API (`httpApi`, payload v2) routes and authorizers; persisted in the service cache and rehydrated on restart. | unit (`serverless-state-parser`, `function-registry`, `cache-manager`) |
 | Lambda runtime workers | One worker per service loads handlers lazily (warm starts), applies function env/timeout/context, captures per-invocation logs, restarts on crash. | unit (`api-gateway-events` helpers) + integration |
+| Lazy workers, idle unload and a warm ceiling | A worker is a Node process costing ~48 MB resident, and LSS is a development stack — a handler only needs to be resident while it is being used. `lambdaRuntime.lazy` (default **true**) forks on the first invocation instead of at registration; `idleTimeoutMs` (default **60000**) unloads a worker that has served nothing for a minute; `maxWarmWorkers` (default: one per GB of RAM, clamped 2..12) caps how many may be resident at once, evicting the least-recently-invoked. Together they make host memory a function of the services *in flight*, not the services *registered*. Handler resolution (and artifact extraction) still runs at registration, so broken packaging still fails there, and an in-flight invocation is never interrupted. Measured on 40 services / 400 lambdas / 400 tables: **2.0 GB → 128 MB** at rest, 329 MB right after invoking all 40 with a ceiling of 4, back to 132 MB once idle — next request still 23 ms. `GET /api/services` reports `runtimeWarm`, `GET /api/lambdas` reports `warm`; `status` stays `online` either way, because the service serves an invoke regardless. | unit (`config-manager`, `routes/lambdas`, `routes/services`) |
 | Execution modes | `artifact` (extracted `sls package` zip — TS/JS uniform), `source` (direct require/import; TS uses Node native type stripping when available, then `esbuild-register`/`tsx`/`ts-node`), `auto` picks artifact when present. | unit (`config-manager`) + integration |
 | Invoke API (130xx) | `POST /2015-03-31/functions/{name}/invocations` with `X-Amz-Invocation-Type` (RequestResponse 200 / Event 202 / DryRun 204) and `X-Amz-Function-Error` — same contract the LocalStack event proxies already call. | integration |
 | Gateway proxy (30xx) | Multi-port routing (literal > `{param}` > `{proxy+}` > `$default`; exact method > ANY), API Gateway payload v1/v2 events, v1 malformed → 502, v2 inferred responses, CORS preflight, `port-conflict` status instead of failing registration. | unit (`api-gateway-events`) + integration |

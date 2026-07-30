@@ -1096,19 +1096,35 @@ export const handler = async (event, context) => {
     return { tables, queues, topics, buckets, collections };
   }
 
+  // Paginated: ListTables caps a page at 100 names, and GET /api/resources is
+  // built from this list — a 40-service monorepo would show only its first 100
+  // tables in the dashboard and in the client.
   private async listDynamoDBTables(client: DynamoDBClient = this.dynamoClient): Promise<string[]> {
     try {
-      const response = await client.send(new ListTablesCommand({}));
-      return response.TableNames || [];
+      const names: string[] = [];
+      let exclusiveStartTableName: string | undefined;
+      do {
+        const response = await client.send(new ListTablesCommand({ ExclusiveStartTableName: exclusiveStartTableName }));
+        names.push(...(response.TableNames || []));
+        exclusiveStartTableName = response.LastEvaluatedTableName;
+      } while (exclusiveStartTableName);
+      return names;
     } catch {
       return [];
     }
   }
 
+  // Paginated for the same reason as the tables above (ListQueues caps at 1000).
   private async listSQSQueues(client: SQSClient = this.sqsClient): Promise<string[]> {
     try {
-      const response = await client.send(new ListQueuesCommand({}));
-      return response.QueueUrls?.map(url => url.split('/').pop()!) || [];
+      const urls: string[] = [];
+      let nextToken: string | undefined;
+      do {
+        const response = await client.send(new ListQueuesCommand({ NextToken: nextToken }));
+        urls.push(...(response.QueueUrls || []));
+        nextToken = response.NextToken;
+      } while (nextToken);
+      return urls.map(url => url.split('/').pop()!);
     } catch {
       return [];
     }

@@ -188,7 +188,14 @@ export interface SeedClearResult {
 
 export interface HealthInfo {
   status: string;
+  /** @deprecated reads "localstack" even on the self engine — use engineRunning. */
   localstack: boolean;
+  engineRunning?: boolean;
+  engine?: {
+    kind: 'localstack' | 'self';
+    running: boolean;
+    endpoint: string;
+  };
   dynamoProxy: {
     enabled: boolean;
     running: boolean;
@@ -226,6 +233,11 @@ export interface LambdaRuntimeInfo {
   watch: boolean | null;
   invokePortOffset: number;
   invokeHost: string;
+  // Residency policy, already resolved by the server (maxWarmWorkers' default
+  // is derived from the host's RAM, so the raw value is rarely the useful one).
+  lazy: boolean;
+  idleTimeoutMs: number;
+  maxWarmWorkers: number;
 }
 
 // Per-service packaging override with env VALUES redacted to key names.
@@ -320,6 +332,9 @@ export interface LssConfigUpdate {
     watch?: boolean | null;
     invokePortOffset?: number;
     invokeHost?: string | null;
+    lazy?: boolean;
+    idleTimeoutMs?: number;
+    maxWarmWorkers?: number;
   };
   selfEngine?: {
     port?: number;

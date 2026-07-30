@@ -1373,6 +1373,28 @@ describe('listAllResources', () => {
     expect(result).toEqual({ tables: ['t1'], queues: ['q1'], topics: ['topic1'], buckets: ['b1'], collections: ['products'] });
   });
 
+  // GET /api/resources is built from these lists. ListTables caps a page at
+  // 100 names and ListQueues at 1000 — a 40-service monorepo crosses both.
+  it('pages through ListTables and ListQueues', async () => {
+    dynamoMock
+      .on(ListTablesCommand, { ExclusiveStartTableName: undefined })
+      .resolves({ TableNames: ['t1'], LastEvaluatedTableName: 't1' })
+      .on(ListTablesCommand, { ExclusiveStartTableName: 't1' })
+      .resolves({ TableNames: ['t2'] });
+    sqsMock
+      .on(ListQueuesCommand, { NextToken: undefined })
+      .resolves({ QueueUrls: ['http://localhost:4566/000/q1'], NextToken: 'p2' })
+      .on(ListQueuesCommand, { NextToken: 'p2' })
+      .resolves({ QueueUrls: ['http://localhost:4566/000/q2'] });
+    snsMock.on(ListTopicsCommand).resolves({ Topics: [] });
+    s3Mock.on(ListBucketsCommand).resolves({ Buckets: [] });
+    openSearchMock.on(ListCollectionsCommand).resolves({ collectionSummaries: [] });
+
+    const result = await provisioner.listAllResources();
+    expect(result.tables).toEqual(['t1', 't2']);
+    expect(result.queues).toEqual(['q1', 'q2']);
+  });
+
   it('builds fresh clients for a different region', async () => {
     dynamoMock.on(ListTablesCommand).resolves({ TableNames: [] });
     sqsMock.on(ListQueuesCommand).resolves({ QueueUrls: [] });

@@ -11,13 +11,18 @@ import crypto from 'crypto';
 import { fileURLToPath } from 'url';
 import AdmZip from 'adm-zip';
 import { ConfigManager, LambdaExecutionMode } from './config-manager.js';
+import { projectCacheSegment } from './cache-manager.js';
 import { FunctionRegistry, ServiceEntry } from './function-registry.js';
 import { resolveArtifacts } from './artifact-resolver.js';
 import type { RegisteredFunction } from './serverless-state-parser.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-export type RuntimeStatus = 'stopped' | 'starting' | 'online' | 'error';
+// `idle` is internal: the service is registered and ready, but its worker has
+// not been forked yet (lazy mode) or was unloaded after sitting unused.
+// getRuntimeInfo() reports it as `online` with `warm: false`, because for every
+// consumer — dashboard, routes, dispatch — it means "an invoke will be served".
+export type RuntimeStatus = 'stopped' | 'idle' | 'starting' | 'online' | 'error';
 
 export interface InvokeResult {
   ok: boolean;
@@ -49,7 +54,11 @@ export function httpStatusOf(payload: unknown): number | undefined {
 }
 
 export interface RuntimeInfo {
+  // Never 'idle' — see the RuntimeStatus note; use `warm` to tell a forked
+  // worker from one that will be forked on demand.
   status: RuntimeStatus;
+  // False when no worker process is alive yet (lazy start or idle unload).
+  warm?: boolean;
   executionMode?: LambdaExecutionMode;
   resolvedMode?: 'artifact' | 'source';
   handlerRoot?: string;
@@ -84,6 +93,8 @@ interface ServiceRuntime {
   restartCount: number;
   lastRestartAt: number;
   history: InvocationRecord[];
+  // Set while a worker is alive and idleTimeoutMs is configured.
+  idleTimer?: NodeJS.Timeout;
 }
 
 const HISTORY_LIMIT = 50;
@@ -128,6 +139,15 @@ export class LambdaRuntimeManager {
       history: this.runtimes.get(entry.name)?.history ?? [],
     };
     this.runtimes.set(entry.name, runtime);
+
+    // Lazy (default): resolve where the handlers live now — so an unusable
+    // artifact still fails loudly at registration — but leave the fork to the
+    // first invocation. A worker is ~48 MB resident; a 40-service monorepo was
+    // paying ~1.9 GB before a single handler ran.
+    if (this.configManager.isLambdaRuntimeLazy()) {
+      if (this.resolveHandlerRootInto(runtime)) runtime.status = 'idle';
+      return;
+    }
     this.startWorker(runtime);
   }
 
@@ -143,6 +163,7 @@ export class LambdaRuntimeManager {
     if (!runtime) return;
     runtime.status = 'stopped';
     runtime.error = undefined;
+    this.clearIdleTimer(runtime);
     const worker = runtime.worker;
     runtime.worker = undefined;
     if (worker) {
@@ -171,13 +192,72 @@ export class LambdaRuntimeManager {
     await this.syncService(runtime.entry);
   }
 
+  // Drop a live worker back to `idle` (the next invoke re-forks it). Never
+  // interrupts an in-flight invocation; returns false when it declined.
+  private unloadWorker(runtime: ServiceRuntime, reason: string): boolean {
+    if (runtime.status !== 'online' || runtime.pending.size > 0) return false;
+    this.clearIdleTimer(runtime);
+    const worker = runtime.worker;
+    runtime.worker = undefined;
+    runtime.status = 'idle';
+    worker?.removeAllListeners();
+    worker?.kill('SIGTERM');
+    console.log(`💤 Lambda runtime for "${runtime.entry.name}" unloaded (${reason})`);
+    return true;
+  }
+
+  // Unload a worker that has served nothing for idleTimeoutMs. LSS is a
+  // development stack: a handler only needs to be resident while it is in use,
+  // and re-forking costs ~20 ms.
+  private armIdleUnload(runtime: ServiceRuntime): void {
+    this.clearIdleTimer(runtime);
+    const timeoutMs = this.configManager.getLambdaIdleTimeoutMs();
+    if (!timeoutMs || !this.configManager.isLambdaRuntimeLazy()) return;
+    runtime.idleTimer = setTimeout(() => {
+      runtime.idleTimer = undefined;
+      this.unloadWorker(runtime, `idle for ${timeoutMs} ms`);
+    }, timeoutMs);
+    runtime.idleTimer.unref();
+  }
+
+  // Hard ceiling on resident workers, enforced when one comes online: evict the
+  // least-recently-invoked idle worker until the count is back under the cap.
+  // Without it, a burst that touches every service inside the idle window (a
+  // full test run, a boot script) would still hold N x ~48 MB at once — the
+  // ceiling is what keeps host memory a function of services *in flight*
+  // rather than services registered.
+  private enforceWarmCap(justStarted: ServiceRuntime): void {
+    const max = this.configManager.getLambdaMaxWarmWorkers();
+    if (!max || !this.configManager.isLambdaRuntimeLazy()) return;
+    for (;;) {
+      const warm = [...this.runtimes.values()].filter(r => r.worker);
+      if (warm.length <= max) return;
+      const victim = warm
+        .filter(r => r !== justStarted && r.status === 'online' && r.pending.size === 0)
+        .sort((a, b) => (a.lastInvokedAt ?? a.startedAt ?? 0) - (b.lastInvokedAt ?? b.startedAt ?? 0))[0];
+      // Nothing evictable right now (everything else is busy or still booting):
+      // the cap is exceeded transiently rather than blocking the invocation.
+      if (!victim || !this.unloadWorker(victim, `warm-worker cap of ${max} reached`)) return;
+    }
+  }
+
+  private clearIdleTimer(runtime: ServiceRuntime): void {
+    if (runtime.idleTimer) {
+      clearTimeout(runtime.idleTimer);
+      runtime.idleTimer = undefined;
+    }
+  }
+
   getRuntimeInfo(serviceName: string): RuntimeInfo {
     const runtime = this.runtimes.get(serviceName);
     if (!runtime) {
       return { status: 'stopped', invocations: 0, errors: 0 };
     }
     return {
-      status: runtime.status,
+      // `idle` means "ready, not forked yet" — every consumer treats it as
+      // online; `warm` is the field that distinguishes the two.
+      status: runtime.status === 'idle' ? 'online' : runtime.status,
+      warm: Boolean(runtime.worker),
       executionMode: runtime.executionMode,
       resolvedMode: runtime.resolvedMode,
       handlerRoot: runtime.handlerRoot,
@@ -206,6 +286,19 @@ export class LambdaRuntimeManager {
         `Lambda runtime for service "${serviceName}" is not running${runtime?.error ? ` (${runtime.error})` : ''}`,
         0,
       );
+    }
+
+    // Lazy runtime, first invocation (or first after an idle unload): this is
+    // the cold start the deferred fork trades the resident memory for.
+    if (runtime.status === 'idle') {
+      this.startWorker(runtime);
+      if ((runtime.status as RuntimeStatus) === 'error') {
+        return this.errorResult(
+          'RuntimeUnavailable',
+          `Lambda runtime for service "${serviceName}" failed to start (${runtime.error})`,
+          0,
+        );
+      }
     }
 
     if (runtime.status === 'starting') {
@@ -253,6 +346,7 @@ export class LambdaRuntimeManager {
 
     runtime.invocations++;
     runtime.lastInvokedAt = Date.now();
+    this.armIdleUnload(runtime);
     if (!result.ok) runtime.errors++;
     runtime.history.push({
       at: startedAt,
@@ -268,20 +362,27 @@ export class LambdaRuntimeManager {
     return result;
   }
 
-  private startWorker(runtime: ServiceRuntime): void {
-    let handlerRoot: string;
-    let resolvedMode: 'artifact' | 'source';
+  // Resolve (and, in artifact mode, extract) where this service's handlers
+  // live. Returns false and parks the runtime in `error` when that fails, so
+  // an unusable registration is reported at registration time even when the
+  // fork itself is deferred.
+  private resolveHandlerRootInto(runtime: ServiceRuntime): boolean {
     try {
-      ({ handlerRoot, resolvedMode } = this.resolveHandlerRoot(runtime.entry, runtime.executionMode));
+      const { handlerRoot, resolvedMode } = this.resolveHandlerRoot(runtime.entry, runtime.executionMode);
+      runtime.handlerRoot = handlerRoot;
+      runtime.resolvedMode = resolvedMode;
+      runtime.error = undefined;
+      return true;
     } catch (err) {
       runtime.status = 'error';
       runtime.error = err instanceof Error ? err.message : String(err);
       console.error(`❌ Lambda runtime for "${runtime.entry.name}": ${runtime.error}`);
-      return;
+      return false;
     }
+  }
 
-    runtime.handlerRoot = handlerRoot;
-    runtime.resolvedMode = resolvedMode;
+  private startWorker(runtime: ServiceRuntime): void {
+    if (!this.resolveHandlerRootInto(runtime)) return;
     runtime.status = 'starting';
     runtime.error = undefined;
 
@@ -319,7 +420,9 @@ export class LambdaRuntimeManager {
       if (msg?.type === 'ready') {
         runtime.status = 'online';
         runtime.startedAt = Date.now();
-        console.log(`✅ Lambda runtime online for "${runtime.entry.name}" (${resolvedMode} mode, ${runtime.entry.functions.length} functions)`);
+        console.log(`✅ Lambda runtime online for "${runtime.entry.name}" (${runtime.resolvedMode} mode, ${runtime.entry.functions.length} functions)`);
+        this.armIdleUnload(runtime);
+        this.enforceWarmCap(runtime);
         const queued = runtime.queue;
         runtime.queue = [];
         queued.forEach(release => release());
@@ -393,6 +496,12 @@ export class LambdaRuntimeManager {
 
   // Extract artifact zips into a content-addressed dir under ~/.lss so repeated
   // registrations with unchanged artifacts reuse the same extraction.
+  //
+  // Scoped per project, like the template cache: the path used to be keyed on
+  // the service name alone, so two orchestrators serving different checkouts
+  // that both own a service called "api" shared one directory — and the
+  // stale-extraction rmSync below would delete the code the other instance's
+  // worker was running from.
   private extractArtifacts(serviceName: string, artifacts: string[]): string {
     const stamp = artifacts
       .map(p => {
@@ -401,7 +510,10 @@ export class LambdaRuntimeManager {
       })
       .join('|');
     const hash = crypto.createHash('sha256').update(stamp).digest('hex').slice(0, 12);
-    const baseDir = path.join(os.homedir(), '.lss', 'orchestrator', 'runtime', serviceName);
+    const baseDir = path.join(
+      os.homedir(), '.lss', 'orchestrator', 'runtime',
+      projectCacheSegment(this.configManager.getProjectRoot()), serviceName,
+    );
     const targetDir = path.join(baseDir, hash);
 
     if (!fs.existsSync(targetDir)) {

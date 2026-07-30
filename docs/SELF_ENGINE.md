@@ -143,12 +143,27 @@ and non-fatal (a failure warns and boot continues).
 
 ## Storage & footprint
 
-Data lives under `dataDir` (default `~/.lss/engine`): JSON catalogs for
-metadata, JSONL snapshot + WAL per DynamoDB table / S3 object index / OpenSearch
-index, S3 bodies as content-addressed blobs. Registration writes metadata only;
-item data hydrates on first access (streamed line-by-line) and dehydrates after
-`idleUnloadMs` or under `memoryBudgetMb` LRU pressure. SQS messages are
-memory-only (snapshotted on graceful shutdown when `persistence` is on).
+Data lives under `dataDir` (default `<stateDir>/engine`, or
+`~/.lss/projects/<project-slug>-<hash>/engine` when no `stateDir` is set — the
+home fallback is scoped per project so two checkouts never share one set of
+tables): JSON catalogs for metadata, JSONL snapshot + WAL per DynamoDB table /
+S3 object index / OpenSearch index, S3 bodies as content-addressed blobs.
+Registration writes metadata only; item data hydrates on first access (streamed
+line-by-line) and dehydrates after `idleUnloadMs` or under `memoryBudgetMb` LRU
+pressure. SQS messages are memory-only (snapshotted on graceful shutdown when
+`persistence` is on).
+
+A table's WAL folds back into its snapshot on dehydrate **and** on its own once
+it outgrows both 4 MB and twice the table's resident size — a table written to
+continuously never goes idle, and without that its WAL would grow for the whole
+session and be replayed in full on the next boot.
+
+**`persistence: false` means in-memory.** The engine swaps the file-backed store
+for a heap-only one: `dataDir` is never created, no catalog/WAL/blob is written,
+and every boot starts empty. That is the mode for an automated test run that
+needs a guaranteed clean slate and no leftover files; `idleUnloadMs` /
+`memoryBudgetMb` are inert there, since with no snapshot on disk an eviction
+would be data loss.
 
 Crash-safety bar (a dev tool, stated honestly): a hard crash may lose the last
 ~20 ms of writes. Ground truth is regenerable — re-register the services and

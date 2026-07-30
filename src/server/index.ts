@@ -23,6 +23,7 @@ import { LambdaRuntimeManager } from './services/lambda-runtime-manager.js';
 import { GatewayManager } from './services/gateway-manager.js';
 import { SourceWatcher } from './services/source-watcher.js';
 import { startDynamoProxy } from './dev/dynamo-proxy.js';
+import { applyRegionToExplorers } from './services/explorer-region.js';
 import type { AossSidecarHandle } from './engine/aoss-sidecar.js';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -56,9 +57,11 @@ app.get('/api/health', (_req, res) => {
   const engine = EngineManager.getInstance();
   res.json({
     status: 'ok',
-    // Kept for client/UI compatibility: truthy when the ACTIVE engine
-    // (LocalStack or self) is healthy.
+    // Deprecated alias for engineRunning, kept so older clients keep working.
+    // It says "localstack" even when the self engine is the one running, which
+    // is exactly the naming the dashboard now avoids.
     localstack: engine.isRunning(),
+    engineRunning: engine.isRunning(),
     engine: engine.healthDetail(),
     dynamoProxy: {
       enabled: configManager.isEnableDynamoProxy(),
@@ -71,6 +74,15 @@ app.get('/api/health', (_req, res) => {
       port: configManager.getAossSidecarConfig().port,
     },
   });
+});
+
+// Anything under /api that no router claimed is a 404 in JSON, not the SPA.
+// Without this the catch-all below answers 200 text/html for a mistyped API
+// path, which reads as success to curl, to the LssClient and to any test
+// asserting on the response — the single most confusing failure mode when
+// driving LSS from an automated suite.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `No such API route: ${req.method} /api${req.path}` });
 });
 
 // Serve frontend build (fallback for SPA)
@@ -116,9 +128,25 @@ async function start() {
       }
     }
 
-    app.listen(PORT, () => {
+    // An EADDRINUSE on the dashboard port has to be a named, actionable
+    // failure: without an 'error' listener it surfaces as an unhandled
+    // exception AFTER the engine has already bound its own port and started
+    // its delivery loops, leaving a half-alive process behind.
+    const httpServer = app.listen(PORT, () => {
       console.log(`✅ Server running on http://localhost:${PORT}`);
       console.log(`✅ Engine (${engine.getKind()}) running on ${engine.getEndpoint()}`);
+    });
+    httpServer.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(
+          `❌ Orchestrator could not bind port ${PORT}: address already in use. ` +
+            'Another LSS instance (or another process) is listening there — stop it, ' +
+            'or set serverPort in lss.config.json to a free port.',
+        );
+      } else {
+        console.error('❌ Orchestrator HTTP server failed:', error);
+      }
+      void shutdown(1);
     });
 
     QueueInspector.getInstance().startPolling();
@@ -129,6 +157,12 @@ async function start() {
       onRuntimeReload: name => LambdaRuntimeManager.getInstance().restartRuntime(name),
       onFullReload: name => ServiceRegistrar.getInstance().reregister(name),
     });
+
+    // Every explorer answers requests that omit `?region=` — the CLI, the
+    // LssClient and plain curl all do. Pin their default to the configured
+    // region here so those callers see the same resources the dashboard does
+    // (which only worked because it always sends the region from /api/config).
+    applyRegionToExplorers(configManager.getRegion());
 
     // Seed Secrets Manager BEFORE reactivating services so any handler that
     // reads a secret on its first invocation (including relay-triggered handlers
@@ -162,8 +196,10 @@ async function start() {
   }
 }
 
-// Graceful shutdown
-async function shutdown() {
+// Graceful shutdown. `code` is non-zero when a fatal boot problem (e.g. the
+// dashboard port already taken) triggers the teardown, so the CLI reports the
+// failure instead of a clean stop.
+async function shutdown(code = 0) {
   console.log('\n🛑 Shutting down gracefully...');
   QueueInspector.getInstance().stopPolling();
   SourceWatcher.getInstance().unwatchAll();
@@ -174,11 +210,11 @@ async function shutdown() {
   await aossSidecar?.close();
   aossSidecar = null;
   await EngineManager.getInstance().stop();
-  process.exit(0);
+  process.exit(code);
 }
 
-process.on('SIGINT', shutdown);
+process.on('SIGINT', () => void shutdown());
 // The CLI stops the daemonized server with SIGTERM — same cleanup path.
-process.on('SIGTERM', shutdown);
+process.on('SIGTERM', () => void shutdown());
 
 start();

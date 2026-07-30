@@ -7,6 +7,7 @@ import {
 } from '@treeui/vue';
 import type { TNavMenuItem } from '@treeui/vue';
 import { currentRegion, regionOptions, applyConfiguredRegion } from './services/region';
+import { applyEngineKind, engineLabel } from './services/engine';
 import { api } from './services/api';
 import type { HealthInfo } from './services/api';
 import { branding, loadBranding, applyTheme } from './services/branding';
@@ -62,10 +63,15 @@ function onMenuSelect(value: string) {
 async function checkHealth() {
   try {
     health.value = await api.checkHealth();
+    applyEngineKind(health.value.engine?.kind);
   } catch (error) {
     console.error('Health check failed:', error);
   }
 }
+
+// `localstack` is the deprecated alias; prefer engineRunning when the server
+// is new enough to send it.
+const engineRunning = computed(() => health.value.engineRunning ?? health.value.localstack);
 
 onMounted(async () => {
   checkHealth();
@@ -74,7 +80,10 @@ onMounted(async () => {
   // but a region the user picks while /api/config is in flight must stick.
   const regionAtMount = currentRegion.value;
   api.getConfig()
-    .then((config) => applyConfiguredRegion(config.region, currentRegion.value !== regionAtMount))
+    .then((config) => {
+      applyConfiguredRegion(config.region, currentRegion.value !== regionAtMount);
+      applyEngineKind(config.engine.kind);
+    })
     .catch(() => { /* keep stored/default region */ });
   await loadBranding();
   theme.value =
@@ -112,10 +121,10 @@ onBeforeUnmount(() => {
       <template #header-end>
         <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
           <TBadge
-            :tone="health.localstack ? 'success' : 'danger'"
+            :tone="engineRunning ? 'success' : 'danger'"
             variant="soft"
           >
-            LocalStack: {{ health.localstack ? 'Running' : 'Offline' }}
+            {{ engineLabel }}: {{ engineRunning ? 'Running' : 'Offline' }}
           </TBadge>
           <TBadge
             v-if="health.dynamoProxy?.enabled"

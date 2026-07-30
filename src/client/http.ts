@@ -26,6 +26,13 @@ export interface RequestOptions {
   query?: Record<string, QueryValue>;
   /** Status codes treated as success in addition to 2xx (e.g. await-idle's 408). */
   okStatuses?: number[];
+  /**
+   * Per-request client timeout, overriding the client default. Required by any
+   * endpoint that BLOCKS server-side for a caller-chosen duration: with the
+   * shared 15 s default, await-idle's own 15 s default made the client abort at
+   * exactly the moment the server would have answered 408.
+   */
+  timeoutMs?: number;
 }
 
 export interface RequestContext {
@@ -82,7 +89,8 @@ async function doFetch(
 ): Promise<Response> {
   const url = ctx.baseUrl + path + buildQuery(opts.query);
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ctx.timeoutMs);
+  const timeoutMs = opts.timeoutMs ?? ctx.timeoutMs;
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
   const hasBody = opts.body !== undefined;
   try {
     return await fetch(url, {
@@ -96,7 +104,7 @@ async function doFetch(
     // an Error subclass across Node versions), so match on the name directly.
     const name = (err as { name?: string }).name;
     if (name === 'AbortError') {
-      throw new LssHttpError(`request to ${path} timed out after ${ctx.timeoutMs}ms`, {
+      throw new LssHttpError(`request to ${path} timed out after ${timeoutMs}ms`, {
         status: 0,
         statusText: 'timeout',
         path,

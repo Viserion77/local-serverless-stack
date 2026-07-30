@@ -121,6 +121,9 @@ router.get('/', async (_req: Request, res: Response) => {
           functionsCount: s.functions?.length ?? 0,
           routesCount: s.routes?.length ?? 0,
           runtimeStatus: runtime.status,
+          // Whether a worker process is actually alive — false means the
+          // service is ready but not yet forked (lazy start / idle unload).
+          runtimeWarm: runtime.warm ?? false,
           gateway,
         };
       }),

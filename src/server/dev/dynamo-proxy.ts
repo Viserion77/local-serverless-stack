@@ -45,5 +45,14 @@ export function startDynamoProxy(targetEndpoint: string, port = 8000) {
     console.log(`✅ DynamoDB proxy listening on http://localhost:${port} -> ${targetBase}`);
   });
 
+  // The proxy is an optional convenience: a busy port must degrade to a warning,
+  // never take the orchestrator down with an unhandled 'error' event.
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    const detail = error.code === 'EADDRINUSE'
+      ? `port ${port} is already in use — set dynamoProxyPort to a free port or disable enableDynamoProxy`
+      : error.message;
+    console.warn(`⚠️  DynamoDB proxy disabled: ${detail}`);
+  });
+
   return server;
 }

@@ -15,6 +15,7 @@ interface TableColumn {
 }
 import { api } from '../services/api';
 import type { ServiceSummary } from '../services/api';
+import { engineLabel } from '../services/engine';
 
 const toast = useToast();
 const services = ref<ServiceSummary[]>([]);
@@ -343,7 +344,7 @@ onBeforeUnmount(() => {
     <TConfirmDialog
       v-model:open="deleteDialogOpen"
       :title="`Delete service${deleteTarget ? ` “${deleteTarget}”` : ''}?`"
-      description="This removes the service from the cache and cleans up its provisioned resources in LocalStack."
+      :description="`This removes the service from the cache and cleans up its provisioned resources on the ${engineLabel}.`"
       confirm-label="Delete"
       cancel-label="Cancel"
       confirm-variant="danger"

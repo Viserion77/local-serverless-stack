@@ -25,6 +25,10 @@ export interface QueuesApi {
   purge(name: string, region?: string): Promise<{ success: true }>;
 }
 
+// Headroom on top of the server-side await-idle budget, so the 408 always wins
+// the race against the client abort.
+const AWAIT_IDLE_GRACE_MS = 5000;
+
 export function createQueuesApi(http: Http, defaultRegion?: string): QueuesApi {
   const reg = (r?: string) => r ?? defaultRegion;
   const base = (name: string) => `/api/queues/${encodeURIComponent(name)}`;
@@ -38,6 +42,12 @@ export function createQueuesApi(http: Http, defaultRegion?: string): QueuesApi {
         body: input ?? {},
         query: { region: reg(r) },
         okStatuses: [408], // additive to 2xx: 200 = drained, 408 = timed out (inspect `drained`)
+        // The server blocks for up to `timeoutMs` (its own default is 15 s,
+        // clamped to 120 s) and only then answers 408. The client's shared
+        // default is also 15 s, so without a longer per-request budget the
+        // abort and the 408 raced — the main waiting primitive of the whole
+        // test story resolved or threw depending on scheduling.
+        timeoutMs: Math.min(Math.max(input?.timeoutMs ?? 15000, 100), 120000) + AWAIT_IDLE_GRACE_MS,
       }),
     hold: (name, r) => http.json('POST', `${base(name)}/hold`, { query: { region: reg(r) } }),
     captured: (name, r) => http.json('GET', `${base(name)}/captured`, { query: { region: reg(r) } }),
