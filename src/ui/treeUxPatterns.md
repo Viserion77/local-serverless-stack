@@ -1,6 +1,6 @@
 # Necessidades do dashboard LSS para a TreeUI
 
-> **Versão do arquivo:** 14 — **última alteração:** agente LSS (consumidor `local-serverless-stack`), 2026-07-31.
+> **Versão do arquivo:** 16 — **última alteração:** agente LSS (consumidor `local-serverless-stack`), 2026-07-31.
 > Numeração própria deste arquivo, incrementada a cada edição sincronizada; independente da versão do
 > pacote `@treeui/vue`. Quem editar (consumidor ou TreeUI) incrementa a versão e registra-se aqui.
 
@@ -17,8 +17,11 @@ espera a API oficial da TreeUI, salvo exceção temporária explicitamente aprov
 
 Marcas, logotipos e identidades de empresas ou serviços **não** são demandas da TreeUI e **não**
 geram itens TREEUX. No LSS isso inclui os logotipos oficiais de **AWS/serviços AWS**, **LocalStack** e
-**Serverless Framework**, que seguem a política de marcas de [`ui-ux.md`](./ui-ux.md) e usam Simple
-Icons como fonte padronizada.
+**Serverless Framework**, que seguem a política de marcas de [`ui-ux.md`](./ui-ux.md). As marcas de
+serviços AWS vêm do pacote oficial **AWS Architecture Service Icons** (vendorizado em
+`src/ui/src/icons/aws/` e registrado no registry da TreeUI pelo próprio app, via
+`registerTreeIcons()`); Simple Icons segue como fonte padronizada das marcas não-AWS. Uma marca
+faltando é uma linha no catálogo do gerador do consumidor, nunca um item deste arquivo.
 
 > Base de referência atual do consumidor: `@treeui/vue@0.25.0`, `@treeui/icons@0.18.0`,
 > `@treeui/tokens@0.25.0`. Itens 001/002 seguem `na fila` — não vieram no 0.24 nem no 0.25;
@@ -151,6 +154,34 @@ Estados usados durante a conversa:
 ## Modelo para novos itens
 
 ```md
+### TREEUX-003 — primitivas de gráfico (timeline de spans e área de série temporal)
+
+- Estado: `aguardando resposta da TreeUI`
+- Nomes sugeridos: `TTimeline` (faixas de spans) e `TSparkArea` (área/step de série única)
+- Necessidade: o painel **Carga ao vivo** da Overview (`src/ui/src/components/ActivityPanel.vue`)
+  precisa mostrar (a) uma faixa por serviço com uma barra por invocação, posicionada por
+  início/duração — é assim que "o que rodou em paralelo" fica legível — e (b) uma área em degraus
+  do paralelismo ao longo da janela. A TreeUI hoje expõe `--tree-color-chart-1..8` (ou seja, já
+  assume consumo de dados visuais) mas nenhum componente que os consuma.
+- Uso observado (arquivo:linha, contagem): `src/ui/src/components/ActivityPanel.vue` — 1 área
+  (`polygon`) e N faixas (`svg` por serviço), 2 usos hoje; a página de Lambdas quer a mesma faixa
+  por função e a de Filas quer a área para profundidade de fila (3 consumidores previstos).
+- Restrição ou origem proibida, se houver: **exceção temporária em uso** — o painel desenha SVG
+  próprio com dois `style` inline de dimensionamento (`width:100%;height:64px` no gráfico e
+  `min-width:9rem` no rótulo da faixa). É CSS local, contra o contrato; está aqui declarado e sai
+  assim que houver API oficial.
+- Critério de saída:
+  - `TTimeline`: `rows: { label: string; spans: { start: number; end: number; tone?: 'default' | 'danger'; title?: string }[] }[]`,
+    `from`/`to` para a janela, tooltip nativo por span e `aria-label` por faixa.
+  - `TSparkArea`: `points: number[]`, `variant: 'step' | 'linear'`, altura por prop (não por CSS do
+    consumidor), rótulo direto do pico.
+  - Ambos precisam herdar os tokens de tema (claro/escuro) sem o consumidor passar cor.
+- Nota de acessibilidade que o contrato precisa respeitar: falha **não pode** ser codificada só por
+  cor — `--tree-color-status-success` e `--tree-color-status-error` ficam a ΔE 4.4 em deuteranopia
+  (medido). O painel hoje resolve com marcador de forma + contagem rotulada; a API oficial deve
+  permitir a mesma coisa (daí o `tone` por span **mais** um slot/prop de marcador).
+- Adoção pendente nos consumidores: trocar o SVG local do `ActivityPanel` pelos dois componentes.
+
 ### TREEUX-NNN — nome curto
 
 - Estado: `proposto`

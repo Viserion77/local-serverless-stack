@@ -1554,6 +1554,32 @@ describe('bin/cli.js helpers', () => {
       expect(out).toContain('registrado, não instalado, não empacotado');
     });
 
+    // Before the structured-warning refactor the server sent `warnings` as
+    // plain strings. A CLI newer than the orchestrator it talks to still has to
+    // print them verbatim — the renderer falls back to `String(warning)` rather
+    // than looking up `scan.warning.undefined` and dropping the line.
+    it('prints a legacy string warning from an older server verbatim', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        GET: {
+          status: 200,
+          body: JSON.stringify({
+            projectRoot: '/abs',
+            services: [
+              {
+                name: 'legacy', relPath: 'services/legacy', registered: false, installed: true, packaged: false,
+                warnings: ['no .serverless directory — run serverless package'],
+              },
+            ],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      await cli.scanServices();
+      const out = logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
+      expect(out).toContain('⚠ no .serverless directory — run serverless package');
+    });
+
     it('says so when nothing is found', async () => {
       mockFs.existsSync.mockReturnValue(true);
       // no `services` key at all — the CLI treats it as an empty list

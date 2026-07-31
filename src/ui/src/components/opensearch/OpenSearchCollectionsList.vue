@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TStack, TGrid, TStat, TEmptyState,
-  TSpinner, TAlert, TTag, TTable, TText, TInput,
+  TSpinner, TAlert, TTag, TTable, TText, TInput, TIcon,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { OpenSearchCollectionSummary, ResourceOwnersResponse } from '../../services/api';
@@ -96,7 +96,12 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
-          <TText weight="semibold">{{ t('opensearch.listTitle') }}</TText>
+          <!-- One brand per list-card header: the screen is Amazon OpenSearch
+               (the engine serves it as OpenSearch Serverless, 'aoss'). -->
+          <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TIcon name="aws-opensearch" />
+            <TText weight="semibold">{{ t('opensearch.listTitle') }}</TText>
+          </TStack>
           <TStack direction="horizontal" align="center" gap="1rem">
             <TInput
               v-model="search"
@@ -116,13 +121,22 @@ onBeforeUnmount(() => {
         v-else-if="!rows.length"
         :title="t('opensearch.emptyTitle')"
         :description="t('opensearch.emptyDescription')"
-      />
+      >
+        <template #icon>
+          <TIcon name="aws-opensearch" />
+        </template>
+      </TEmptyState>
 
+      <!-- Filter state, not a service state — stays a TreeUI functional icon. -->
       <TEmptyState
         v-else-if="!filteredRows.length"
         :title="t('opensearch.noMatchTitle')"
         :description="t('opensearch.noMatchDescription', { query: search })"
-      />
+      >
+        <template #icon>
+          <TIcon name="search-x" />
+        </template>
+      </TEmptyState>
 
       <TTable v-else :columns="columns" :rows="filteredRows" :aria-label="t('opensearch.listTitle')">
         <template #cell-name="{ row }">

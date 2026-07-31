@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TBadge, TStack, TGrid, TStat, TEmptyState,
-  TSpinner, TAlert, TTag, TTable, TInput, TText,
+  TSpinner, TAlert, TTag, TTable, TInput, TText, TIcon,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { DynamoTableSummary, SeedFileEntry } from '../../services/api';
@@ -180,7 +180,12 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
-          <TText weight="semibold">{{ t('dynamo.tablesTitle') }}</TText>
+          <!-- One brand per list-card header, never per row: the scale target
+               is ~10 tables per service across 40 services. -->
+          <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TIcon name="aws-dynamodb" />
+            <TText weight="semibold">{{ t('dynamo.tablesTitle') }}</TText>
+          </TStack>
           <TStack direction="horizontal" align="center" gap="1rem">
             <TInput
               v-model="search"
@@ -202,13 +207,24 @@ onBeforeUnmount(() => {
         v-else-if="!rows.length"
         :title="t('dynamo.emptyTablesTitle')"
         :description="t('dynamo.emptyTablesDesc')"
-      />
+      >
+        <template #icon>
+          <TIcon name="aws-dynamodb" />
+        </template>
+      </TEmptyState>
 
+      <!-- Deliberately NOT branded: this state is about the filter, not about
+           DynamoDB. The tables exist, the query matched none — so it keeps a
+           TreeUI functional icon. -->
       <TEmptyState
         v-else-if="!filteredRows.length"
         :title="t('dynamo.noMatchTitle')"
         :description="t('dynamo.noMatchDesc', { query: search })"
-      />
+      >
+        <template #icon>
+          <TIcon name="search-x" />
+        </template>
+      </TEmptyState>
 
       <TTable
         v-else

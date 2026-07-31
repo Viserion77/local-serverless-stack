@@ -153,6 +153,9 @@ watch(() => props.bucketName, () => {
         <TButton size="sm" variant="ghost" @click="emit('back')">
           <TIcon name="arrow-left" /> {{ t('buckets.backToBuckets') }}
         </TButton>
+        <!-- Detail-screen identity, decorative: the back link names the S3
+             bucket list this page came from. -->
+        <TIcon name="aws-s3" />
         <TText size="lg" weight="semibold">{{ bucketName }}</TText>
         <TBadge v-if="bucket?.versioning" tone="info" variant="soft">{{ t('buckets.versioning') }}</TBadge>
       </TStack>

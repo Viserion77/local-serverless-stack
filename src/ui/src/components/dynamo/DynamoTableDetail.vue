@@ -72,6 +72,9 @@ watch(() => props.tableName, load);
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
         <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> {{ t('dynamo.backTables') }}</TButton>
+        <!-- Detail-screen identity, decorative: the back link names the
+             DynamoDB table list this page came from. -->
+        <TIcon name="aws-dynamodb" />
         <TText size="lg" weight="semibold">{{ tableName }}</TText>
         <TBadge
           v-if="table?.status"

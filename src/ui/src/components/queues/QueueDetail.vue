@@ -107,6 +107,9 @@ watch(() => props.queueName, () => load());
         <TButton size="sm" variant="ghost" @click="emit('back')">
           <TIcon name="arrow-left" /> {{ t('queues.backToQueues') }}
         </TButton>
+        <!-- Detail-screen identity, decorative: the back link above already
+             says these are queues. -->
+        <TIcon name="aws-sqs" />
         <TText weight="semibold" size="lg">{{ queueName }}</TText>
         <TBadge v-if="queue?.fifo" tone="info" variant="soft">FIFO</TBadge>
       </TStack>
@@ -148,7 +151,14 @@ watch(() => props.queueName, () => load());
           <div style="padding-top: 1rem;">
             <TCard variant="outline">
               <template #header>
-                <TText weight="semibold">{{ t('queues.eventSourceMappings') }}</TText>
+                <!-- AWS::Lambda::EventSourceMapping resources, and every entry
+                     below is a Lambda function — a different service from the
+                     SQS queue that owns the page. The mark stays on the header
+                     rather than repeating on each consumer card. -->
+                <TStack direction="horizontal" gap="0.5rem" align="center">
+                  <TIcon name="aws-lambda" />
+                  <TText weight="semibold">{{ t('queues.eventSourceMappings') }}</TText>
+                </TStack>
               </template>
               <TStack
                 v-if="queue.consumers.length"

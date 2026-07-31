@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TTag, TSpinner, TAlert, TText, TLink,
+  TTag, TSpinner, TAlert, TText, TLink, TIcon,
 } from '@treeui/vue';
 import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
@@ -128,7 +128,12 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <TText weight="semibold">{{ t('queues.cardTitle') }}</TText>
+          <!-- Queues are Amazon SQS throughout the app (engine service id
+               'sqs'); the identity goes on the card header once. -->
+          <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TIcon name="aws-sqs" />
+            <TText weight="semibold">{{ t('queues.cardTitle') }}</TText>
+          </TStack>
           <TText tone="muted">{{ t('queues.liveRefresh') }}</TText>
         </TStack>
       </template>
@@ -141,7 +146,11 @@ onBeforeUnmount(() => {
         v-else-if="!queues.length"
         :title="t('queues.emptyTitle')"
         :description="t('queues.emptyDescription', { engine: ENGINE_LABEL })"
-      />
+      >
+        <template #icon>
+          <TIcon name="aws-sqs" />
+        </template>
+      </TEmptyState>
 
       <TTable v-else :columns="columns" :rows="rows" :aria-label="t('queues.tableAria')">
         <template #cell-name="{ row }">
@@ -191,6 +200,10 @@ onBeforeUnmount(() => {
           <TBadge tone="success" variant="soft">{{ row.processed }}</TBadge>
         </template>
 
+        <!-- Consumers are Lambda functions wired by event-source mappings — a
+             cross-service reference, which is the strongest case for a mark
+             inside a table cell. Decorative (the tag names the function), and
+             sized down so the filled tile does not outweigh a `sm` tag. -->
         <template #cell-consumers="{ row }">
           <TStack direction="horizontal" gap="0.25rem" wrap>
             <template v-if="(row.consumers as any[]).length">
@@ -200,6 +213,7 @@ onBeforeUnmount(() => {
                 size="sm"
                 :variant="c.enabled ? 'solid' : 'outline'"
               >
+                <template #icon><TIcon name="aws-lambda" size="14" /></template>
                 {{ c.functionName }}
               </TTag>
             </template>

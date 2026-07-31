@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TTag, TSpinner, TAlert, TDivider, TText, TLink, useToast,
+  TTag, TSpinner, TAlert, TDivider, TText, TLink, TIcon, useToast,
 } from '@treeui/vue';
 import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
@@ -141,12 +141,19 @@ onBeforeUnmount(() => {
         tone="info"
         :loading="loading"
       />
+      <!-- Routes are the Amazon API Gateway resource, so this tile carries the
+           brand. Its neighbours count LSS microservices and LSS gateway
+           listeners and deliberately stay unbranded. -->
       <TStat
         :label="t('apis.statRoutes')"
         :value="totals.routes"
         tone="info"
         :loading="loading"
-      />
+      >
+        <template #icon>
+          <TIcon name="aws-api-gateway" />
+        </template>
+      </TStat>
       <TStat
         :label="t('apis.statListenersOnline')"
         :value="totals.online"
@@ -167,7 +174,11 @@ onBeforeUnmount(() => {
       v-else-if="!apis.length"
       :title="t('apis.emptyTitle')"
       :description="t('apis.emptyDescription')"
-    />
+    >
+      <template #icon>
+        <TIcon name="aws-api-gateway" />
+      </template>
+    </TEmptyState>
 
     <TCard
       v-for="svc in apis"
@@ -221,12 +232,19 @@ onBeforeUnmount(() => {
             <TText family="mono">{{ row.path }}</TText>
           </template>
 
+          <!-- Every route target is a Lambda function: the mark makes the
+               API Gateway -> Lambda hop legible inside the table. Decorative
+               (the tag names the function), and sized down so the filled tile
+               does not outweigh a `sm` tag. -->
           <template #cell-functionName="{ row }">
             <RouterLink
               :to="`/lambdas/${encodeURIComponent(String(row.functionName))}`"
               style="text-decoration: none;"
             >
-              <TTag size="sm" variant="soft" clickable>{{ row.functionName }}</TTag>
+              <TTag size="sm" variant="soft" clickable>
+                <template #icon><TIcon name="aws-lambda" size="14" /></template>
+                {{ row.functionName }}
+              </TTag>
             </RouterLink>
           </template>
 

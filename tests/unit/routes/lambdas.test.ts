@@ -273,6 +273,23 @@ describe('GET /api/lambdas/activity', () => {
     expect(res.body.residency.warm).toBe(1);
   });
 
+  // `warm` only exists on a RuntimeInfo once a worker process has been forked;
+  // for a service that was registered but never invoked the flag is simply
+  // absent. The row must then read "cold" instead of leaking `undefined` into
+  // the panel, and must not be counted against the warm-worker cap.
+  it('reads a RuntimeInfo without a warm flag as cold', async () => {
+    registry.listServices.mockReturnValue([
+      { name: 'orders', functions: [{ name: 'a' }] },
+    ] as never);
+    // The suite-wide stub deliberately carries no `warm` key.
+
+    const res = await request(appWith()).get('/api/lambdas/activity');
+    expect(res.body.workers).toEqual([
+      { service: 'orders', status: 'online', warm: false, invocations: 2, errors: 1, functions: 1, executionMode: 'source' },
+    ]);
+    expect(res.body.residency.warm).toBe(0);
+  });
+
   it('surfaces recorded spans and the parallelism between them', async () => {
     const now = Date.now();
     const activity = InvocationActivity.getInstance();

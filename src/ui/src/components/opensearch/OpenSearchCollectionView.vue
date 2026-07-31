@@ -121,6 +121,9 @@ watch(() => props.name, load);
         <TButton size="sm" variant="ghost" @click="emit('back')">
           <TIcon name="arrow-left" /> {{ t('opensearch.backToCollections') }}
         </TButton>
+        <!-- Detail-screen identity, decorative: the back link names the
+             OpenSearch collection list this page came from. -->
+        <TIcon name="aws-opensearch" />
         <TText size="lg" weight="semibold">{{ name }}</TText>
         <TBadge tone="info" variant="soft">
           {{ t(indices.length === 1 ? 'opensearch.indexCountOne' : 'opensearch.indexCountOther', { count: indices.length }) }}

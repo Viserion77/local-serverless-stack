@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import {
   TCard, TButton, TStack, TGrid, TStat, TEmptyState,
-  TSpinner, TAlert, TTag, TTable, TInput, TModal, TBadge, TText, TCodeBlock, useToast,
+  TSpinner, TAlert, TTag, TTable, TInput, TModal, TBadge, TText, TCodeBlock, TIcon, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { SecretSummary, SecretDetail, SecretValue } from '../../services/api';
@@ -143,7 +143,12 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
-          <TText weight="semibold">Secrets Manager</TText>
+          <!-- The header is literally the AWS brand name; the mark is the same
+               identity in visual form. -->
+          <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TIcon name="aws-secrets-manager" />
+            <TText weight="semibold">Secrets Manager</TText>
+          </TStack>
           <TStack direction="horizontal" align="center" gap="1rem">
             <TInput v-model="search" :placeholder="t('secrets.filterPlaceholder')" style="min-width: 16rem;" />
             <TText tone="muted" size="xs">{{ t('secrets.autoRefresh') }}</TText>
@@ -159,13 +164,22 @@ onBeforeUnmount(() => {
         v-else-if="!rows.length"
         :title="t('secrets.emptyTitle')"
         :description="t('secrets.emptyBody')"
-      />
+      >
+        <template #icon>
+          <TIcon name="aws-secrets-manager" />
+        </template>
+      </TEmptyState>
 
+      <!-- Filter state, not a service state — stays a TreeUI functional icon. -->
       <TEmptyState
         v-else-if="!filteredRows.length"
         :title="t('secrets.noMatchTitle')"
         :description="t('secrets.noMatchBody', { query: search })"
-      />
+      >
+        <template #icon>
+          <TIcon name="search-x" />
+        </template>
+      </TEmptyState>
 
       <TTable v-else :columns="columns" :rows="filteredRows" :aria-label="t('secrets.tableLabel')">
         <template #cell-name="{ row }">

@@ -22,6 +22,10 @@ httpApi v2 simple-response authorizer written in TypeScript, and a cross-service
 resolved by ARN. Nothing the project supported on LocalStack needed LocalStack.
 
 ### Removed
+- **The v1 migration guards.** `engine: "localstack"` (file or `LSS_ENGINE`) and the retired
+  `--external` / `--pro` / `--self-engine` / `--localstack-token` flags no longer raise a dedicated
+  migration error — v2 has shipped, so an unknown key or flag is simply an unknown key or flag.
+  [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md) still documents the move.
 - **The LocalStack backend**: `src/server/engine/backends/localstack-backend.ts`,
   `src/server/services/localstack-manager.ts`, `src/server/engine/aoss-sidecar.ts` and the
   `EngineBackend` interface. `EngineManager` now owns the one engine.
@@ -53,6 +57,16 @@ resolved by ARN. Nothing the project supported on LocalStack needed LocalStack.
   replaced offline's execution model back in 0.7.x; this removes the last vestige.
 
 ### Added
+- **A live load panel on the Overview.** Which workers are actually resident (against the
+  `maxWarmWorkers` ceiling), what ran in the last 1/2/10 minutes, **how much of it overlapped**, and
+  what that costs the host — resident memory, free/total RAM, 1-minute load normalised by core
+  count. Backed by `GET /api/lambdas/activity` and a stack-wide, log-free ring of invocation spans
+  (`src/server/services/invocation-activity.ts`, capped at 1000): parallelism is reported as the
+  **peak** per time bucket, because an average hides exactly the burst that saturates a laptop. The
+  timeline puts service identity on the row axis rather than on colour (a 40-service monorepo has no
+  readable categorical palette), and a failed invocation carries a shape marker and a counted label
+  as well as the status colour — red/green sit at ΔE 4.4 under deuteranopia, so colour alone would
+  hide every error from a colourblind reader.
 - **One port for everything.** The dashboard, the REST API **and the AWS wire protocols** share one
   listener on `14566` by default: requests carrying positive AWS evidence (SigV4 `Authorization`,
   `X-Amz-Target`, any `x-amz-*` header, engine paths like `/_aoss` or `/2015-03-31/`) are demuxed to
@@ -77,6 +91,19 @@ resolved by ARN. Nothing the project supported on LocalStack needed LocalStack.
   proper nouns, config keys, commands and flags are deliberately never translated. This also fixes a
   smaller wart: parts of the CLI (the seed diagnostic, `lss scan`) printed Brazilian Portuguese
   regardless of environment; the CLI is now English by default and Portuguese on request.
+- **Official AWS service icons in the dashboard.** 64 marks from AWS's own **Architecture Service
+  Icons** pack (the 16 variant — `viewBox 0 0 24 24`, which is TreeUI's icon grid) are vendored as
+  geometry under `src/ui/src/icons/aws/` and registered into the TreeUI icon registry with
+  `registerTreeIcons()`, plus a `TIconRegistry` augmentation so `<TIcon name="aws-lambda" />`
+  typechecks like a built-in. 12 cover what LSS provides today (Lambda, DynamoDB, S3, SQS, SNS,
+  EventBridge, OpenSearch, Secrets Manager, API Gateway, CloudFormation, IAM — also standing for
+  STS — and CloudWatch — also standing for CloudWatch Logs); 52 more are a registered reserve. They
+  replace the generic glyphs on the sidebar, the Overview tiles and coverage rows, every
+  per-service resource breakdown, the Lambda trigger tags and each explorer's headers and empty
+  states — a screen listing eight AWS services no longer distinguishes them by a database/inbox/
+  target vocabulary. The artwork is an AWS trademark, reproduced unmodified and deliberately
+  theme-blind (`src/ui/src/icons/aws/NOTICE.md`); the ~41 MB pack is not committed, and
+  `npm run icons:aws` regenerates the checked-in output from it.
 - **Service discovery**: `GET /api/services/scan` + `lss scan` walk the project root (depth ≤ 6,
   dependency/build/VCS trees skipped, a service root is a leaf) and report every Serverless/osls
   service with `installed`/`packaged`/`registered` flags, the effective ports and package command

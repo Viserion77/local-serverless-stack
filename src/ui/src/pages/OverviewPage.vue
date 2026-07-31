@@ -10,6 +10,8 @@ import ActivityPanel from '../components/ActivityPanel.vue';
 import { api } from '../services/api';
 import { isOnboardingDone } from '../services/onboarding';
 import { useI18n } from '../i18n';
+import type { AwsIconName } from '../icons/aws';
+import { engineServiceIcon } from '../icons/resourceIcons';
 import type {
   HealthInfo, LambdaSummary, LssConfigSnapshot, PortEntry, ServiceApiInfo, ServiceSummary,
 } from '../services/api';
@@ -67,6 +69,21 @@ const engineTone = computed(() => (engineRunning.value ? 'success' : 'danger'));
 // What the engine reports it answers for — the truth, rather than a configured
 // wish list (v1 read it from a configured service allow-list).
 const emulatedServices = computed(() => health.value?.engine?.services ?? []);
+
+// The engine reports raw wire ids ('aoss', 'events'), which read as jargon on
+// their own — each one names one AWS service, so each tag carries that
+// service's official mark. The id → mark table lives in `icons/resourceIcons`
+// with the other service→mark decisions, and is exhaustive over the engine's
+// service union; `engineServiceIcon` returns null for an id from a newer
+// orchestrator, so it renders as text rather than under a wrong brand.
+//
+// Resolved here rather than in the template so the `null` case is a value the
+// template can branch on, instead of an index expression typed as if it always
+// hits.
+const emulatedServiceTags = computed(() => emulatedServices.value.map(id => ({
+  id,
+  icon: engineServiceIcon(id),
+})));
 const proxyEnabled = computed(() => Boolean(health.value?.dynamoProxy?.enabled));
 const proxyRunning = computed(() => Boolean(health.value?.dynamoProxy?.running));
 const autoPackage = computed(() => Boolean(config.value?.autoPackage));
@@ -93,31 +110,52 @@ function portKindLabel(kind: PortEntry['kind']): string {
   return t(portKindKeys[kind]);
 }
 
+/**
+ * One row of the coverage card.
+ *
+ * `icon` and `status` answer two different questions and must stay separate:
+ * the brand says WHICH AWS service the row is about, the status says whether
+ * LSS covers it yet. Annotating the computed is what keeps `icon` a registered
+ * icon name — an inferred object literal would widen it to `string`, which
+ * `TIcon`'s `name` does not accept.
+ */
+interface CoveredResource {
+  type: string;
+  description: string;
+  status: 'covered' | 'planned';
+  to: string | null;
+  icon: AwsIconName;
+}
+
 // Computed (not a plain const) for the same reason: t() must run per render.
-const coveredResources = computed(() => [
+const coveredResources = computed<CoveredResource[]>(() => [
   {
     type: t('overview.coveredSnsTitle'),
     description: t('overview.coveredSnsDescription'),
-    status: 'covered' as const,
+    status: 'covered',
     to: null,
+    icon: 'aws-sns',
   },
   {
     type: t('overview.coveredSqsTitle'),
     description: t('overview.coveredSqsDescription'),
-    status: 'covered' as const,
+    status: 'covered',
     to: '/queues',
+    icon: 'aws-sqs',
   },
   {
     type: t('overview.coveredDynamoTitle'),
     description: t('overview.coveredDynamoDescription'),
-    status: 'covered' as const,
+    status: 'covered',
     to: '/dynamo',
+    icon: 'aws-dynamodb',
   },
   {
     type: t('overview.coveredS3Title'),
     description: t('overview.coveredS3Description'),
-    status: 'covered' as const,
+    status: 'covered',
     to: '/buckets',
+    icon: 'aws-s3',
   },
 ]);
 
@@ -250,10 +288,22 @@ onBeforeUnmount(() => {
             </TDescriptionItem>
             <TDescriptionItem :label="t('overview.emulatedServices')">
               <TStack direction="horizontal" gap="0.25rem" wrap justify="flex-end">
-                <TTag v-for="svc in emulatedServices" :key="svc" size="sm" variant="soft">
-                  {{ svc }}
+                <!-- The mark is decorative: the id beside it already is the tag's
+                     accessible name, and 'aoss'/'sts' are exactly the labels a
+                     screen reader should read out here. The v-if sits on the
+                     slot rather than on the TIcon because TTag renders its icon
+                     frame from `$slots.icon` alone — an always-declared slot
+                     would leave an empty frame (and its gap) on an unmapped id. -->
+                <TTag v-for="svc in emulatedServiceTags" :key="svc.id" size="sm" variant="soft">
+                  <template
+                    v-if="svc.icon"
+                    #icon
+                  >
+                    <TIcon :name="svc.icon" />
+                  </template>
+                  {{ svc.id }}
                 </TTag>
-                <TText v-if="!emulatedServices.length" tone="muted">—</TText>
+                <TText v-if="!emulatedServiceTags.length" tone="muted">—</TText>
               </TStack>
             </TDescriptionItem>
             <TDescriptionItem :label="t('overview.seedsDir')">
@@ -292,48 +342,85 @@ onBeforeUnmount(() => {
         <TText v-else tone="muted" size="sm">{{ t('overview.noPorts') }}</TText>
       </TCard>
 
-      <!-- Totalizers -->
+      <!-- Totalizers. Each tile counts one thing, so each carries that thing's
+           mark in TStat's #icon slot: the seven AWS resource counters get the
+           official service icon, and "services running" — which counts
+           LSS-registered microservices, not an AWS service — gets the same
+           TreeUI functional icon the sidebar uses for that concept. Every
+           label already names what it counts, so the marks stay decorative. -->
       <TGrid :columns="5" gap="1rem">
         <TStat
           :label="t('overview.statServicesRunning')"
           :value="`${runningServices} / ${totalServices}`"
           tone="success"
-        />
+        >
+          <template #icon>
+            <TIcon name="boxes" />
+          </template>
+        </TStat>
         <TStat
           :label="t('overview.statLambdasOnline')"
           :value="`${lambdasOnline} / ${totalLambdas}`"
           tone="success"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-lambda" />
+          </template>
+        </TStat>
         <TStat
           :label="t('overview.statApiRoutes')"
           :value="apiRoutesTotal"
           tone="info"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-api-gateway" />
+          </template>
+        </TStat>
         <TStat
           :label="t('overview.statDynamoTables')"
           :value="resources.tables.length"
           tone="info"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-dynamodb" />
+          </template>
+        </TStat>
         <TStat
           :label="t('overview.statSqsQueues')"
           :value="resources.queues.length"
           tone="warning"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-sqs" />
+          </template>
+        </TStat>
         <TStat
           :label="t('overview.statSnsTopics')"
           :value="resources.topics.length"
           tone="info"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-sns" />
+          </template>
+        </TStat>
         <TStat
           :label="t('overview.statS3Buckets')"
           :value="resources.buckets.length"
           tone="neutral"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-s3" />
+          </template>
+        </TStat>
         <TStat
           :label="t('overview.statOpenSearchCollections')"
           :value="resources.collections?.length ?? 0"
           tone="info"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-opensearch" />
+          </template>
+        </TStat>
       </TGrid>
 
       <!-- Coverage -->
@@ -354,13 +441,22 @@ onBeforeUnmount(() => {
           >
             <TStack direction="horizontal" gap="0.75rem" align="center" justify="space-between">
               <TStack direction="vertical" gap="0.125rem">
+                <!-- Two marks, two meanings: the AWS brand leads because it says
+                     WHICH service the row is about, and check/clock stays a
+                     TreeUI functional icon because it says supported vs planned.
+                     Moving that one into the badge's #icon slot keeps it next to
+                     the words it qualifies instead of competing with the brand
+                     for the leading position. -->
                 <TStack direction="horizontal" gap="0.5rem" align="center">
-                  <TIcon :name="item.status === 'covered' ? 'check' : 'clock'" />
+                  <TIcon :name="item.icon" />
                   <TText weight="semibold">{{ item.type }}</TText>
                   <TBadge
                     :tone="item.status === 'covered' ? 'success' : 'neutral'"
                     variant="soft"
                   >
+                    <template #icon>
+                      <TIcon :name="item.status === 'covered' ? 'check' : 'clock'" />
+                    </template>
                     {{ item.status === 'covered' ? t('overview.supported') : t('overview.planned') }}
                   </TBadge>
                 </TStack>

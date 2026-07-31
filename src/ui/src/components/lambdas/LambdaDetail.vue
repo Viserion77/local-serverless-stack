@@ -9,6 +9,7 @@ import {
 import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { InvokeResult, LambdaDetailInfo, LambdaInvocationRecord } from '../../services/api';
+import { toLambdaTriggers } from './triggerIcons';
 import { useI18n } from '../../i18n';
 
 const props = defineProps<{ functionName: string }>();
@@ -76,6 +77,10 @@ const routesColumns = computed(() => [
 ]);
 
 const routesRows = computed(() => (fn.value?.routes || []).map(r => ({ ...r })));
+
+// Same data and the same mapping as the list column, so the two screens brand
+// a trigger identically.
+const triggerMarks = computed(() => toLambdaTriggers(fn.value?.triggers || []));
 
 const resultPayloadPretty = computed(() => {
   if (!lastResult.value) return '';
@@ -224,6 +229,9 @@ watch(() => props.functionName, () => {
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
         <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> {{ t('nav.lambdas') }}</TButton>
+        <!-- Detail-screen identity: one mark says which AWS service you are
+             inside, decorative because the back link already names it. -->
+        <TIcon name="aws-lambda" />
         <TText weight="semibold" size="lg">{{ functionName }}</TText>
         <TText v-if="fn" tone="muted" family="mono" size="xs">{{ fn.fullName }}</TText>
       </TStack>
@@ -337,10 +345,21 @@ watch(() => props.functionName, () => {
                 <template #header>
                   <TText weight="semibold">{{ t('lambdas.triggerSources') }}</TText>
                 </template>
+                <!-- Same brands as the list column, from the same mapper. The
+                     icons are decorative and sized down: filled tiles at the
+                     20px default would outweigh a `sm` tag's own text. -->
                 <TStack direction="horizontal" gap="0.25rem" wrap>
-                  <template v-if="fn.triggers.length">
-                    <TTag v-for="t in fn.triggers" :key="t" size="sm" variant="soft">
-                      {{ t }}
+                  <template v-if="triggerMarks.length">
+                    <TTag
+                      v-for="trigger in triggerMarks"
+                      :key="trigger.name"
+                      size="sm"
+                      variant="soft"
+                    >
+                      <template v-if="trigger.icon" #icon>
+                        <TIcon :name="trigger.icon" size="14" />
+                      </template>
+                      {{ trigger.name }}
                     </TTag>
                   </template>
                   <TText v-else tone="muted">—</TText>
@@ -349,7 +368,13 @@ watch(() => props.functionName, () => {
 
               <TCard variant="outline">
                 <template #header>
-                  <TText weight="semibold">{{ t('lambdas.httpRoutes') }}</TText>
+                  <!-- These routes are served by the API Gateway emulation — a
+                       different AWS service from the Lambda that owns the page,
+                       which is exactly what the mark is useful for here. -->
+                  <TStack direction="horizontal" gap="0.5rem" align="center">
+                    <TIcon name="aws-api-gateway" />
+                    <TText weight="semibold">{{ t('lambdas.httpRoutes') }}</TText>
+                  </TStack>
                 </template>
                 <TTable v-if="fn.routes.length" :columns="routesColumns" :rows="routesRows" :aria-label="t('lambdas.httpRoutes')">
                   <template #cell-method="{ row }">

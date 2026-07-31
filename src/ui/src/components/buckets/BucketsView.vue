@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TTag, TSpinner, TAlert, TText, TLink,
+  TTag, TSpinner, TAlert, TText, TLink, TIcon,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { BucketSnapshot } from '../../services/api';
@@ -103,7 +103,11 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <TText weight="semibold">{{ t('buckets.title') }}</TText>
+          <!-- One brand per list-card header: the screen is Amazon S3. -->
+          <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TIcon name="aws-s3" />
+            <TText weight="semibold">{{ t('buckets.title') }}</TText>
+          </TStack>
           <TText tone="muted">{{ t('buckets.refreshHint') }}</TText>
         </TStack>
       </template>
@@ -116,7 +120,11 @@ onBeforeUnmount(() => {
         v-else-if="!buckets.length"
         :title="t('buckets.emptyTitle')"
         :description="t('buckets.emptyDescription', { engine: ENGINE_LABEL })"
-      />
+      >
+        <template #icon>
+          <TIcon name="aws-s3" />
+        </template>
+      </TEmptyState>
 
       <TTable v-else :columns="columns" :rows="rows" :aria-label="t('buckets.tableLabel')">
         <template #cell-name="{ row }">

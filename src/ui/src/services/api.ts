@@ -472,6 +472,28 @@ export interface ServiceResource {
   name: string;
 }
 
+/**
+ * The wire ids the self engine reports in `HealthInfo.engine.services` —
+ * mirrors `EngineServiceName` in `src/server/engine/types.ts`. They are SigV4
+ * signing names, not display names: `events` is EventBridge (the id predates
+ * the rename from CloudWatch Events) and `aoss` is OpenSearch Serverless.
+ *
+ * Mirrored rather than imported: the UI is a separate tsconfig that must not
+ * reach into server source. The wire field stays `string[]` so an id added on
+ * the server can never make the dashboard fail to parse a health response —
+ * this union exists so the tables keyed by it stay exhaustive.
+ */
+export type EngineServiceName =
+  | 'dynamodb'
+  | 'sqs'
+  | 'sns'
+  | 's3'
+  | 'events'
+  | 'lambda'
+  | 'sts'
+  | 'secretsmanager'
+  | 'aoss';
+
 export interface ResourceBreakdown {
   lambdas: number;
   tables: number;

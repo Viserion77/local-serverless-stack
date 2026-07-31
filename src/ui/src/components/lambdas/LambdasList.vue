@@ -3,11 +3,13 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
   TCard, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TTag, TSpinner, TAlert, TText, TLink,
+  TTag, TSpinner, TAlert, TText, TLink, TIcon,
 } from '@treeui/vue';
 import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { LambdaSummary } from '../../services/api';
+import { toLambdaTriggers } from './triggerIcons';
+import type { LambdaTrigger } from './triggerIcons';
 import { useI18n } from '../../i18n';
 
 const { t } = useI18n();
@@ -30,7 +32,12 @@ const columns = computed(() => [
   { key: 'last', label: t('lambdas.last') },
 ]);
 
-const rows = computed(() => lambdas.value.map(l => ({ ...l })));
+// The trigger tags carry the mark of the AWS service that fires them, so the
+// mapping is resolved once per row here instead of per render inside the v-for.
+const rows = computed(() => lambdas.value.map(l => ({
+  ...l,
+  triggerMarks: toLambdaTriggers(l.triggers),
+})));
 
 const totals = computed(() => ({
   total: lambdas.value.length,
@@ -122,7 +129,12 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <TText weight="semibold">{{ t('lambdas.listTitle') }}</TText>
+          <!-- The screen is AWS Lambda: the brand sits on the card header once,
+               not on every row (the scale target is 40 services x ~60 lambdas). -->
+          <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TIcon name="aws-lambda" />
+            <TText weight="semibold">{{ t('lambdas.listTitle') }}</TText>
+          </TStack>
           <TText tone="muted">{{ t('lambdas.listLive') }}</TText>
         </TStack>
       </template>
@@ -135,7 +147,11 @@ onBeforeUnmount(() => {
         v-else-if="!lambdas.length"
         :title="t('lambdas.emptyTitle')"
         :description="t('lambdas.emptyDescription')"
-      />
+      >
+        <template #icon>
+          <TIcon name="aws-lambda" />
+        </template>
+      </TEmptyState>
 
       <TTable v-else :columns="columns" :rows="rows" :aria-label="t('lambdas.listTitle')">
         <template #cell-name="{ row }">
@@ -169,16 +185,25 @@ onBeforeUnmount(() => {
           <TText family="mono" style="font-size: 0.78rem;">{{ row.handler }}</TText>
         </template>
 
+        <!-- The one row-level brand on this screen: the trigger tags are where
+             several different AWS services are genuinely being told apart. The
+             icon is decorative — the tag text already names the trigger, and
+             TTag renders the slot aria-hidden anyway. `size` is explicit here
+             because the marks are filled tiles: at TIcon's 20px default they
+             would outweigh a `sm` tag's own text. -->
         <template #cell-triggers="{ row }">
           <TStack direction="horizontal" gap="0.25rem" wrap>
-            <template v-if="(row.triggers as string[]).length">
+            <template v-if="(row.triggerMarks as LambdaTrigger[]).length">
               <TTag
-                v-for="t in (row.triggers as string[])"
-                :key="t"
+                v-for="trigger in (row.triggerMarks as LambdaTrigger[])"
+                :key="trigger.name"
                 size="sm"
                 variant="soft"
               >
-                {{ t }}
+                <template v-if="trigger.icon" #icon>
+                  <TIcon :name="trigger.icon" size="14" />
+                </template>
+                {{ trigger.name }}
               </TTag>
             </template>
             <TText v-else tone="muted">—</TText>

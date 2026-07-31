@@ -149,11 +149,37 @@ The **OpenSearch explorer** (`GET /api/opensearch/collections`, `…/collections
 secret material) back the corresponding tabs. Asserted by: unit (`opensearch-explorer`, `secrets-explorer`,
 `routes/opensearch`, `routes/secrets`).
 
+**Official AWS service icons**: 64 marks from AWS's **Architecture Service Icons** pack (the 16 variant —
+`viewBox 0 0 24 24`, TreeUI's own icon grid) are vendored as geometry in `src/ui/src/icons/aws/` and registered
+into the TreeUI icon registry by `registerTreeIcons()` before `createApp`, with a `TIconRegistry` augmentation
+so `<TIcon name="aws-lambda" />` typechecks like a built-in. 12 cover the services LSS provides (Lambda,
+DynamoDB, S3, SQS, SNS, EventBridge, OpenSearch, Secrets Manager, API Gateway, CloudFormation, IAM — also
+standing for STS — and CloudWatch — also standing for CloudWatch Logs); 52 more are a registered reserve.
+They label the sidebar, the Overview tiles and coverage rows, every per-service resource breakdown, the Lambda
+trigger tags and each explorer's headers and empty states; `src/ui/src/icons/resourceIcons.ts` is the single
+resource-type → mark map, keyed by the API contract's unions so a new resource type fails the typecheck until
+its mark is chosen. The artwork is an AWS trademark, reproduced unmodified — full-colour, deliberately ignoring
+the theme and the `branding.colors` overrides (`src/ui/src/icons/aws/NOTICE.md`). `npm run icons:aws`
+regenerates it from the pack, which is **not** committed. Asserted by: `vue-tsc` (the registry augmentation) +
+manual, like the rest of the UI.
+
 Dashboard branding: an optional `branding` key in `lss.config.json` (title, subtitle, logo,
 favicon, defaultTheme, plus `colors`/`themeColors` as TreeUI token overrides) customizes the dashboard. Served
 at `GET /api/config/branding`; local logo/favicon files are exposed at `GET /api/config/branding/logo|favicon`.
 A working showcase (logo file + per-theme colors) ships with `examples/self-hosted` — every project under
 `examples/` carries its own branding block. Asserted by: unit (`config-manager` "branding" block).
+
+### Live load panel (Overview)
+
+`GET /api/lambdas/activity?windowMs=&buckets=` answers with the invocation spans in the window, per-bucket
+**peak** concurrency (never an average — the burst is the signal), totals (invocations, errors, cold starts,
+peak parallelism, in-flight now, mean duration), the worker table (one row per service: status, warm, pid,
+counters, function count), the residency policy (`warm`/`maxWarmWorkers`/`lazy`/`idleTimeoutMs`) and host
+counters (orchestrator RSS, free/total RAM, CPU count, 1-minute load, uptime). Spans come from a stack-wide,
+log-free ring capped at 1000 entries (`invocation-activity.ts`), recorded on every invocation; a span still
+running when the window opens is included, so a long handler reads as load rather than silence. The dashboard
+renders it as stat tiles + a step area + a per-service span timeline. Asserted by: unit (`invocation-activity`,
+`routes/lambdas`).
 
 ### Languages (dashboard + CLI)
 

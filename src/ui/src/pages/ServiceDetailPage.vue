@@ -10,6 +10,7 @@ import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
 import type { ServiceDetail, ServiceResource } from '../services/api';
 import { ENGINE_LABEL } from '../services/engine';
+import { resourceTypeIcons } from '../icons/resourceIcons';
 import { useI18n } from '../i18n';
 
 const props = defineProps<{ serviceName: string }>();
@@ -204,12 +205,27 @@ watch(() => props.serviceName, load);
     </TStack>
 
     <template v-else-if="service">
+      <!--
+        Each tile counts one AWS service, so it carries that service's mark.
+        The marks are decorative here — the tile's own label already names the
+        service, and TIcon is aria-hidden unless it is given a `label`.
+      -->
       <TGrid :columns="5" gap="1rem">
-        <TStat :label="t('services.statLambdas')" :value="grouped.lambda?.length || 0" tone="info" />
-        <TStat :label="t('services.statTables')" :value="grouped.dynamodb?.length || 0" tone="info" />
-        <TStat :label="t('services.statQueues')" :value="grouped.sqs?.length || 0" tone="warning" />
-        <TStat :label="t('services.statTopics')" :value="grouped.sns?.length || 0" tone="info" />
-        <TStat :label="t('services.statBuckets')" :value="grouped.s3?.length || 0" tone="neutral" />
+        <TStat :label="t('services.statLambdas')" :value="grouped.lambda?.length || 0" tone="info">
+          <template #icon><TIcon :name="resourceTypeIcons.lambda" /></template>
+        </TStat>
+        <TStat :label="t('services.statTables')" :value="grouped.dynamodb?.length || 0" tone="info">
+          <template #icon><TIcon :name="resourceTypeIcons.dynamodb" /></template>
+        </TStat>
+        <TStat :label="t('services.statQueues')" :value="grouped.sqs?.length || 0" tone="warning">
+          <template #icon><TIcon :name="resourceTypeIcons.sqs" /></template>
+        </TStat>
+        <TStat :label="t('services.statTopics')" :value="grouped.sns?.length || 0" tone="info">
+          <template #icon><TIcon :name="resourceTypeIcons.sns" /></template>
+        </TStat>
+        <TStat :label="t('services.statBuckets')" :value="grouped.s3?.length || 0" tone="neutral">
+          <template #icon><TIcon :name="resourceTypeIcons.s3" /></template>
+        </TStat>
       </TGrid>
 
       <TCard variant="outline">
@@ -251,6 +267,16 @@ watch(() => props.serviceName, load);
           :description="t('services.noResourcesDescription')"
         />
 
+        <!--
+          Every declared resource carries the mark of the AWS service it belongs
+          to, in the tag's `#icon` slot — TTag hides that slot from assistive
+          tech, which is exactly right here: the tag's text is the resource name
+          and the group badge above already names the service in words, so the
+          mark is a scanning aid, not information a screen reader is missing.
+          The badges themselves stay text-only on purpose: a full-colour AWS
+          tile inside a tone-coloured soft badge reads muddy, and the identity
+          belongs on the resources, not on the heading.
+        -->
         <TStack v-else direction="vertical" gap="1rem">
           <TStack v-if="grouped.dynamodb?.length" direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" align="center">
@@ -264,7 +290,10 @@ watch(() => props.serviceName, load);
                 :to="`/dynamo/${encodeURIComponent(r.name)}`"
                 style="text-decoration: none;"
               >
-                <TTag size="sm" variant="soft" clickable>{{ r.name }}</TTag>
+                <TTag size="sm" variant="soft" clickable>
+                  <template #icon><TIcon :name="resourceTypeIcons.dynamodb" /></template>
+                  {{ r.name }}
+                </TTag>
               </RouterLink>
             </TStack>
           </TStack>
@@ -281,7 +310,10 @@ watch(() => props.serviceName, load);
                 to="/queues"
                 style="text-decoration: none;"
               >
-                <TTag size="sm" variant="soft" clickable>{{ r.name }}</TTag>
+                <TTag size="sm" variant="soft" clickable>
+                  <template #icon><TIcon :name="resourceTypeIcons.sqs" /></template>
+                  {{ r.name }}
+                </TTag>
               </RouterLink>
             </TStack>
           </TStack>
@@ -298,6 +330,7 @@ watch(() => props.serviceName, load);
                 size="sm"
                 variant="soft"
               >
+                <template #icon><TIcon :name="resourceTypeIcons.sns" /></template>
                 {{ r.name }}
               </TTag>
             </TStack>
@@ -315,7 +348,10 @@ watch(() => props.serviceName, load);
                 :to="`/buckets/${encodeURIComponent(r.name)}`"
                 style="text-decoration: none;"
               >
-                <TTag size="sm" variant="soft" clickable>{{ r.name }}</TTag>
+                <TTag size="sm" variant="soft" clickable>
+                  <template #icon><TIcon :name="resourceTypeIcons.s3" /></template>
+                  {{ r.name }}
+                </TTag>
               </RouterLink>
             </TStack>
           </TStack>
@@ -332,7 +368,8 @@ watch(() => props.serviceName, load);
                 size="sm"
                 variant="soft"
               >
-                <TIcon name="code" /> {{ r.name }}
+                <template #icon><TIcon :name="resourceTypeIcons.lambda" /></template>
+                {{ r.name }}
               </TTag>
             </TStack>
           </TStack>
@@ -349,6 +386,7 @@ watch(() => props.serviceName, load);
                 size="sm"
                 variant="soft"
               >
+                <template #icon><TIcon :name="resourceTypeIcons.eventbus" /></template>
                 {{ r.name }}
               </TTag>
             </TStack>
@@ -366,6 +404,7 @@ watch(() => props.serviceName, load);
                 size="sm"
                 variant="outline"
               >
+                <template #icon><TIcon :name="resourceTypeIcons['event-rule']" /></template>
                 {{ r.name }}
               </TTag>
             </TStack>
@@ -383,7 +422,8 @@ watch(() => props.serviceName, load);
                 size="sm"
                 variant="soft"
               >
-                <TIcon name="search" /> {{ r.name }}
+                <template #icon><TIcon :name="resourceTypeIcons.opensearch" /></template>
+                {{ r.name }}
               </TTag>
             </TStack>
           </TStack>
@@ -394,12 +434,20 @@ watch(() => props.serviceName, load);
               <TText tone="muted">{{ grouped['event-source'].length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
+              <!--
+                An event-source mapping is `AWS::Lambda::EventSourceMapping` —
+                a Lambda resource, even though the source it reads is a queue or
+                a stream. The group badge above says "Event-source mappings", so
+                sharing the Lambda mark with the functions group does not make
+                the two indistinguishable.
+              -->
               <TTag
                 v-for="(r, idx) in grouped['event-source']"
                 :key="`es-${idx}-${r.name}`"
                 size="sm"
                 variant="outline"
               >
+                <template #icon><TIcon :name="resourceTypeIcons['event-source']" /></template>
                 {{ r.name }}
               </TTag>
             </TStack>

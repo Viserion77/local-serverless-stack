@@ -15,7 +15,10 @@ implementar silenciosamente uma versão local dessas lacunas.
 > `@treeui/tokens@0.15.0`) — **atualizado de 0.14.0 em 2026-07-21**. A biblioteca expõe **69+
 > componentes** e um catálogo **Branchline com ~364 ícones**. O upgrade trouxe (e a migração vai
 > adotar): `TText`, `TStackItem`, `TSpacer`, `TPage`/`TContainer`, `TPageHeader`, `TAvatar`, o slot
-> `#header-start` do `TAppShell` e `TButton icon-only`.
+> `#header-start` do `TAppShell` e `TButton icon-only`. Desde 2026-07-31 esse catálogo é estendido
+> **pelo app**: 64 marcas oficiais de serviços AWS (`aws-*`) entram no mesmo registry via
+> `registerTreeIcons()` — o registry deixou de ser só-TreeUI, o catálogo dela continua sendo (ver
+> regra 3).
 
 ## Direção inicial — 2026-07-21
 
@@ -54,6 +57,10 @@ esquerda (ver §4). Foi corrigido só com layout TreeUI, sem CSS novo.
   `TDivider`, `TAppShell`.
 - Não faça override de seletores internos da biblioteca, inclusive com `:deep(...)` nem
   sobrescrevendo classes `t-*`.
+- Marca não abre exceção: o tamanho e o alinhamento dos tiles AWS (regra 3) são decididos pela
+  TreeUI — a prop `size` do `TIcon` e as dimensões dos próprios slots de ícone
+  (`.t-nav-menu__icon`, `#icon` de `TTag`/`TStat`/`TEmptyState`). A adoção das marcas AWS não
+  introduziu CSS local, `:deep(...)` nem override de classe `t-*`.
 - Se a API pública não expressar o resultado necessário, registre a lacuna em
   [`treeUxPatterns.md`](./treeUxPatterns.md) e resolva-a na TreeUI.
 - Uma exceção temporária só pode existir com aprovação explícita, motivo, responsável e condição de
@@ -75,13 +82,46 @@ comportamento e acessibilidade.
   pertencem ao catálogo da TreeUI. No LSS isso inclui **AWS e seus serviços** (DynamoDB, S3, SQS,
   SNS, Lambda, EventBridge, OpenSearch, Secrets Manager, API Gateway), **LocalStack** e **Serverless
   Framework**.
-- Para marcas, use [`https://simpleicons.org/`](https://simpleicons.org/) (ou o pacote oficial Simple
-  Icons) como fonte padronizada, quando o logo existir lá.
-- Simple Icons é uma exceção **exclusiva** para identidade de marca. Não o use como substituto de
-  ação, navegação, status ou qualquer conceito genérico de interface.
-- Atenção ao caso da lista de serviços (`ServicesList.vue`), que hoje usa emojis (`🪣 🗄 📨 📣 🎯 🔀`)
-  para tipos de recurso: os que representam **um serviço AWS** viram marca (Simple Icons); os
-  genéricos (busca, alvo) viram ícone funcional (TreeUI).
+- **Marcas de serviços AWS** vêm do pacote oficial **AWS Architecture Service Icons**
+  ([`https://aws.amazon.com/architecture/icons/`](https://aws.amazon.com/architecture/icons/)),
+  variante de tamanho **16** — cujo `viewBox` é `0 0 24 24`, exatamente a grade em que os ícones
+  Branchline são desenhados. A arte curada está **vendorizada** em `src/ui/src/icons/aws/` (gerada
+  por `scripts/generate-aws-icons.mjs`, `npm run icons:aws`); o pacote de 41 MB não é commitado e o
+  build não depende dele. Isso é **garantido**, não pedido: o destino padrão do unzip (`temp/`) está
+  no `.gitignore`, então nenhum `git add -A` redistribui a marca registrada da AWS a partir deste
+  repositório público.
+- Essas marcas são **registradas no próprio registry da TreeUI** — `registerTreeIcons()` em
+  `main.ts`, antes do `createApp`, mais uma augmentation de `TIconRegistry`
+  (`registry.generated.d.ts`). O consumo é o de qualquer ícone da biblioteca:
+  `<TIcon name="aws-lambda" />`, `icon="aws-sqs"` em qualquer prop `TIconInput`, tipado pelo
+  `vue-tsc`, sem import por call site e sem componente local.
+- Por que o pacote oficial e não Simple Icons para AWS: é a fonte **canônica** (publicada pela
+  própria AWS), cobre **todos** os serviços — inclusive os que Simple Icons não tem (EventBridge,
+  Secrets Manager, OpenSearch, Step Functions) — e mantém uma família visual única (tile colorido
+  por categoria + glifo). A arte é marca registrada da AWS e entra **sem modificação**: é
+  full-color, não usa `currentColor` e deliberadamente **não** segue tema nem os overrides de
+  `branding.colors`. Corrigir isso com CSS é violar a regra 2 e os termos do pacote — ver
+  [`NOTICE.md`](./src/icons/aws/NOTICE.md) do diretório.
+- Para marcas **não-AWS** (LocalStack, Serverless Framework), a fonte padronizada continua sendo
+  [`https://simpleicons.org/`](https://simpleicons.org/) (ou o pacote oficial Simple Icons), quando
+  o logo existir lá.
+- Nada disso é exceção à regra 3 — **é** a regra 3. Ícone funcional continua vindo só da TreeUI, e o
+  prefixo `aws-` é o que mantém os dois vocabulários separados dentro do mesmo registry: nome sem
+  prefixo é ícone funcional da TreeUI, `aws-*` é marca. Marca não substitui ação, navegação ou
+  status; ícone funcional não substitui marca. Uma marca ausente **não** vira item em
+  [`treeUxPatterns.md`](./treeUxPatterns.md) — vira uma linha no catálogo do gerador.
+- Cobertura registrada hoje: **64 marcas** — 12 dos serviços que o LSS entrega (Lambda, DynamoDB,
+  S3, SQS, SNS, EventBridge, OpenSearch, Secrets Manager, API Gateway, CloudFormation, IAM,
+  CloudWatch) e 52 de reserva, já importadas para uso futuro. Dois apelidos documentados, porque a
+  AWS não publica marca própria para eles: **STS usa a marca do IAM** e **CloudWatch Logs usa a do
+  CloudWatch**.
+- **Feito** no caso da lista de serviços (`ServicesList.vue`): os emojis de tipo de recurso
+  (`🪣 🗄 📨 📣 🎯 🔀`) já haviam virado ícone funcional no sweep 0.14 → 0.22, e agora os que
+  representam **um serviço AWS** viraram marca. Nenhum glifo genérico segue no lugar de um serviço
+  em `ServicesList.vue`, `ServiceDetailPage.vue`, `LambdasList.vue`/`LambdaDetail.vue` nem nas
+  telas de recurso. O mapa tipo-de-recurso → marca é único
+  (`src/ui/src/icons/resourceIcons.ts`, chaveado pelos tipos do contrato da API), para tabela e
+  detalhe não divergirem.
 
 ### 4. O AppShell entrega espaço; não decide uma coluna estreita
 
@@ -127,8 +167,12 @@ configuração LESC lado a lado → totalizadores (`TStat`) → cobertura de rec
 - Controles somente com ícone precisam de nome acessível (`aria-label`).
 - Ordem de foco, retorno de foco, `Escape` e alvos de toque não podem depender de correções frágeis
   no produto — pertencem ao componente TreeUI.
-- A UI do LSS é **single-locale (inglês)**; não há catálogo i18n. Ainda assim, texto de interface não
-  deve ser congelado fora de uma reação/computação quando depender de estado.
+- A UI do LSS é **trilíngue (en / pt-BR / es)**, com catálogo em `src/ui/src/i18n/messages/`. Todo
+  texto de interface passa por `t()` — inclusive o nome acessível de um controle só com ícone e o
+  `label` de uma marca que aparece sozinha. Nomes de serviço da AWS ficam **sem tradução**: é assim
+  que eles se chamam em qualquer console ou SDK.
+- Texto de interface não deve ser congelado fora de uma reação/computação quando depender de estado —
+  o mesmo vale para a troca de idioma: um rótulo lido uma vez no `setup` mantém o idioma antigo.
 
 ## Primeira adoção — dashboard LSS (upgrade 0.14 → 0.22 + sweep, 2026-07-21…23)
 
@@ -161,6 +205,35 @@ Migramos o `src/ui/` para a TreeUI ao longo de `0.14 → 0.19 → 0.20 → 0.21 
 `<textarea>` de input); o único `<style scoped>` restante é o gradiente decorativo `.overview-hero`.
 Eliminados ao longo das rodadas: `.muted`, `.app-main` (011), `.dim-row` (012), `.logs-pre` (003),
 `.brand-logo` (009), o mono de texto (001) e as linhas rótulo⟷valor manuais (005).
+
+## Adoção — marcas de serviço AWS (2026-07-31)
+
+Aplicação da regra 3 à parte que faltava: identificar serviço AWS por marca oficial, não por glifo
+genérico.
+
+- **Fonte e vendorização:** 64 SVGs do pacote oficial (variante 16, `viewBox 0 0 24 24`) convertidos
+  por `scripts/generate-aws-icons.mjs` para `src/ui/src/icons/aws/artwork.generated.ts` +
+  `registry.generated.d.ts`. O gerador falha (não "conserta") diante de `viewBox` diferente,
+  `<defs>`/`<use>`/gradiente/`<style>`, referência externa ou elemento pintado sem `fill` resolvível
+  — a arte não pode ser alterada.
+- **Registro:** `registerAwsIcons()` na `main.ts`, entre `applyTheme(...)` e `createApp(App)`, uma
+  vez. Cada marca é um componente (a arte tem `<g>` com `fill`/`transform`, que o `TIconNodes` plano
+  não expressa) armazenado verbatim pelo `registerTreeIcons`, respeitando as props do `TIcon`
+  (`size`/`strokeWidth`/`absoluteStrokeWidth`) e os defaults da própria TreeUI.
+- **Split:** 12 marcas *core* (serviços que o LSS entrega) já consumidas na UI; 52 de reserva
+  registradas e prontas (Step Functions, Kinesis, Cognito, KMS, ECS/EKS/Fargate, RDS/Aurora,
+  CloudFront, Route 53, SES, X-Ray, Bedrock, IoT…), para o próximo recurso não voltar ao emoji.
+- **Onde entrou:** nav do `App.vue` (as dez entradas — sem ícone, o `TNavMenu` colapsado vira quatro
+  tiles "S" iguais), `TStat` da Overview e do detalhe de serviço, tags de recurso e de trigger,
+  cabeçalhos de card e `TEmptyState` das telas de Lambdas, APIs, Queues, S3, DynamoDB, OpenSearch e
+  Secrets.
+- **Acessibilidade:** as marcas são decorativas (sem `label`) porque sempre acompanham o texto que
+  nomeia o serviço. A exceção é o breakdown do `ServicesList.vue`, onde a tag mostra só marca +
+  número: lá a marca fica no slot padrão do `TTag` (o `#icon` é `aria-hidden`) e recebe `label` com
+  a chave i18n já existente, o que também distingue "buses" de "rules" na leitura.
+- **Sem dívida nova:** zero `<style>`, zero classe, zero `:deep(...)`, zero string fora do `t()`,
+  zero item novo em [`treeUxPatterns.md`](./treeUxPatterns.md) — marca nunca gera item. Gate
+  `validate: pre-prod`: lint 0 erros, `vue-tsc` limpo.
 
 ## Fluxo para novas solicitações
 

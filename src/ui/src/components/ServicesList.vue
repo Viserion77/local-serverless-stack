@@ -14,8 +14,9 @@ interface TableColumn {
   width?: string;
 }
 import { api } from '../services/api';
-import type { ServiceSummary } from '../services/api';
+import type { ResourceBreakdown, ServiceSummary } from '../services/api';
 import { ENGINE_LABEL } from '../services/engine';
+import { breakdownEntries, breakdownOrder } from '../icons/resourceIcons';
 import { useI18n } from '../i18n';
 
 const { t } = useI18n();
@@ -156,6 +157,25 @@ function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
 }
 
+/**
+ * The resource counters of one row: what the service declares, each tag
+ * carrying the AWS mark of the service it counts (see `icons/resourceIcons`).
+ * Counters at zero — or absent, since the orchestrator omits the ones it never
+ * saw — are dropped rather than shown as "0".
+ *
+ * Assembled from the shared table instead of eight near-identical blocks in the
+ * template: order, mark and accessible name are data, and the detail screen has
+ * to group by the same keys. The `TTable` slot types a row as
+ * `Record<string, unknown>`, hence the cast to the shape the API guarantees.
+ */
+function breakdownTags(row: Record<string, unknown>) {
+  const breakdown = row.resourceBreakdown as ResourceBreakdown | undefined;
+  if (!breakdown) return [];
+  return breakdownOrder
+    .map(key => ({ key, count: breakdown[key] ?? 0, ...breakdownEntries[key] }))
+    .filter(entry => entry.count > 0);
+}
+
 function statusTone(status: string): TBadgeTone {
   switch (status) {
     case 'running': return 'success';
@@ -249,61 +269,20 @@ onBeforeUnmount(() => {
 
       <template #cell-resourceBreakdown="{ row }">
         <TStack direction="horizontal" gap="0.25rem" wrap>
+          <!--
+            The mark stays in the tag's DEFAULT slot, not its `#icon` slot:
+            TTag wraps `#icon` in `aria-hidden`, which is right when the tag has
+            a visible label, but here the mark is the only thing that says which
+            service the number belongs to. In the default slot TIcon's `label`
+            names it, so a screen reader reads "SQS queues, 3" instead of "3".
+          -->
           <TTag
-            v-if="(row.resourceBreakdown as any)?.lambdas"
+            v-for="entry in breakdownTags(row)"
+            :key="entry.key"
             size="sm"
             variant="soft"
           >
-            <TIcon name="code" /> {{ (row.resourceBreakdown as any).lambdas }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.tables"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="database" /> {{ (row.resourceBreakdown as any).tables }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.queues"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="inbox" /> {{ (row.resourceBreakdown as any).queues }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.topics"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="megaphone" /> {{ (row.resourceBreakdown as any).topics }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.buckets"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="archive" /> {{ (row.resourceBreakdown as any).buckets }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.buses"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="shuffle" /> {{ (row.resourceBreakdown as any).buses }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.eventRules"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="target" /> {{ (row.resourceBreakdown as any).eventRules }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.collections"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="search" /> {{ (row.resourceBreakdown as any).collections }}
+            <TIcon :name="entry.icon" :label="t(entry.labelKey)" /> {{ entry.count }}
           </TTag>
           <TText
             v-if="!row.resourcesCount"

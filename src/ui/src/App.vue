@@ -44,17 +44,28 @@ const menuItems = computed(() => [
 
 // Recomputed on a language switch; the AWS service names stay untranslated
 // because that is what they are called in every console and SDK.
+//
+// Every row carries an icon, and that is deliberate: TNavMenu falls back to a
+// one-letter marker for an icon-less item, so a partly-iconified rail would
+// collapse Services / S3 / Secrets / Settings into four identical "S" tiles.
+// Which SOURCE the icon comes from still follows ui-ux.md rule 3 — a section
+// that IS an AWS service gets the official AWS mark, a section that is an LSS
+// concept (the dashboard itself, the registered microservices, the stack's own
+// configuration) gets a TreeUI functional icon. Icons are what remains visible
+// once the shell collapses, so this is also what makes the collapsed rail
+// readable. TNavMenuItem.icon is TIconInput: a registered name needs no import
+// and no markRaw, and it keeps the item plain data inside this computed.
 const navItems = computed<TNavMenuItem[]>(() => [
-  { label: t('nav.overview'), value: '/' },
-  { label: t('nav.services'), value: '/services' },
-  { label: t('nav.lambdas'), value: '/lambdas' },
-  { label: t('nav.apis'), value: '/apis' },
-  { label: t('nav.queues'), value: '/queues' },
-  { label: 'S3', value: '/buckets' },
-  { label: 'DynamoDB', value: '/dynamo' },
-  { label: 'OpenSearch', value: '/opensearch' },
-  { label: t('nav.secrets'), value: '/secrets' },
-  { label: t('nav.settings'), value: '/settings' },
+  { label: t('nav.overview'), value: '/', icon: 'layout-dashboard' },
+  { label: t('nav.services'), value: '/services', icon: 'boxes' },
+  { label: t('nav.lambdas'), value: '/lambdas', icon: 'aws-lambda' },
+  { label: t('nav.apis'), value: '/apis', icon: 'aws-api-gateway' },
+  { label: t('nav.queues'), value: '/queues', icon: 'aws-sqs' },
+  { label: 'S3', value: '/buckets', icon: 'aws-s3' },
+  { label: 'DynamoDB', value: '/dynamo', icon: 'aws-dynamodb' },
+  { label: 'OpenSearch', value: '/opensearch', icon: 'aws-opensearch' },
+  { label: t('nav.secrets'), value: '/secrets', icon: 'aws-secrets-manager' },
+  { label: t('nav.settings'), value: '/settings', icon: 'settings' },
 ]);
 
 function onNavSelect(value: string) {

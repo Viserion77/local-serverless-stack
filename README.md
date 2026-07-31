@@ -726,9 +726,36 @@ want it running.
 ### Dashboard
 
 <details>
+<summary><b>Live load panel</b> — what the runtime is doing right now, and what it costs this machine</summary>
+
+**How it works.** The Overview polls `GET /api/lambdas/activity` every 5 s for a window you pick
+(1/2/10 min). The server answers from a stack-wide ring of invocation spans (capped at 1000,
+log-free) plus the current worker table and host counters. Three readings, coarse to fine: stat
+tiles (resident workers against the `maxWarmWorkers` ceiling, peak parallelism, host memory %, load
+normalised by core count), a step area of parallelism over the window, and a timeline with one row
+per service and one bar per invocation — overlapping bars in a vertical slice *are* the parallelism.
+Parallelism is the **peak** per bucket, never an average: a 300 ms burst that saturates the host is
+the thing you are looking for, and an average erases it. A span still running when the window opens
+is counted, so a long handler shows as load rather than as silence.
+
+**Where it lives.** `src/ui/src/components/ActivityPanel.vue` — the panel and its hand-rolled SVG
+(a charting gap tracked as TREEUX-003 in `src/ui/treeUxPatterns.md`).
+`src/server/services/invocation-activity.ts` — the ring, the bucketing and the totals.
+`src/server/routes/lambdas.ts` — `GET /activity`, which joins it to the worker table and host
+counters. `src/server/services/lambda-runtime-manager.ts` — records one span per invocation.
+
+**Why it exists.** Lazy workers and an idle unload make the stack cheap, but they also make it
+opaque: "is anything resident right now, and is my machine slow because of LSS?" had no answer short
+of `top`. Identity sits on the row axis instead of colour because a 40-service monorepo has no
+readable categorical palette, and failures carry a shape marker plus a counted label because
+red/green are 4.4 ΔE apart under deuteranopia.
+
+</details>
+
+<details>
 <summary><b>Single-pane dashboard</b> — one browser tab that shows every service, resource and port in the stack</summary>
 
-**How it works.** The orchestrator serves the built SPA from `dist/ui` on its own port (default `14566`), with an SPA fallback for unknown paths and a JSON 404 guard so a mistyped `/api/...` never returns HTML. The shell is TreeUI's `TAppShell`: a collapsible 16rem sidebar with ten entries (Overview, Services, Lambdas, APIs, Queues, S3, DynamoDB, OpenSearch, Secrets, Settings) and a header carrying the engine badge, the region select and a `⋮` menu. `GET /api/health` is polled every 10s to flip the engine badge (running/offline) and to show the DynamoDB-proxy badge when the proxy is enabled. Under `npm run dev` the UI runs on Vite port `3101` and talks to `http://localhost:14566` instead.
+**How it works.** The orchestrator serves the built SPA from `dist/ui` on its own port (default `14566`), with an SPA fallback for unknown paths and a JSON 404 guard so a mistyped `/api/...` never returns HTML. The shell is TreeUI's `TAppShell`: a collapsible 16rem sidebar with ten entries (Overview, Services, Lambdas, APIs, Queues, S3, DynamoDB, OpenSearch, Secrets, Settings) — each carrying its official AWS service mark, or a TreeUI functional icon for the three LSS-native ones — and a header carrying the engine badge, the region select and a `⋮` menu. `GET /api/health` is polled every 10s to flip the engine badge (running/offline) and to show the DynamoDB-proxy badge when the proxy is enabled. Under `npm run dev` the UI runs on Vite port `3101` and talks to `http://localhost:14566` instead.
 
 **Where it lives.** `src/ui/src/App.vue` — shell, nav, health polling, theme/locale menu. `src/ui/src/router.ts` — the routes behind each tab, unknown paths redirect to `/`. `src/ui/src/services/api.ts` — the single typed client for every `/api` endpoint. `src/server/index.ts` — static hosting of `dist/ui` plus the `/api` 404 guard.
 
@@ -887,6 +914,17 @@ want it running.
 **Where it lives.** `src/ui/src/services/branding.ts` — fetch, token injection, favicon, theme precedence. `src/ui/src/main.ts` — pre-mount theme application. `src/server/routes/config.ts` — the branding endpoint and the asset route.
 
 **Why it exists.** A team runs this dashboard all day next to their own product; a project title, logo and accent color make "which stack am I looking at" answerable at a glance, and it is configuration, not a fork.
+
+</details>
+
+<details>
+<summary><b>Official AWS service icons</b> — every resource in the UI wears the mark AWS publishes for it</summary>
+
+**How it works.** 64 icons from AWS's own **Architecture Service Icons** pack (the 16 variant, whose `viewBox` is `0 0 24 24` — the same grid TreeUI's Branchline icons are drawn on) are vendored into the repo as geometry and registered into the TreeUI icon registry with `registerTreeIcons()`, once, before `createApp`. A `TIconRegistry` augmentation makes them typecheck, so `<TIcon name="aws-lambda" />` and every `icon="aws-sqs"` prop work exactly like a built-in icon. 12 cover what LSS provides today (Lambda, DynamoDB, S3, SQS, SNS, EventBridge, OpenSearch, Secrets Manager, API Gateway, CloudFormation, IAM — which also stands for STS — and CloudWatch, which also stands for CloudWatch Logs); the other 52 are a registered reserve (Step Functions, Kinesis, Cognito, KMS, ECS/EKS/Fargate, RDS/Aurora, CloudFront, Route 53, SES, X-Ray, Bedrock, IoT…). They appear on the sidebar, the Overview stat tiles and coverage rows, every per-service resource breakdown, the Lambda trigger tags, and each explorer's card headers and empty states. The marks are AWS trademarks and are reproduced unmodified: full-colour, ignoring the theme and the `branding.colors` overrides on purpose.
+
+**Where it lives.** `src/ui/src/icons/aws/` — the vendored artwork, the registration and `NOTICE.md` (provenance and terms). `scripts/generate-aws-icons.mjs` — the curated catalogue and the converter (`npm run icons:aws`); it refuses artwork it cannot convert losslessly rather than redrawing it. `src/ui/src/icons/resourceIcons.ts` — the single resource-type → mark map, keyed by the API contract's unions so a new resource type is a type error until its mark is chosen. `src/ui/src/main.ts` — the one registration call.
+
+**Why it exists.** A stack whose whole job is AWS resources was labelling them with emoji and then with generic glyphs — a database, an inbox, a target — which is exactly the vocabulary that stops scaling when one screen shows eight services at once. AWS's own pack is the canonical source, covers every service (including the ones no third-party icon set carries), and keeps one visual family. The `aws-` prefix is what keeps brands and functional icons apart in a single registry; the rule is written down in `src/ui/ui-ux.md`. The pack itself (~41 MB) is not committed — everything the build needs is generated and checked in.
 
 </details>
 
@@ -1178,7 +1216,10 @@ invoke), **APIs** (emulated HTTP routes), **Queues** (send/receive/purge, consum
 **OpenSearch**, **Secrets**, and **Settings** — which edits `lss.config.json` in place
 (only changed fields are written, so you review and commit the diff), hot-reloads what it
 can, and flags the keys that need `lss stop && lss start` or are masked by env vars.
-A region selector lets you inspect resources in any region.
+A region selector lets you inspect resources in any region. Every AWS resource in
+the UI is labelled with the official AWS service icon (64 marks from AWS's own
+Architecture Service Icons pack, vendored and registered into TreeUI's icon
+registry), so a screen listing eight services is readable at a glance.
 
 It can carry your team's identity via the `branding` config key: navbar title/subtitle,
 logo and favicon (URL or a file next to `lss.config.json`), default theme, and any
