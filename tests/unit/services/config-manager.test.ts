@@ -1188,7 +1188,7 @@ describe('updateConfig', () => {
     expect(err.details[1]).toContain('unknown config key "bogusKey"');
   });
 
-  // v1's LocalStack keys are gone, not silently accepted: an old config that
+  // 0.x's LocalStack keys are gone, not silently accepted: an old config that
   // still carries them tells the user which ones to drop.
   it('reports removed LocalStack keys as unknown', () => {
     const err = updateErr(setupFile({}), {

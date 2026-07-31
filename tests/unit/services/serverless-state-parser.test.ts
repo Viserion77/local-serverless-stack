@@ -489,7 +489,7 @@ describe('httpApi authorizers (provider.httpApi.authorizers)', () => {
   });
 });
 
-// Registration is self-serving in v2: what the retired plugin used to POST —
+// Registration is self-serving in 1.0: what the retired plugin used to POST —
 // provider.region and the custom.lss port hints — now comes out of the parsed
 // state itself.
 describe('region and custom.lss port hints', () => {

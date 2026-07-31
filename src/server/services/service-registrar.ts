@@ -99,7 +99,7 @@ export class ServiceRegistrar {
 
     const cfnLambdas = resources.filter((r): r is LambdaResource => r.type === 'lambda');
 
-    // Registration is self-serving: everything the retired v1 plugin used to
+    // Registration is self-serving: everything the retired 0.x plugin used to
     // POST alongside the request — provider.region and the custom.lss port
     // hints — is read from the packaged state, so `POST /register
     // {servicePath}` (or `lss register <dir>`) is enough.

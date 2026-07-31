@@ -807,7 +807,7 @@ describe('bin/cli.js helpers', () => {
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('DynamoDB Proxy'));
     });
 
-    // v2 has one engine, so not one LocalStack variable reaches the child (and
+    // 1.0 has one engine, so not one LocalStack variable reaches the child (and
     // therefore every forked worker). Each one exported would also be reported
     // by GET /api/config as env-overridden, greying out a Settings field for a
     // value the user never set.

@@ -27,7 +27,6 @@ by the live integration suite (`npm run test:integration`).
 | `lss seed [table]` | Applies `{table}.json` seed files from `seedsDir` into DynamoDB (all matching tables, or one). | unit (`cli-seed`) + integration |
 | `lss seed:clear [table]` | Deletes seeded items after an interactive `confirmar` prompt (or `--yes`); refuses any non-local endpoint. | unit (`cli-seed`, `seed-manager-guard`) |
 | `--config <path>` | Loads config from an explicit file, taking precedence over the cwd/home search; also via `LSS_CONFIG`. | unit (`cli`) + integration |
-| 0.x flag guard | `--self-engine` / `--external` / `--pro` / `--localstack-token`, and `engine: "localstack"` in a config file, exit 1 naming `docs/MIGRATION-v1.md` — a stale script fails visibly instead of quietly starting the wrong thing. | unit (`cli`, `config-manager`) |
 
 ## 2. Configuration & instance isolation
 

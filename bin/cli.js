@@ -161,7 +161,7 @@ function getOrchestratorPath() {
 
 function startOrchestrator() {
   // Before anything else — including the already-running short-circuit — so a
-  // stale v1 flag or config value always fails loudly instead of looking like
+  // stale 0.x flag or config value always fails loudly instead of looking like
   // a successful no-op.
 
   const { pidFile, logFile } = runtimePaths();

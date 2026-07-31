@@ -11,7 +11,7 @@ function healthStub(get: HealthApi['get']): HealthApi {
   return { get };
 }
 
-// A /api/health payload shaped the way v2 answers it.
+// A /api/health payload shaped the way 1.0 answers it.
 function okHealth(engineRunning = true) {
   return {
     status: 'ok',

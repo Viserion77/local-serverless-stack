@@ -32,7 +32,7 @@ package was retired in 1.0). Node **>= 20**, CommonJS, npm workspaces (`src/ui`)
 | `src/mcp/` | MCP server (`lss mcp`) — the stack as tools for an AI coding agent |
 | `src/ui/` | Vue 3 dashboard (own workspace) |
 | `examples/` | `self-hosted` — four microservices on the engine (DynamoDB, SQS, S3, EventBridge, OpenSearch, Secrets) |
-| `tests/` | `unit/`, `integration/` (Docker + token gated), `fixtures/` |
+| `tests/` | `unit/`, `integration/` (self engine, no Docker, no token), `fixtures/` |
 | `docs/` | `FEATURES.md`, `SELF_ENGINE.md`, `CONFIGURATION.md`, `RELEASE.md`, PRDs |
 
 ---
@@ -111,7 +111,7 @@ npm run server:build   # tsc for orchestrator + engine only
 npm run dev            # tsx watch (server) + vite (UI)
 npm test               # jest, unit suite
 npm run test:coverage  # unit suite + the 100% gate
-npm run test:integration   # needs Docker + LOCALSTACK_AUTH_TOKEN
+npm run test:integration   # e2e on the self engine — no Docker, no token; run `npm run build` first
 npm run lint           # eslint (see the warning baseline below)
 ```
 
@@ -127,8 +127,10 @@ pipeline — the fastest way to see the self engine work).
   `tests/unit/routes/…`. Match the neighbouring file's mocking style before inventing your own.
 - `tests/unit/engine/wire-*.test.ts` drive a **real `SelfEngineBackend`** end to end (through the
   AWS SDK) rather than mocks — use this shape when proving a provisioning/dispatch behaviour.
-- `tests/integration/` requires Docker and `LOCALSTACK_AUTH_TOKEN`; it skips cleanly without them, so
-  never treat "it skipped" as "it passed".
+- `tests/integration/` boots an isolated orchestrator on the self engine (own ports + `stateDir`) and
+  drives it over HTTP. It runs **unconditionally** — no Docker, no auth token, nothing to gate on, so
+  a skip there is a real problem, not the old 0.x "no token, never mind". `client.test.ts` imports the
+  **built** `dist/client`, so run `npm run build` before `npm run test:integration`.
 - `tests/fixtures/` holds committed CloudFormation templates and sample microservices.
 
 ## Code conventions
@@ -166,5 +168,6 @@ pipeline — the fastest way to see the self engine work).
   under parallel load. They pass in isolation. Don't chase them as regressions of your change, but
   don't use them as cover for a real failure either.
 - CI (`.github/workflows/tests.yml`) runs unit + coverage gate, lint + tsc, build-artifact
-  verification, and (token-gated) integration. `publish.yml` publishes to npm when the version
-  changes — so a version bump is a release action, not routine housekeeping.
+  verification, and integration — the last one unconditionally, since 1.0 left nothing to gate it on.
+  `publish.yml` publishes to npm when the version changes — so a version bump is a release action,
+  not routine housekeeping.

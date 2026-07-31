@@ -1665,7 +1665,7 @@ describe('createEventBus (via provisionResources)', () => {
   });
 });
 
-// The engine serves aoss natively on its own endpoint — v1 needed a sidecar
+// The engine serves aoss natively on its own endpoint — 0.x needed a sidecar
 // here only because no LocalStack edition provides aoss at all.
 describe('aoss client endpoint', () => {
   it('targets the engine endpoint', async () => {

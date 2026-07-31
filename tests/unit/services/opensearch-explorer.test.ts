@@ -83,7 +83,7 @@ describe('clientFor / endpoint selection', () => {
   });
 
   // The engine serves the aoss control plane and the data plane on its own
-  // endpoint — v1 needed a separate sidecar only because no LocalStack edition
+  // endpoint — 0.x needed a separate sidecar only because no LocalStack edition
   // provides aoss at all.
   it('targets the engine endpoint', async () => {
     aossMock.on(ListCollectionsCommand).resolves({ collectionSummaries: [] });

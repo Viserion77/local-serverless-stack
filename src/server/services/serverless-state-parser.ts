@@ -70,7 +70,7 @@ export interface ParsedServerlessState {
   // provider.region, when the service declares one.
   region?: string;
   // Port hints read straight from the packaged state's `custom.lss` block —
-  // what the retired v1 plugin used to POST alongside the registration.
+  // what the retired 0.x plugin used to POST alongside the registration.
   apiPort?: number;
   invokePort?: number;
   functions: RegisteredFunction[];

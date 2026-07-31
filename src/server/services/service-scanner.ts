@@ -1,6 +1,6 @@
 // Finds every Serverless Framework / osls service under the project root, so
 // onboarding (and `lss scan`) can offer them for registration instead of each
-// service having to announce itself — the job the retired v1 plugin used to do
+// service having to announce itself — the job the retired 0.x plugin used to do
 // from inside `sls package`.
 //
 // This is a PREVIEW: values here inform a checklist, nothing more. The

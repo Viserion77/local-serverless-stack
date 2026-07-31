@@ -1,6 +1,6 @@
 // Owns the AWS engine for this process.
 //
-// v2 removed the LocalStack backend: the self engine is the only engine, so
+// 1.0 removed the LocalStack backend: the self engine is the only engine, so
 // this is no longer a chooser — it is the singleton every SDK-based consumer
 // (provisioner, explorers, seeds, dynamo proxy, routes) goes through to get an
 // endpoint + credentials. It stays as a seam so those consumers never import

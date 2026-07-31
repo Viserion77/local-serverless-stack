@@ -5,7 +5,7 @@
 //
 // No Docker, no auth token, nothing to gate on: the engine runs in the
 // orchestrator process, so this suite executes on every machine and in every CI
-// job. That is the point of v2.
+// job. That is the point of 1.0.
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';

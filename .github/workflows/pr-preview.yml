@@ -17,9 +17,12 @@ name: PR Preview Release
 # GitHub withholds secrets from fork PRs — so the fork case is gated explicitly
 # below and skips with a clear reason instead of failing on a missing token.
 
+# `labeled`/`unlabeled` are in the list because the `publish-preview` label is
+# what gates this workflow: without them, applying the label would sit there
+# doing nothing until someone happened to push again.
 on:
   pull_request:
-    types: [opened, synchronize, reopened, closed]
+    types: [opened, synchronize, reopened, labeled, unlabeled, closed]
 
 # One preview in flight per PR. Each run composes a unique version, so
 # cancelling a superseded run only means that version never lands.
@@ -34,15 +37,21 @@ permissions:
 jobs:
   publish:
     name: Publish preview to npm
-    # Same-repo branches only: a fork PR has no NPM_TOKEN by design.
-    # To publish only on demand instead of on every push, add:
-    #   && contains(github.event.pull_request.labels.*.name, 'publish-preview')
-    # Worth considering — npm versions are permanent, and `npm unpublish` is
-    # restricted to the first 72 hours, so every push here leaves a version on
-    # the package's public list forever.
+    # Two gates:
+    #  - Same-repo branches only: a fork PR has no NPM_TOKEN by design.
+    #  - The `publish-preview` label. Opt-in rather than every-push, because npm
+    #    versions are PERMANENT — `npm unpublish` is restricted to the first 72
+    #    hours, so a 30-push PR would otherwise leave 30 versions on the
+    #    package's public list forever.
+    # The last clause keeps an unrelated label ("bug", "wontfix") from
+    # triggering a republish: on a `labeled` event, only the label we care about
+    # counts. On push/open/reopen the clause is vacuously true.
     if: >-
       github.event.action != 'closed'
+      && github.event.action != 'unlabeled'
       && github.event.pull_request.head.repo.full_name == github.repository
+      && contains(github.event.pull_request.labels.*.name, 'publish-preview')
+      && (github.event.action != 'labeled' || github.event.label.name == 'publish-preview')
     runs-on: ubuntu-latest
     steps:
       - name: Checkout PR head
@@ -114,7 +123,8 @@ jobs:
               '```',
               '',
               `Built from ${sha} · dist-tag \`${PREVIEW_TAG}\` · **not** \`latest\`.`,
-              'The tag is removed when this PR closes; the versions themselves stay on npm.',
+              'The tag is dropped when this PR closes or the `publish-preview` label is removed —',
+              'the versions themselves stay on npm and remain installable by their exact number.',
             ].join('\n');
 
             const { data: comments } = await github.rest.issues.listComments({
@@ -143,9 +153,14 @@ jobs:
 
   cleanup:
     name: Drop the preview dist-tag
+    # The label is the switch, so turning it off retires the preview too —
+    # otherwise `@pr-42` would keep resolving to a build nobody is maintaining.
     if: >-
-      github.event.action == 'closed'
-      && github.event.pull_request.head.repo.full_name == github.repository
+      github.event.pull_request.head.repo.full_name == github.repository
+      && (
+        github.event.action == 'closed'
+        || (github.event.action == 'unlabeled' && github.event.label.name == 'publish-preview')
+      )
     runs-on: ubuntu-latest
     steps:
       - name: Setup Node.js

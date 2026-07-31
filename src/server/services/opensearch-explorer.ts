@@ -69,7 +69,7 @@ export class OpenSearchExplorer {
   }
 
   // The engine serves the aoss control plane and the OpenSearch data plane
-  // natively, both on its own endpoint — v1 needed a sidecar here only because
+  // natively, both on its own endpoint — 0.x needed a sidecar here only because
   // no LocalStack edition provides aoss at all.
   private aossBase(): string {
     return EngineManager.getInstance().getConfig().endpoint;
