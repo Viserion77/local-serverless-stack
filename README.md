@@ -46,7 +46,8 @@ LSS features come in two layers:
   - `help` — every command, flag and a config template
 - **Orchestration & provisioning**
   - Service registration API (`POST /api/services/register`) — a bare `{ servicePath }` is a complete registration: the orchestrator packages when needed and reads name/region/`custom.lss` ports from the packaged state
-  - Service discovery (`GET /api/services/scan`, `lss scan`) — finds every Serverless/osls service under the project root, with packaged/registered flags and port/region hints
+  - Service discovery (`GET /api/services/scan`, `lss scan`) — finds every Serverless/osls service under the project root, with installed/packaged/registered flags, effective ports and package command
+  - Preparation endpoints — `POST /api/services/install` (dependencies, whitelisted runners) and `POST /api/services/package` (the service's effective package command), so onboarding can take a freshly cloned monorepo to registered without a terminal
   - CloudFormation parsing from `sls package` → auto-provisions tables, queues (incl. `RedrivePolicy`), topics, buckets (incl. `CorsConfiguration`), secrets, EventBridge buses/rules, raw ApiGatewayV2 routes and OpenSearch collections
   - `autoPackage` — runs `sls package` on demand when the template is missing
   - Automatic event source mappings: SQS / DynamoDB streams / S3 notifications / EventBridge rules → Lambda — with AWS-faithful failure semantics (`FilterCriteria` enforced, `ReportBatchItemFailures` partial batches, `maximumRetryAttempts` incl. the `-1` "until the record ages out" default)
@@ -78,7 +79,7 @@ LSS features come in two layers:
 - **Dashboard (Vue 3 SPA)** — ten tabs: **Overview** (health, config, exposed-ports map), **Services** (status/start/stop/logs + per-service resource breakdown incl. EventBridge buses & rules and OpenSearch collections), **Lambdas** (registry + invoke + logs), **APIs**, **Queues**, **S3**, **DynamoDB**, **OpenSearch**, **Secrets**, **Settings** — plus a region selector and theme toggle
   - **Settings**: edit `lss.config.json` from the dashboard — only changed fields are written (you review and commit the diff), hot-reload for lazy keys, explicit restart-required and env-var-masked flags, plus a reload-from-disk button
   - **Branding**: navbar title/subtitle, logo, favicon, default theme and any TreeUI color token per theme, via the `branding` config key
-- **Guided onboarding** — first dashboard visit with no services walks through ports → branding → a project scan where you tick the services to register; reopen it anytime from Settings
+- **Guided onboarding** — first dashboard visit with no services walks through ports → branding → a project scan where you tick services and install, package and register them; per-service API/invoke ports and package commands are editable inline and persist to `lss.config.json` (`serviceRuntime` / `servicePackaging`); reopen it anytime from Settings
 - **Programmatic client (`LssClient`)** — the CLI/dashboard surface from code: HTTP namespaces `seeds`, `queues`, `dynamo`, `buckets`, `resources`, `services`, `lambdas`, `apis`, `config`, `health` + `lifecycle` (`start`/`stop`/`status`/`logs`/`waitUntilReady`, shells out to the CLI)
 - **DynamoDB dev proxy** — optional reverse proxy on `:8000` (`enableDynamoProxy`) forwarding to the active engine, for tooling that expects DynamoDB on the standard port
 - **DynamoDB seeds** — `seeds/{tableName}.json` fixtures auto-applied on table creation, re-applied via `lss seed` or the dashboard

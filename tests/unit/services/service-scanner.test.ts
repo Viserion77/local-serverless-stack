@@ -146,16 +146,59 @@ describe('hints', () => {
 });
 
 describe('checklist flags', () => {
-  it('reports packaged and registered, and warns about unpackaged services', () => {
+  it('reports installed, packaged and registered, and warns about missing steps', () => {
     write('done/serverless.yml', 'service: done\n');
+    write('done/node_modules/.package-lock.json', '{}');
     write('done/.serverless/cloudformation-template-update-stack.json', '{}');
     write('fresh/serverless.yml', 'service: fresh\n');
 
     const found = scanForServices(root, [path.join(root, 'done')]);
     const byName = Object.fromEntries(found.map(s => [s.name, s]));
-    expect(byName.done).toMatchObject({ packaged: true, registered: true, warnings: [] });
+    expect(byName.done).toMatchObject({ installed: true, packaged: true, registered: true, warnings: [] });
+    expect(byName.fresh.installed).toBe(false);
     expect(byName.fresh.packaged).toBe(false);
     expect(byName.fresh.registered).toBe(false);
+    expect(byName.fresh.warnings.some(w => w.includes('dependencies not installed'))).toBe(true);
     expect(byName.fresh.warnings.some(w => w.includes('not packaged yet'))).toBe(true);
+  });
+
+  it('an installed but unpackaged service warns only about packaging', () => {
+    write('svc/serverless.yml', 'service: svc\n');
+    write('svc/node_modules/.package-lock.json', '{}');
+    const [svc] = scanForServices(root, []);
+    expect(svc.installed).toBe(true);
+    expect(svc.warnings).toEqual([
+      expect.stringContaining('not packaged yet'),
+    ]);
+  });
+
+  it('counts hoisted dependencies: a workspace package with no local node_modules is installed', () => {
+    // The monorepo shape this scanner exists for — deps hoist to the root, so
+    // a per-package check would report every service as uninstalled forever.
+    write('node_modules/.package-lock.json', '{}');
+    write('services/orders/serverless.yml', 'service: orders\n');
+    const [svc] = scanForServices(root, []);
+    expect(svc.installed).toBe(true);
+    expect(svc.warnings.some(w => w.includes('dependencies not installed'))).toBe(false);
+  });
+
+  it('stops the ancestor walk at the scanned root', () => {
+    // node_modules ABOVE the scanned root must not count: it is another
+    // project's tree, not this one's.
+    fs.mkdirSync(path.join(root, 'node_modules'), { recursive: true });
+    const scanned = path.join(root, 'inner');
+    fs.mkdirSync(path.join(scanned, 'svc'), { recursive: true });
+    fs.writeFileSync(path.join(scanned, 'svc', 'serverless.yml'), 'service: svc\n');
+    const [svc] = scanForServices(scanned, []);
+    expect(svc.installed).toBe(false);
+  });
+
+  it('a service outside the scanned root stops the walk at the filesystem root', () => {
+    // Defensive arm: rootDir is never an ancestor, so the walk must terminate
+    // on its own rather than loop at '/'.
+    write('svc/serverless.yml', 'service: svc\n');
+    const [svc] = scanForServices(root, []);
+    // '/' has no node_modules in the sandbox, so the walk ends false.
+    expect(svc.installed).toBe(false);
   });
 });

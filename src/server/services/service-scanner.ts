@@ -21,6 +21,8 @@ export interface ScannedService {
   relPath: string;
   // The config file that identified it (serverless.yml/.yaml/.json/.ts).
   configFile: string;
+  // node_modules exists — `serverless package` can run without an install step.
+  installed: boolean;
   // A packaged template already exists — registration needs no packaging step.
   packaged: boolean;
   // Already registered on this orchestrator (matched by root).
@@ -81,7 +83,11 @@ export function scanForServices(rootDir: string, registeredRoots: Iterable<strin
   function inspect(dir: string, configFile: string): ScannedService {
     const warnings: string[] = [];
     const hints = readHints(path.join(dir, configFile), warnings);
+    const installed = hasDependencies(dir, path.resolve(rootDir));
     const packaged = fs.existsSync(path.join(dir, '.serverless', 'cloudformation-template-update-stack.json'));
+    if (!installed) {
+      warnings.push('dependencies not installed — packaging needs an install first (node_modules is missing)');
+    }
     if (!packaged) {
       warnings.push('not packaged yet — registration will package it (autoPackage) or run `serverless package` first');
     }
@@ -90,6 +96,7 @@ export function scanForServices(rootDir: string, registeredRoots: Iterable<strin
       root: dir,
       relPath: path.relative(path.resolve(rootDir), dir) || '.',
       configFile,
+      installed,
       packaged,
       registered: registered.has(dir),
       region: hints.region,
@@ -97,6 +104,25 @@ export function scanForServices(rootDir: string, registeredRoots: Iterable<strin
       invokePort: hints.invokePort,
       warnings,
     };
+  }
+}
+
+// Whether the service can be packaged without an install step. The service's
+// own node_modules answers it — but in an npm/yarn/pnpm workspaces monorepo
+// (the shape this scanner exists for) dependencies HOIST to the workspace
+// root, and a package legitimately has none of its own. Walking up to the
+// scanned root keeps those services from being reported as uninstalled
+// forever, which would push the operator into running `npm install` inside a
+// workspace package — creating a local tree that shadows the hoisted one.
+function hasDependencies(dir: string, rootDir: string): boolean {
+  let current = dir;
+  for (;;) {
+    if (fs.existsSync(path.join(current, 'node_modules'))) return true;
+    if (current === rootDir) return false;
+    const parent = path.dirname(current);
+    // Defensive: a service outside the scanned root would otherwise walk to /.
+    if (parent === current) return false;
+    current = parent;
   }
 }
 

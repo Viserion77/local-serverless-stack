@@ -494,6 +494,19 @@ describe('getPackageConfigForService', () => {
     });
   });
 
+  it('ignores a prototype-inherited key name masquerading as a service entry', () => {
+    // map['constructor'] resolves to Object.prototype.constructor on a plain
+    // read — the lookup must use hasOwnProperty or every service named
+    // "constructor"/"toString" would inherit a function as its config.
+    const cm = cmWith({ servicePackaging: {} });
+    expect(cm.getPackageConfigForService('/abs/constructor')).toEqual({
+      command: 'npx serverless package',
+      args: [],
+      env: {},
+      timeoutMs: 300000,
+    });
+  });
+
   it('matches a per-service override by relative path and it wins over basename', () => {
     const cm = cmWith({
       servicePackaging: {
@@ -709,6 +722,27 @@ describe('getRuntimeConfigForService', () => {
       apiPort: 3001,
       invokePort: 13001,
     });
+  });
+
+  // Regression: the scan/dashboard key the operator writes must be the key the
+  // lookup reads. getProjectRoot() realpath-resolves (and falls back to the cwd
+  // for a home-directory config) while the config-relative key does not, so a
+  // checkout reached through a symlink used to make a saved override
+  // unreachable — silently ignored at registration and in the scan overlay.
+  it('resolves an entry keyed relative to the project root when the config path is a symlink', () => {
+    const linkDir = path.join(process.cwd(), 'link');
+    const realDir = path.join(process.cwd(), 'demo');
+    const cwdFile = path.join(linkDir, 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify({
+      serviceRuntime: { 'services/api': { apiPort: 4001 } },
+    }));
+    // `link` resolves to `demo`; the raw dirname does not.
+    fs.realpathSync.mockImplementation(((p: string) =>
+      (p === linkDir ? realDir : p)) as typeof fs.realpathSync);
+    process.env.LSS_CONFIG_PATH = cwdFile;
+    const cm = freshConfigManager();
+    expect(cm.getRuntimeConfigForService(path.join(realDir, 'services/api')).apiPort).toBe(4001);
   });
 
   it('a relative-path key wins over a basename key', () => {
@@ -1291,8 +1325,9 @@ describe('updateConfig', () => {
       selfEngine: { port: 15000, fsync: true, fallbackEndpoint: 'http://localhost:4566' },
       lambdaRuntime: { watch: null, execution: 'source' },
       servicePackaging: {
-        // packageArgs: null inside a map entry is tolerated by validation; the
-        // entry replaces wholesale and every consumer reads it through `??`.
+        // packageArgs: null inside a map entry is tolerated by validation and
+        // deletes that subkey when the entry merges (see the dedicated
+        // per-entry merge tests below).
         access: { packageCommand: 'npx sls package', packageEnv: { A: '1' }, packageArgs: null },
         billing: null,
       },
@@ -1353,6 +1388,68 @@ describe('updateConfig', () => {
     });
     cm.updateConfig({ branding: { title: 'New', subtitle: null } });
     expect(written().branding).toEqual({ title: 'New', logo: './logo.svg' });
+  });
+
+  it('map blocks merge per entry: one service edit never drops another service or that entry\'s siblings', () => {
+    const cm = setupFile({
+      serviceRuntime: {
+        orders: { apiPort: 3631, execution: 'source' },
+        billing: { apiPort: 3632 },
+      },
+      servicePackaging: {
+        orders: { packageCommand: 'npm run pkg', packageEnv: { TOKEN: 's' } },
+      },
+    });
+    cm.updateConfig({
+      serviceRuntime: { orders: { apiPort: 4001, invokePort: 14001 } },
+      servicePackaging: { orders: { packageCommand: 'npx sls package' } },
+    });
+    expect(written().serviceRuntime).toEqual({
+      // execution survives the port edit; billing untouched.
+      orders: { apiPort: 4001, invokePort: 14001, execution: 'source' },
+      billing: { apiPort: 3632 },
+    });
+    // packageEnv (possibly secret) survives a command edit.
+    expect(written().servicePackaging).toEqual({
+      orders: { packageCommand: 'npx sls package', packageEnv: { TOKEN: 's' } },
+    });
+  });
+
+  it('map entries: null deletes a whole entry, null inside an entry deletes one subkey', () => {
+    const cm = setupFile({
+      serviceRuntime: {
+        orders: { apiPort: 3631, invokePort: 13631 },
+        billing: { apiPort: 3632 },
+      },
+    });
+    cm.updateConfig({ serviceRuntime: { billing: null, orders: { invokePort: null } } });
+    expect(written().serviceRuntime).toEqual({ orders: { apiPort: 3631 } });
+  });
+
+  it('drops an entry left empty by a delete, instead of writing a meaningless {}', () => {
+    // An empty entry is truthy, so it would shadow a basename-keyed entry for
+    // the same service and silently disable its override.
+    const cm = setupFile({ serviceRuntime: { orders: { apiPort: 3631 } } });
+    cm.updateConfig({ serviceRuntime: { orders: { apiPort: null } } });
+    expect(written().serviceRuntime).toEqual({});
+  });
+
+  it('rejects a prototype-inherited key name instead of writing it to the file', () => {
+    const cm = setupFile({});
+    for (const patch of [
+      { constructor: { anything: 1 } },
+      { serviceRuntime: { orders: { toString: 'junk' } } },
+      { branding: { hasOwnProperty: 'junk' } },
+    ]) {
+      expect(() => cm.updateConfig(patch as never)).toThrow(/unknown config key/);
+    }
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('map entries replace a malformed existing entry that is not an object', () => {
+    const cm = setupFile({ serviceRuntime: { orders: 'broken' } });
+    cm.updateConfig({ serviceRuntime: { orders: { apiPort: 3631 } } });
+    expect(written().serviceRuntime).toEqual({ orders: { apiPort: 3631 } });
   });
 
   it('replaces an object block whose existing file value is not an object', () => {

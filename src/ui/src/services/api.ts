@@ -28,7 +28,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: response.statusText }));
-    throw new Error(error.error || 'Request failed');
+    // Carry the parsed body: error payloads may hold more than the message
+    // (e.g. install/package answer 422 with the command's output tail).
+    throw Object.assign(new Error(error.error || 'Request failed'), { body: error });
   }
 
   return response.json();
@@ -195,12 +197,24 @@ export interface ScannedService {
   root: string;
   relPath: string;
   configFile: string;
+  installed: boolean;
   packaged: boolean;
   registered: boolean;
   region?: string;
+  // Effective values: `serviceRuntime` config overrides win over yml hints.
   apiPort?: number;
   invokePort?: number;
+  // Effective package command for this service (servicePackaging else global).
+  packageCommand: string;
   warnings: string[];
+}
+
+// Result of POST /api/services/install and /api/services/package.
+export interface PrepareServiceResult {
+  success: boolean;
+  exitCode: number;
+  durationMs: number;
+  output: string;
 }
 
 export interface ScanResponse {
@@ -356,6 +370,10 @@ export interface LssConfigUpdate {
     subtitle?: string | null;
     defaultTheme?: 'dark' | 'light';
   };
+  // Map entries merge per service on the server: sending one subkey never
+  // drops that entry's siblings; null deletes an entry (or one subkey).
+  serviceRuntime?: Record<string, { apiPort?: number | null; invokePort?: number | null } | null>;
+  servicePackaging?: Record<string, { packageCommand?: string | null } | null>;
 }
 
 export interface ConfigUpdateResponse {
@@ -629,6 +647,16 @@ export const api = {
   getService: (name: string) => request<ServiceDetail>(`/api/services/${encodeURIComponent(name)}`),
   registerService: (servicePath: string) =>
     request<RegisterServiceResult>('/api/services/register', {
+      method: 'POST',
+      body: JSON.stringify({ servicePath }),
+    }),
+  installService: (servicePath: string, command?: string) =>
+    request<PrepareServiceResult>('/api/services/install', {
+      method: 'POST',
+      body: JSON.stringify({ servicePath, command }),
+    }),
+  packageService: (servicePath: string) =>
+    request<PrepareServiceResult>('/api/services/package', {
       method: 'POST',
       body: JSON.stringify({ servicePath }),
     }),

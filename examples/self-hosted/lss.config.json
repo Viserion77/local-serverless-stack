@@ -12,15 +12,12 @@
   },
   "branding": {
     "title": "Self-Hosted Services",
-    "subtitle": "Every AWS service emulated in-process by LSS \u2014 no Docker, no tokens",
+    "subtitle": "Every AWS service emulated in-process by LSS — no Docker, no tokens",
     "logo": "./assets/logo.svg",
     "favicon": "./assets/logo.svg",
     "defaultTheme": "dark",
     "colors": {
-      "brand-primary": "#0d9488",
-      "brand-hover": "#0f766e",
-      "brand-soft": "#ccfbf1",
-      "--tree-radius-md": "4px"
+      "brand-primary": "#0d9488"
     },
     "themeColors": {
       "dark": {
@@ -30,5 +27,6 @@
         "brand-contrast": "#042f2e"
       }
     }
-  }
+  },
+  "serviceRuntime": {}
 }

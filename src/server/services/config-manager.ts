@@ -422,7 +422,12 @@ function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string
       // null subvalues are always allowed — they delete the subkey on merge.
       if (spec.subKeys) {
         for (const [subKey, subValue] of Object.entries(value)) {
-          const subSpec = spec.subKeys[subKey];
+          // hasOwnProperty, not a plain read: `constructor`/`toString` would
+          // otherwise resolve to an Object.prototype member, pass this guard
+          // and reach the file as unvalidated JSON.
+          const subSpec = Object.prototype.hasOwnProperty.call(spec.subKeys, subKey)
+            ? spec.subKeys[subKey]
+            : undefined;
           if (!subSpec) return `unknown config key "${key}.${subKey}"`;
           if (subValue === null) continue;
           const error = validateValue(`${key}.${subKey}`, subValue, subSpec);
@@ -434,7 +439,9 @@ function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string
           if (entryValue === null) continue;
           if (!isPlainObject(entryValue)) return `"${key}.${entryKey}" must be an object`;
           for (const [subKey, subValue] of Object.entries(entryValue)) {
-            const subSpec = spec.entrySubKeys[subKey];
+            const subSpec = Object.prototype.hasOwnProperty.call(spec.entrySubKeys, subKey)
+              ? spec.entrySubKeys[subKey]
+              : undefined;
             if (!subSpec) return `unknown config key "${key}.${entryKey}.${subKey}"`;
             if (subValue === null) continue;
             const error = validateValue(`${key}.${entryKey}.${subKey}`, subValue, subSpec);
@@ -708,17 +715,51 @@ export class ConfigManager {
    * as the global baseline.
    */
   getPackageConfigForService(servicePath: string): ResolvedPackageConfig {
-    const map = this.config.servicePackaging ?? {};
-    const baseName = path.basename(servicePath);
-    const configDir = path.resolve(this.configPath ? path.dirname(this.configPath) : process.cwd());
-    const relPath = path.relative(configDir, servicePath).split(path.sep).join('/');
-    const perService = map[relPath] ?? map[baseName] ?? {};
+    const perService = this.lookupServiceEntry(this.config.servicePackaging, servicePath);
     return {
       command: perService.packageCommand ?? this.getPackageCommand(),
       args: [...(this.config.packageArgs ?? []), ...(perService.packageArgs ?? [])],
       env: { ...(this.config.packageEnv ?? {}), ...(perService.packageEnv ?? {}) },
       timeoutMs: perService.packageTimeoutMs ?? this.getPackageTimeoutMs(),
     };
+  }
+
+  /**
+   * The keys a `servicePackaging`/`serviceRuntime` entry may be written under,
+   * most specific first: the path relative to the config file's directory, the
+   * path relative to the project root, then the directory basename.
+   *
+   * The two relative forms are usually the same string — but not always, and
+   * the difference used to silently drop overrides: `getProjectRoot()`
+   * realpath-resolves (and falls back to the cwd for a home-directory config),
+   * while a raw `dirname(configPath)` does not. A checkout reached through a
+   * symlink, or a config loaded from `~`, made the key the dashboard writes
+   * (project-root relative, from the scan) unreachable by the lookup. Both
+   * spellings resolve here so a written override always applies.
+   */
+  private serviceEntryKeys(servicePath: string): string[] {
+    const target = realpathOrSelf(path.resolve(servicePath));
+    const bases = [
+      this.configPath ? realpathOrSelf(path.resolve(path.dirname(this.configPath))) : null,
+      this.getProjectRoot(),
+    ];
+    const keys = bases
+      .filter((base): base is string => base !== null)
+      .map(base => path.relative(base, target).split(path.sep).join('/'))
+      .filter(Boolean);
+    keys.push(path.basename(target));
+    return [...new Set(keys)];
+  }
+
+  private lookupServiceEntry<T extends object>(
+    map: Record<string, T> | undefined,
+    servicePath: string,
+  ): T | Record<string, never> {
+    const entries = map ?? {};
+    for (const key of this.serviceEntryKeys(servicePath)) {
+      if (Object.prototype.hasOwnProperty.call(entries, key)) return entries[key];
+    }
+    return {};
   }
 
   isLambdaRuntimeEnabled(): boolean {
@@ -774,11 +815,7 @@ export class ConfigManager {
    * (true for source, false for artifact).
    */
   getRuntimeConfigForService(servicePath: string): ResolvedRuntimeConfig {
-    const map = this.config.serviceRuntime ?? {};
-    const baseName = path.basename(servicePath);
-    const configDir = path.resolve(this.configPath ? path.dirname(this.configPath) : process.cwd());
-    const relPath = path.relative(configDir, servicePath).split(path.sep).join('/');
-    const perService = map[relPath] ?? map[baseName] ?? {};
+    const perService = this.lookupServiceEntry(this.config.serviceRuntime, servicePath);
     return {
       enabled: perService.enabled ?? this.isLambdaRuntimeEnabled(),
       execution: perService.execution ?? this.getLambdaExecutionMode(),
@@ -999,7 +1036,9 @@ export class ConfigManager {
         errors.push(`"${key}" cannot be edited via the API — set it in the config file or environment directly`);
         continue;
       }
-      const spec = EDITABLE_CONFIG_KEYS[key];
+      const spec = Object.prototype.hasOwnProperty.call(EDITABLE_CONFIG_KEYS, key)
+        ? EDITABLE_CONFIG_KEYS[key]
+        : undefined;
       if (!spec) {
         errors.push(`unknown config key "${key}"`);
         continue;
@@ -1035,6 +1074,10 @@ export class ConfigManager {
       } else if (EDITABLE_CONFIG_KEYS[key].kind === 'object') {
         // One-level merge so a partial block edit (e.g. branding.title) never
         // drops sibling settings the UI does not round-trip (branding.logo).
+        // Map-shaped blocks (serviceRuntime/servicePackaging) merge one level
+        // deeper for the same reason: onboarding sending { apiPort } for one
+        // service must not drop that entry's execution/packageEnv siblings.
+        const perEntry = Boolean(EDITABLE_CONFIG_KEYS[key].entrySubKeys);
         const existing = isPlainObject(fileConfig[key])
           ? (fileConfig[key] as Record<string, unknown>)
           : {};
@@ -1042,6 +1085,26 @@ export class ConfigManager {
         for (const [subKey, subValue] of Object.entries(value as Record<string, unknown>)) {
           if (subValue === null) {
             delete merged[subKey];
+          } else if (perEntry && isPlainObject(subValue)) {
+            const entryExisting = isPlainObject(merged[subKey])
+              ? (merged[subKey] as Record<string, unknown>)
+              : {};
+            const entryMerged: Record<string, unknown> = { ...entryExisting };
+            for (const [entryKey, entryValue] of Object.entries(subValue as Record<string, unknown>)) {
+              if (entryValue === null) {
+                delete entryMerged[entryKey];
+              } else {
+                entryMerged[entryKey] = entryValue;
+              }
+            }
+            // An entry left with no settings carries no meaning and would
+            // shadow a basename-keyed entry for the same service (an empty
+            // object is truthy), so it is dropped rather than written.
+            if (Object.keys(entryMerged).length === 0) {
+              delete merged[subKey];
+            } else {
+              merged[subKey] = entryMerged;
+            }
           } else {
             merged[subKey] = subValue;
           }

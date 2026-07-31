@@ -60,12 +60,19 @@ resolved by ARN. Nothing the project supported on LocalStack needed LocalStack.
   `serverPort` splits them back into two listeners. `AWS_ENDPOINT`, the dashboard URL and the
   registration URL are now the same string.
 - **Guided onboarding.** First dashboard visit with no services registered opens a 3-step flow —
-  ports, branding (applied live), then a project scan where you tick the services to register —
-  reopenable anytime from Settings. This is the plugin's replacement for humans.
+  ports, branding (applied live), then a project scan where you tick services and take them from
+  freshly cloned to registered without a terminal: **Install selected** (`POST
+  /api/services/install`, default `npm install`, first token whitelisted), **Package selected**
+  (`POST /api/services/package`, the effective package command) and **Register selected**.
+  Per-service API/invoke ports and package commands are editable inline and persist to
+  `lss.config.json` as `serviceRuntime`/`servicePackaging` entries — `updateConfig` now merges
+  map blocks **per entry**, so saving one field never drops that entry's or another service's
+  siblings. Reopenable anytime from Settings. This is the plugin's replacement for humans.
 - **Service discovery**: `GET /api/services/scan` + `lss scan` walk the project root (depth ≤ 6,
   dependency/build/VCS trees skipped, a service root is a leaf) and report every Serverless/osls
-  service with `packaged`/`registered` flags and best-effort name/region/port hints — hints only,
-  the packaged state stays the authority at register time. `lss register [path...]` (defaults to
+  service with `installed`/`packaged`/`registered` flags, the effective ports and package command
+  (`serviceRuntime`/`servicePackaging` overlays win over the yml hints — the same precedence
+  registration applies) — hints only, the packaged state stays the authority at register time. `lss register [path...]` (defaults to
   `.`) is the CLI replacement for automation; `LssClient.services.scan()` and the MCP tools
   `lss_scan_services`/`lss_register_service` expose the same pair to code and to agents.
 - **MCP server** (`lss mcp`, `src/mcp/`): the running stack as **25 tools** for any Model Context

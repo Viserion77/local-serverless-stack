@@ -314,6 +314,14 @@ from code. A bare `{ servicePath }` is a complete registration: with
 missing, then reads the service name, region and ports from the packaged
 `.serverless/serverless-state.json`.
 
+The onboarding's services step can also prepare a service before registering:
+**Install selected** (`POST /api/services/install`, default `npm install`) and
+**Package selected** (`POST /api/services/package`, the effective package
+command). Per-service API/invoke ports and a custom package command are
+editable inline; edits persist to `lss.config.json` as `serviceRuntime` /
+`servicePackaging` entries (merged per service, so an edit to one field never
+drops that entry's siblings).
+
 ### Service Ports (API emulation)
 
 Each service declares its HTTP and invoke ports under `custom.lss` in its
