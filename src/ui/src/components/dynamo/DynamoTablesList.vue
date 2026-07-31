@@ -10,7 +10,10 @@ import type { DynamoTableSummary, SeedFileEntry } from '../../services/api';
 
 const emit = defineEmits<{ (e: 'open', name: string): void }>();
 
+// TTable's `rows` prop is Record<string, unknown>[]; the index signature keeps
+// the concrete row type usable there without casting at every call site.
 interface TableRow {
+  [key: string]: unknown;
   name: string;
   status?: string;
   itemCount: number;

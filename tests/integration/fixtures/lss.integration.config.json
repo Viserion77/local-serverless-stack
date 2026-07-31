@@ -1,10 +1,10 @@
 {
   "serverPort": 3399,
-  "localstackPort": 4599,
+  "engine": "self",
+  "selfEngine": {
+    "port": 14599
+  },
   "stateDir": "tests/.lss-integration",
-  "mode": "managed",
-  "localstackEdition": "community",
-  "services": ["dynamodb", "sqs", "sns", "s3", "lambda"],
   "persistence": false,
   "region": "us-east-1",
   "seedsDir": "tests/integration/fixtures/sample-microservice/seeds",

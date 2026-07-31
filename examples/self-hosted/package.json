@@ -4,7 +4,7 @@
   "private": true,
   "description": "Four microservices (orders → billing → notifications pipeline + product catalog) running entirely on the LSS self engine: DynamoDB, SQS, S3, EventBridge and OpenSearch Serverless emulated in-process — no Docker, no LocalStack, no auth token.",
   "scripts": {
-    "lss:start": "node ../../bin/cli.js start --self-engine",
+    "lss:start": "node ../../bin/cli.js start",
     "lss:stop": "node ../../bin/cli.js stop",
     "lss:status": "node ../../bin/cli.js status",
     "register:orders": "npm --prefix orders-service run package",

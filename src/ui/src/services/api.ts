@@ -188,13 +188,12 @@ export interface SeedClearResult {
 
 export interface HealthInfo {
   status: string;
-  /** @deprecated reads "localstack" even on the self engine — use engineRunning. */
-  localstack: boolean;
-  engineRunning?: boolean;
+  engineRunning: boolean;
   engine?: {
-    kind: 'localstack' | 'self';
+    kind: 'self';
     running: boolean;
     endpoint: string;
+    services?: string[];
   };
   dynamoProxy: {
     enabled: boolean;
@@ -259,30 +258,15 @@ export interface ServiceRuntimeInfo {
 export interface LssConfigSnapshot {
   serverPort: number;
   engine: {
-    kind: 'localstack' | 'self';
+    kind: 'self';
     endpoint: string;
-  };
-  localstack: {
-    mode: string;
-    endpoint: string;
-    port: number;
-    edition: string;
-    version: string;
-    image: string;
-    hasAuthToken: boolean;
   };
   selfEngine: SelfEngineInfo;
-  aossSidecar: {
-    enabled: boolean;
-    port: number;
-    endpoint: string;
-  };
   dynamoProxy: {
     enabled: boolean;
     port: number;
   };
   region: string;
-  services: string[];
   persistence: boolean;
   debug: boolean;
   seedsDir: string;
@@ -307,16 +291,9 @@ export interface LssConfigSnapshot {
 // the file; object blocks merge one level deep and a null subkey deletes it.
 export interface LssConfigUpdate {
   serverPort?: number;
-  localstackPort?: number;
-  localstackEndpoint?: string | null;
-  mode?: 'managed' | 'external';
-  localstackEdition?: 'community' | 'pro';
-  localstackVersion?: string | null;
-  localstackImage?: string | null;
   enableDynamoProxy?: boolean;
   dynamoProxyPort?: number;
   region?: string;
-  services?: string[] | null;
   persistence?: boolean;
   debug?: boolean;
   seedsDir?: string | null;
@@ -325,7 +302,6 @@ export interface LssConfigUpdate {
   packageCommand?: string | null;
   packageArgs?: string[];
   packageTimeoutMs?: number;
-  engine?: 'localstack' | 'self';
   lambdaRuntime?: {
     enabled?: boolean;
     execution?: 'auto' | 'artifact' | 'source';
@@ -343,10 +319,6 @@ export interface LssConfigUpdate {
     memoryBudgetMb?: number;
     fsync?: boolean;
     fallbackEndpoint?: string | null;
-  };
-  aossSidecar?: {
-    enabled?: boolean;
-    port?: number;
   };
   branding?: {
     title?: string | null;
@@ -372,7 +344,7 @@ export interface ConfigReloadResponse {
 
 export interface PortEntry {
   name: string;
-  kind: 'orchestrator' | 'engine' | 'sidecar' | 'proxy' | 'service-api' | 'service-invoke';
+  kind: 'orchestrator' | 'engine' | 'proxy' | 'service-api' | 'service-invoke';
   port: number;
   url: string;
   description: string;

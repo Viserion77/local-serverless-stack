@@ -48,8 +48,14 @@ const TARGET_PREFIXES: Record<string, EngineServiceName> = {
 const LEGACY_SQS_MESSAGE =
   'Your SDK predates the SQS JSON protocol. The LSS self engine serves SQS over ' +
   'AWS JSON 1.0 (aws-sdk v3 / recent boto3); set selfEngine.fallbackEndpoint to ' +
-  'route legacy SDKs to a LocalStack instance.';
+  'route legacy SDKs to an endpoint that still speaks Query.';
 
+// Compatibility alias, not a dependency: plenty of third-party tooling (wait-for
+// scripts, IDE plugins, docker-compose healthchecks) probes GET
+// /_localstack/health to decide whether a local AWS is up. Answering it in the
+// shape they expect — with `edition: "self"`, so nothing pretends otherwise —
+// lets that tooling keep working unchanged. `/_lss/health` above is the native
+// endpoint.
 const LOCALSTACK_HEALTH = {
   services: {
     dynamodb: 'available',

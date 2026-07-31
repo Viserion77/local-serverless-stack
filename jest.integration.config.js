@@ -1,6 +1,6 @@
-// Integration test config: boots a real isolated LSS + LocalStack (Docker).
+// Integration test config: boots a real isolated LSS on the self engine.
 // No coverage gate; long timeouts. Run with `npm run test:integration`.
-// Requires Docker and a LOCALSTACK_AUTH_TOKEN (community images >= 2026.5).
+// No Docker and no auth token — it runs on any machine and in any CI job.
 module.exports = {
   preset: 'ts-jest',
   testEnvironment: 'node',
@@ -11,8 +11,8 @@ module.exports = {
     '^(\\.{1,2}/.*)\\.js$': '$1',
   },
   testTimeout: 120000,
-  // Docker-bound suites must not run in parallel workers (they would fight over
-  // LocalStack containers/ports). Run serially.
+  // Each suite binds real ports (orchestrator, engine, per-service listeners),
+  // so they must not overlap. Run serially.
   maxWorkers: 1,
   setupFilesAfterEnv: ['<rootDir>/tests/setup.integration.ts'],
   verbose: true,

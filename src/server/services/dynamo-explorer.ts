@@ -16,7 +16,7 @@ import {
   type LocalSecondaryIndexDescription,
 } from '@aws-sdk/client-dynamodb';
 import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
-import { LocalStackManager } from './localstack-manager.js';
+import { EngineManager } from '../engine/engine-manager.js';
 
 export interface TtlInfo {
   enabled: boolean;
@@ -77,7 +77,7 @@ export class DynamoExplorer {
   // LssClient and a bare curl all hit that path; only the dashboard was safe
   // because it always sends the region it read from /api/config.
   private constructor() {
-    const region = LocalStackManager.getInstance().getConfig().region;
+    const region = EngineManager.getInstance().getConfig().region;
     if (region) this.defaultRegion = region;
   }
 
@@ -94,7 +94,7 @@ export class DynamoExplorer {
     const r = region || this.defaultRegion;
     let client = this.clients.get(r);
     if (!client) {
-      const baseConfig = LocalStackManager.getInstance().getConfig();
+      const baseConfig = EngineManager.getInstance().getConfig();
       client = new DynamoDBClient({ ...baseConfig, region: r });
       this.clients.set(r, client);
     }

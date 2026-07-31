@@ -3,7 +3,7 @@
 LSS (Local Serverless Stack) is a local control plane for serverless development:
 one orchestrator provisions every AWS resource your services declare and emulates
 the Lambda runtime + API Gateway — backed either by the in-process **self engine**
-(no Docker) or by a single shared **LocalStack** container. A CLI (`npx lss`), a
+(no Docker, no container). A CLI (`npx lss`), a
 Vue 3 dashboard, a Serverless Framework plugin (`serverless-lss`) and a
 programmatic client (`LssClient`) sit on top.
 

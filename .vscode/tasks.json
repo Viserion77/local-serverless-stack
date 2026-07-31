@@ -41,25 +41,6 @@
       "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
       "problemMatcher": []
     },
-    {
-      "label": "dev @ example localstack-free (watch, sem build)",
-      "detail": "npm run dev lendo examples/localstack-free/lss.config.json — orquestrador forçado em :3100 (a UI dev espera essa porta); exige Docker. UI em :3101",
-      "type": "shell",
-      "command": "LSS_DASHBOARD_PORT=3100 LSS_CONFIG_PATH=examples/localstack-free/lss.config.json npm run dev",
-      "isBackground": true,
-      "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
-      "problemMatcher": []
-    },
-    {
-      "label": "dev @ example localstack-ultimate (watch, sem build)",
-      "detail": "Carrega examples/localstack-ultimate/.env (token) + lss.config.json e roda npm run dev — orquestrador forçado em :3100 (a UI dev espera essa porta); exige Docker. UI em :3101",
-      "type": "shell",
-      "command": "set -a; [ -f examples/localstack-ultimate/.env ] && . examples/localstack-ultimate/.env; set +a; LSS_DASHBOARD_PORT=3100 LSS_CONFIG_PATH=examples/localstack-ultimate/lss.config.json npm run dev",
-      "isBackground": true,
-      "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
-      "problemMatcher": []
-    },
-
     // ------------------------------------------------------------------
     // Tests & validation
     // ------------------------------------------------------------------
@@ -90,8 +71,8 @@
       "problemMatcher": []
     },
     {
-      "label": "test: integration (Docker + LOCALSTACK_AUTH_TOKEN)",
-      "detail": "Suite de integração com LocalStack real — exige Docker e token",
+      "label": "test: integration (self engine, no Docker)",
+      "detail": "Suite de integração ponta a ponta no self engine — sem Docker, sem token",
       "type": "npm",
       "script": "test:integration",
       "group": "test",
@@ -213,126 +194,6 @@
         "example self-hosted: drive catalog (OpenSearch)"
       ],
       "icon": { "id": "rocket", "color": "terminal.ansiYellow" },
-      "problemMatcher": []
-    },
-
-    // ------------------------------------------------------------------
-    // Example: localstack-free (LocalStack community 4.0 via Docker)
-    // ------------------------------------------------------------------
-    {
-      "label": "example localstack-free: start (Docker)",
-      "detail": "Sobe o LSS com LocalStack community 4.0 gerenciado (exige Docker, sem token)",
-      "type": "shell",
-      "command": "npm run lss:start",
-      "options": { "cwd": "${workspaceFolder}/examples/localstack-free" },
-      "icon": { "id": "server-environment", "color": "terminal.ansiGreen" },
-      "problemMatcher": []
-    },
-    {
-      "label": "example localstack-free: register services",
-      "type": "shell",
-      "command": "npm run register:all",
-      "options": { "cwd": "${workspaceFolder}/examples/localstack-free" },
-      "icon": { "id": "cloud-upload", "color": "terminal.ansiBlue" },
-      "problemMatcher": []
-    },
-    {
-      "label": "example localstack-free: stop",
-      "type": "shell",
-      "command": "npm run lss:stop",
-      "options": { "cwd": "${workspaceFolder}/examples/localstack-free" },
-      "icon": { "id": "debug-stop", "color": "terminal.ansiRed" },
-      "problemMatcher": []
-    },
-    {
-      "label": "example localstack-free: restart (rebuild local)",
-      "detail": "build: all > stop > start — o CLI roda o dist/ compilado, então este é o caminho para ver mudanças locais no exemplo",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "build: all",
-        "example localstack-free: stop",
-        "example localstack-free: start (Docker)"
-      ],
-      "icon": { "id": "refresh", "color": "terminal.ansiYellow" },
-      "problemMatcher": []
-    },
-
-    // ------------------------------------------------------------------
-    // Example: localstack-ultimate (LocalStack Pro via Docker + token)
-    // ------------------------------------------------------------------
-    {
-      "label": "example localstack-ultimate: setup",
-      "detail": "npm install no exemplo (SDKs + serverless-offline + plugin LSS)",
-      "type": "shell",
-      "command": "npm run setup",
-      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
-      "icon": { "id": "desktop-download", "color": "terminal.ansiBlue" },
-      "problemMatcher": []
-    },
-    {
-      "label": "example localstack-ultimate: start (Docker + token)",
-      "detail": "Sobe o LSS com LocalStack Pro gerenciado — exige Docker e LOCALSTACK_AUTH_TOKEN obrigatório no .env",
-      "type": "shell",
-      "command": "npm run lss:start",
-      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
-      "icon": { "id": "server-environment", "color": "terminal.ansiGreen" },
-      "problemMatcher": []
-    },
-    {
-      "label": "example localstack-ultimate: offline (HTTP :3002)",
-      "detail": "sls package + RedrivePolicy (wire-dlq) + serverless-offline — fica em primeiro plano, não encadeie em dependsOn",
-      "type": "shell",
-      "command": "npm run offline",
-      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
-      "isBackground": true,
-      "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
-      "problemMatcher": []
-    },
-    {
-      "label": "example localstack-ultimate: seed",
-      "detail": "Recarrega os seeds (Users/Orders/Sessions) no LocalStack Pro — LSS precisa estar de pé",
-      "type": "shell",
-      "command": "npm run seed",
-      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
-      "icon": { "id": "database", "color": "terminal.ansiYellow" },
-      "problemMatcher": []
-    },
-    {
-      "label": "example localstack-ultimate: drive demo",
-      "detail": "POST /users e /orders (incl. ordem envenenada p/ DLQ) e lê /users e /audit em :3002",
-      "type": "shell",
-      "command": "curl -s -X POST http://localhost:3002/dev/users -H 'content-type: application/json' -d '{\"name\":\"Task Runner\",\"email\":\"task@example.com\"}' && echo && echo '--- USERS:' && curl -s http://localhost:3002/dev/users && echo && echo '--- ORDER (SQS -> DynamoDB -> EventBridge):' && curl -s -X POST http://localhost:3002/dev/orders -H 'content-type: application/json' -d '{\"userId\":\"u-alice\",\"items\":[{\"sku\":\"BOOK-02\",\"price\":42,\"qty\":1}]}' && echo && echo '--- POISON ORDER (total 0 -> DLQ apos 3 tentativas, ~30s):' && curl -s -X POST http://localhost:3002/dev/orders -H 'content-type: application/json' -d '{\"userId\":\"u-alice\",\"items\":[{\"sku\":\"BROKEN\",\"price\":0,\"qty\":1}]}' && echo && sleep 5 && echo '--- AUDIT:' && curl -s http://localhost:3002/dev/audit && echo",
-      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
-      "icon": { "id": "run-all", "color": "terminal.ansiCyan" },
-      "problemMatcher": []
-    },
-    {
-      "label": "example localstack-ultimate: drive catalog (OpenSearch)",
-      "detail": "Indexa produtos e roda busca full-text, filtros e agregações — coleção aoss servida pelo sidecar do LSS (:14567)",
-      "type": "shell",
-      "command": "curl -s -X POST http://localhost:3002/dev/products -H 'content-type: application/json' -d '{\"name\":\"Wireless Mouse\",\"category\":\"peripherals\",\"price\":25,\"tags\":[\"usb\",\"wireless\"]}' && echo && curl -s -X POST http://localhost:3002/dev/products -H 'content-type: application/json' -d '{\"name\":\"Mechanical Keyboard\",\"category\":\"peripherals\",\"price\":90,\"tags\":[\"usb\"]}' && echo && curl -s -X POST http://localhost:3002/dev/products -H 'content-type: application/json' -d '{\"name\":\"USB Hub\",\"category\":\"accessories\",\"price\":15,\"tags\":[\"usb\"]}' && echo && echo '--- SEARCH q=wireless:' && curl -s 'http://localhost:3002/dev/search?q=wireless' && echo && echo '--- SEARCH category+maxPrice:' && curl -s 'http://localhost:3002/dev/search?category=peripherals&maxPrice=50' && echo && echo '--- STATS:' && curl -s http://localhost:3002/dev/stats && echo",
-      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
-      "icon": { "id": "search", "color": "terminal.ansiCyan" },
-      "problemMatcher": []
-    },
-    {
-      "label": "example localstack-ultimate: stop",
-      "type": "shell",
-      "command": "npm run lss:stop",
-      "options": { "cwd": "${workspaceFolder}/examples/localstack-ultimate" },
-      "icon": { "id": "debug-stop", "color": "terminal.ansiRed" },
-      "problemMatcher": []
-    },
-    {
-      "label": "example localstack-ultimate: restart (rebuild local)",
-      "detail": "build: all > stop > start — o CLI roda o dist/ compilado, então este é o caminho para ver mudanças locais no exemplo",
-      "dependsOrder": "sequence",
-      "dependsOn": [
-        "build: all",
-        "example localstack-ultimate: stop",
-        "example localstack-ultimate: start (Docker + token)"
-      ],
-      "icon": { "id": "refresh", "color": "terminal.ansiYellow" },
       "problemMatcher": []
     }
   ]

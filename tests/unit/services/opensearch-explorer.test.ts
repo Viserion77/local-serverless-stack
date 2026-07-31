@@ -35,13 +35,6 @@ function fetchedInit(call = 0): RequestInit {
   return fetchSpy.mock.calls[call][1] as RequestInit;
 }
 
-const sidecarConfig = (enabled: boolean) => ({
-  enabled,
-  port: 14567,
-  endpoint: 'http://localhost:14567',
-  dataDir: '/tmp/aoss',
-});
-
 beforeEach(() => {
   aossMock.reset();
   explorer = OpenSearchExplorer.getInstance();
@@ -89,17 +82,10 @@ describe('clientFor / endpoint selection', () => {
     expect((explorer as any).clients.has('us-east-1')).toBe(true);
   });
 
-  it('targets the aoss sidecar endpoint (enabled by default in tests)', async () => {
-    expect(ConfigManager.getInstance().getAossSidecarConfig().enabled).toBe(true);
-    aossMock.on(ListCollectionsCommand).resolves({ collectionSummaries: [] });
-    await explorer.listCollections();
-    const endpoint = await (explorer as any).clients.get('us-east-1').config.endpoint();
-    expect(endpoint.hostname).toBe('localhost');
-    expect(Number(endpoint.port)).toBe(14567);
-  });
-
-  it('targets the engine endpoint when the sidecar is disabled', async () => {
-    jest.spyOn(ConfigManager.getInstance(), 'getAossSidecarConfig').mockReturnValue(sidecarConfig(false));
+  // The engine serves the aoss control plane and the data plane on its own
+  // endpoint — v1 needed a separate sidecar only because no LocalStack edition
+  // provides aoss at all.
+  it('targets the engine endpoint', async () => {
     aossMock.on(ListCollectionsCommand).resolves({ collectionSummaries: [] });
     await explorer.listCollections();
     const engineUrl = new URL(ConfigManager.getInstance().getEngineEndpoint());
@@ -110,27 +96,17 @@ describe('clientFor / endpoint selection', () => {
 });
 
 describe('listCollections', () => {
-  it('maps collection names to their data-plane endpoints (sidecar base)', async () => {
+  it('maps collection names to their data-plane endpoints on the engine base', async () => {
     aossMock.on(ListCollectionsCommand).resolves({
       collectionSummaries: [
         { id: 'a1', name: 'products', status: 'ACTIVE' },
         { id: 'b2', name: 'orders', status: 'ACTIVE' },
       ],
     });
-    expect(await explorer.listCollections()).toEqual([
-      { name: 'products', endpoint: 'http://localhost:14567/_aoss/products' },
-      { name: 'orders', endpoint: 'http://localhost:14567/_aoss/orders' },
-    ]);
-  });
-
-  it('builds endpoints on the engine base when the sidecar is disabled', async () => {
-    jest.spyOn(ConfigManager.getInstance(), 'getAossSidecarConfig').mockReturnValue(sidecarConfig(false));
-    aossMock.on(ListCollectionsCommand).resolves({
-      collectionSummaries: [{ id: 'a1', name: 'products' }],
-    });
     const engine = ConfigManager.getInstance().getEngineEndpoint();
     expect(await explorer.listCollections()).toEqual([
       { name: 'products', endpoint: `${engine}/_aoss/products` },
+      { name: 'orders', endpoint: `${engine}/_aoss/orders` },
     ]);
   });
 
@@ -139,7 +115,7 @@ describe('listCollections', () => {
       collectionSummaries: [{ id: 'a1' }, { id: 'b2', name: '' }, { id: 'c3', name: 'ok' }],
     });
     expect(await explorer.listCollections()).toEqual([
-      { name: 'ok', endpoint: 'http://localhost:14567/_aoss/ok' },
+      { name: 'ok', endpoint: 'http://localhost:14566/_aoss/ok' },
     ]);
   });
 
@@ -178,7 +154,7 @@ describe('listIndices', () => {
       { index: 'empty-v1', docsCount: 0, health: 'green', status: 'open' },
     ]);
     const url = fetchedUrl();
-    expect(url.origin).toBe('http://localhost:14567');
+    expect(url.origin).toBe('http://localhost:14566');
     expect(url.pathname).toBe('/_aoss/products/_cat/indices');
     expect(url.searchParams.get('format')).toBe('json');
     expect(fetchedInit().method).toBe('GET');

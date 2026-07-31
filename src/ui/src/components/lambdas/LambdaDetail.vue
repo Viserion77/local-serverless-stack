@@ -6,7 +6,7 @@ import {
   TCard, TCodeBlock, TTag, TEmptyState, TGrid, TStat, TTable, TTextarea, TFormField,
   TSelect, TDivider, TText, TIcon, useToast,
 } from '@treeui/vue';
-import type { TreeBadgeTone } from '@treeui/vue';
+import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { InvokeResult, LambdaDetailInfo, LambdaInvocationRecord } from '../../services/api';
 
@@ -168,7 +168,7 @@ function toggleLogs(idx: number) {
   expandedLogs.value[idx] = !expandedLogs.value[idx];
 }
 
-function statusTone(status?: string): TreeBadgeTone {
+function statusTone(status?: string): TBadgeTone {
   switch (status) {
     case 'online': return 'success';
     case 'starting': return 'info';
@@ -177,7 +177,7 @@ function statusTone(status?: string): TreeBadgeTone {
   }
 }
 
-function methodTone(method: string): TreeBadgeTone {
+function methodTone(method: string): TBadgeTone {
   return method === 'ANY' ? 'info' : 'neutral';
 }
 

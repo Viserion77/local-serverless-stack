@@ -219,7 +219,7 @@ watch(() => props.name, load);
         </template>
 
         <template #cell-source="{ row }">
-          <TCodeBlock :code="row.source" label="Search document" max-block-size="24rem" wrap copyable />
+          <TCodeBlock :code="String(row.source ?? '')" label="Search document" max-block-size="24rem" wrap copyable />
         </template>
       </TTable>
     </TCard>

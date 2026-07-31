@@ -15,7 +15,7 @@ import {
   CreateSecretCommand,
   DescribeSecretCommand,
 } from '@aws-sdk/client-secrets-manager';
-import { LocalStackManager } from './localstack-manager.js';
+import { EngineManager } from '../engine/engine-manager.js';
 import { ConfigManager } from './config-manager.js';
 import { normalizeSecretSeed, resolveGeneratedSecretString, type SecretSeedValue } from './secret-value.js';
 
@@ -70,7 +70,7 @@ export class SeedManager {
     const r = region || this.defaultRegion;
     let client = this.clients.get(r);
     if (!client) {
-      const baseConfig = LocalStackManager.getInstance().getConfig();
+      const baseConfig = EngineManager.getInstance().getConfig();
       client = new DynamoDBClient({ ...baseConfig, region: r });
       this.clients.set(r, client);
     }
@@ -83,7 +83,7 @@ export class SeedManager {
     const r = region || this.defaultRegion;
     let client = this.secretsClients.get(r);
     if (!client) {
-      const baseConfig = LocalStackManager.getInstance().getConfig();
+      const baseConfig = EngineManager.getInstance().getConfig();
       client = new SecretsManagerClient({ ...baseConfig, region: r });
       this.secretsClients.set(r, client);
     }
@@ -95,7 +95,7 @@ export class SeedManager {
   // are explicit deletes — verify the endpoint hostname every time and refuse
   // anything that isn't loopback/local before issuing a DeleteRequest.
   private assertLocalEndpoint(): void {
-    const endpoint = LocalStackManager.getInstance().getEndpoint();
+    const endpoint = EngineManager.getInstance().getEndpoint();
     let hostname: string;
     try {
       hostname = new URL(endpoint).hostname.toLowerCase();
@@ -230,7 +230,7 @@ export class SeedManager {
             tableName: entry.tableName,
             inserted: 0,
             skipped: true,
-            reason: 'table does not exist in LocalStack',
+            reason: 'table does not exist in the engine',
           } as SeedResult;
         }
         try {
@@ -298,7 +298,7 @@ export class SeedManager {
           tableName: entry.tableName,
           deleted: 0,
           skipped: true,
-          reason: 'table does not exist in LocalStack',
+          reason: 'table does not exist in the engine',
         });
         continue;
       }

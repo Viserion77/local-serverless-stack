@@ -23,7 +23,7 @@ jest.mock('../../../src/server/services/lambda-runtime-manager', () => {
 import { SelfEngineBackend } from '../../../src/server/engine/backends/self-backend.js';
 import { SeedManager } from '../../../src/server/services/seed-manager.js';
 import { ConfigManager } from '../../../src/server/services/config-manager.js';
-import { LocalStackManager } from '../../../src/server/services/localstack-manager.js';
+import { EngineManager } from '../../../src/server/engine/engine-manager.js';
 import type { ResolvedSelfEngineConfig } from '../../../src/server/services/config-manager.js';
 
 const REGION = 'us-east-1';
@@ -53,7 +53,7 @@ describe('wire: boot secret seeding (real self engine, no prior CreateSecret)', 
 
     // Point the SeedManager's per-region client (and the assertion client) at
     // the live backend, and its seeds at the temp dir.
-    jest.spyOn(LocalStackManager.getInstance(), 'getConfig').mockReturnValue({
+    jest.spyOn(EngineManager.getInstance(), 'getConfig').mockReturnValue({
       endpoint, region: REGION, credentials: CREDS,
     });
     jest.spyOn(ConfigManager.getInstance(), 'getSeedsDir').mockReturnValue(seedsDir);

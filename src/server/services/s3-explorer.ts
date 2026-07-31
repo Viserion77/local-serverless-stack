@@ -11,7 +11,7 @@ import {
   DeleteObjectCommand,
   HeadObjectCommand,
 } from '@aws-sdk/client-s3';
-import { LocalStackManager } from './localstack-manager.js';
+import { EngineManager } from '../engine/engine-manager.js';
 
 export interface BucketSnapshot {
   name: string;
@@ -52,7 +52,7 @@ export class S3Explorer {
   private defaultRegion = 'us-east-1';
 
   private constructor() {
-    const region = LocalStackManager.getInstance().getConfig().region;
+    const region = EngineManager.getInstance().getConfig().region;
     if (region) this.defaultRegion = region;
   }
 
@@ -71,7 +71,7 @@ export class S3Explorer {
     const r = region || this.defaultRegion;
     let client = this.clients.get(r);
     if (!client) {
-      const base = LocalStackManager.getInstance().getConfig();
+      const base = EngineManager.getInstance().getConfig();
       // forcePathStyle is required so LocalStack receives the bucket name in
       // the URL path instead of as a virtual-host subdomain.
       client = new S3Client({ ...base, region: r, forcePathStyle: true });

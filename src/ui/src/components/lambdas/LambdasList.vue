@@ -2,10 +2,10 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
-  TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
+  TCard, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
   TTag, TSpinner, TAlert, TText, TLink,
 } from '@treeui/vue';
-import type { TreeBadgeTone } from '@treeui/vue';
+import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { LambdaSummary } from '../../services/api';
 
@@ -45,7 +45,7 @@ async function loadLambdas() {
   }
 }
 
-function statusTone(status: string): TreeBadgeTone {
+function statusTone(status: string): TBadgeTone {
   switch (status) {
     case 'online': return 'success';
     case 'starting': return 'info';

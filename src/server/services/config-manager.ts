@@ -14,20 +14,13 @@ function realpathOrSelf(dir: string): string {
   }
 }
 
-export type LocalStackMode = 'managed' | 'external';
-export type LocalStackEdition = 'community' | 'pro';
-
-// Which AWS provider backs the orchestrator:
-//   "localstack" (default): Docker container managed/external as per `mode`.
-//   "self": the in-process self engine (no Docker) — see docs/PRD_SELF_ENGINE.md.
-export type EngineKind = 'localstack' | 'self';
 
 export interface SelfEngineConfig {
   // Front door port. Default 14566 — deliberately outside 4566–4599, which a
   // real LocalStack install intercepts on some hosts (Docker Desktop/WSL2).
   port?: number;
   // Engine persistence root. Defaults to <stateDir>/engine when stateDir is
-  // set (test isolation), else ~/.lss/engine.
+  // set, else a per-project directory under ~/.lss/projects/.
   dataDir?: string;
   account?: string;
   // Dehydrate hydrated data stores idle past this window.
@@ -37,8 +30,8 @@ export interface SelfEngineConfig {
   // fsync on every WAL flush (paranoid mode). Default: fsync only at
   // compaction/dehydrate/shutdown.
   fsync?: boolean;
-  // Reverse-proxy target for AWS services/operations the engine does not
-  // implement (e.g. a LocalStack instance during migration).
+  // Reverse-proxy target for AWS operations the engine does not implement.
+  // An escape hatch for a niche gap — see docs/SELF_ENGINE.md "Coverage".
   fallbackEndpoint?: string | null;
 }
 
@@ -53,25 +46,6 @@ export interface ResolvedSelfEngineConfig {
   fallbackEndpoint: string | null;
   persistence: boolean;
   region: string;
-}
-
-// OpenSearch Serverless (aoss) sidecar: no LocalStack edition provides aoss,
-// so on LocalStack engines LSS serves the self-engine OpenSearch emulator
-// in-process on its own port. Never used in self mode (aoss is native there).
-export interface AossSidecarConfig {
-  // Default: enabled whenever the active engine is LocalStack.
-  enabled?: boolean;
-  // Sidecar port. Default 14567 — one above the self engine's 14566.
-  port?: number;
-}
-
-// AossSidecarConfig with every default applied plus the derived endpoint and
-// persistence root.
-export interface ResolvedAossSidecarConfig {
-  enabled: boolean;
-  port: number;
-  endpoint: string;
-  dataDir: string;
 }
 
 // Per-service packaging overrides. Keyed in `servicePackaging` by the service
@@ -109,10 +83,9 @@ export interface LambdaRuntimeConfig {
   // apiPort (30xx) → invokePort (130xx) derivation when a service doesn't
   // declare an explicit invoke port. Default: 10000.
   invokePortOffset?: number;
-  // Hostname the LocalStack event proxies use to call back into the orchestrator
-  // host (default: "host.docker.internal"). Override when that name doesn't
-  // resolve to this machine — e.g. Docker-in-Docker devcontainers, where the
-  // correct host is the docker network gateway (e.g. "172.17.0.1").
+  // Hostname used to build the invoke URL a service's event proxies call back
+  // on (default "127.0.0.1" — everything runs in this process). Override only
+  // when the orchestrator must be reachable under another name.
   invokeHost?: string;
   // Fork a service's worker on its first invocation instead of at registration
   // (default: true). Each worker is a Node process costing ~48 MB resident, so
@@ -193,33 +166,15 @@ export interface ResolvedBranding {
   };
 }
 
+// Front door port for the engine. Deliberately outside 4566–4599, which a real
+// LocalStack install intercepts on some hosts (Docker Desktop/WSL2).
+const DEFAULT_ENGINE_PORT = 14566;
+
 export type BrandingAssetKind = 'logo' | 'favicon';
 
 export interface LSSConfig {
   // Server port (dashboard + API)
   serverPort?: number;
-
-  // LocalStack endpoint and port
-  localstackPort?: number;
-  localstackEndpoint?: string;
-
-  // LocalStack operation mode:
-  //   "managed" (default): LSS starts/stops a Docker container.
-  //   "external": LSS connects to an already-running LocalStack instance.
-  mode?: LocalStackMode;
-
-  // LocalStack edition: "community" (free) or "pro" (requires auth token).
-  localstackEdition?: LocalStackEdition;
-
-  // LocalStack image tag/version. Defaults to "latest".
-  localstackVersion?: string;
-
-  // Full image override. Wins over edition+version when set.
-  localstackImage?: string;
-
-  // Auth token for LocalStack Pro and recent (>=2026.5) community images.
-  // Prefer the LOCALSTACK_AUTH_TOKEN env var over committing this to a file.
-  localstackAuthToken?: string;
 
   // DynamoDB Proxy
   enableDynamoProxy?: boolean;
@@ -227,9 +182,6 @@ export interface LSSConfig {
 
   // AWS Configuration
   region?: string;
-
-  // LocalStack services
-  services?: string[];
 
   // Persistence
   persistence?: boolean;
@@ -285,15 +237,12 @@ export interface LSSConfig {
   // Per-service runtime overrides (ports, execution mode, watch).
   serviceRuntime?: Record<string, ServiceRuntimeConfig>;
 
-  // AWS provider selection ("localstack" default; "self" = in-process engine).
-  engine?: EngineKind;
+  // Accepted only so a v1 file fails loudly instead of silently: the only
+  // value LSS v2 tolerates is "self". See assertNoLocalStackEngine.
+  engine?: string;
 
-  // Self-engine settings (only used when engine is "self").
+  // Self-engine settings.
   selfEngine?: SelfEngineConfig;
-
-  // OpenSearch Serverless sidecar settings (only used on LocalStack engines,
-  // which have no aoss provider).
-  aossSidecar?: AossSidecarConfig;
 
   // Dashboard branding (title, logo, theme colors). Cosmetic only.
   branding?: BrandingConfig;
@@ -319,24 +268,16 @@ interface ConfigKeySpec {
   entrySubKeys?: Record<string, ConfigKeySpec>;
 }
 
-// Two config keys are deliberately absent (and rejected on write):
-// `localstackAuthToken` — the supported channel is the LOCALSTACK_AUTH_TOKEN
-// env var, the token must never transit the dashboard API — and `secrets`,
-// which holds seed material that belongs in the file/env only.
-const BLOCKED_CONFIG_KEYS: ReadonlySet<string> = new Set(['localstackAuthToken', 'secrets']);
+// `secrets` is deliberately absent (and rejected on write): it holds seed
+// material that belongs in the config file or the environment, never in a
+// payload that crosses the dashboard API.
+const BLOCKED_CONFIG_KEYS: ReadonlySet<string> = new Set(['secrets']);
 
 const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
   serverPort: { kind: 'port' },
-  localstackPort: { kind: 'port' },
-  localstackEndpoint: { kind: 'string' },
-  mode: { kind: 'string', enum: ['managed', 'external'] },
-  localstackEdition: { kind: 'string', enum: ['community', 'pro'] },
-  localstackVersion: { kind: 'string' },
-  localstackImage: { kind: 'string' },
   enableDynamoProxy: { kind: 'boolean' },
   dynamoProxyPort: { kind: 'port' },
   region: { kind: 'string' },
-  services: { kind: 'stringArray' },
   persistence: { kind: 'boolean' },
   debug: { kind: 'boolean' },
   seedsDir: { kind: 'string' },
@@ -378,7 +319,6 @@ const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
       watch: { kind: 'boolean' },
     },
   },
-  engine: { kind: 'string', enum: ['localstack', 'self'] },
   selfEngine: {
     kind: 'object',
     subKeys: {
@@ -389,13 +329,6 @@ const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
       memoryBudgetMb: { kind: 'positiveInt' },
       fsync: { kind: 'boolean' },
       fallbackEndpoint: { kind: 'string' },
-    },
-  },
-  aossSidecar: {
-    kind: 'object',
-    subKeys: {
-      enabled: { kind: 'boolean' },
-      port: { kind: 'port' },
     },
   },
   branding: {
@@ -424,13 +357,6 @@ const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
 // is unset.
 const CONFIG_ENV_OVERRIDES: Record<string, string[]> = {
   serverPort: ['LSS_DASHBOARD_PORT', 'PORT'],
-  localstackPort: ['LSS_LOCALSTACK_PORT'],
-  localstackEndpoint: ['LSS_LOCALSTACK_ENDPOINT'],
-  mode: ['LSS_LOCALSTACK_MODE'],
-  localstackEdition: ['LSS_LOCALSTACK_EDITION'],
-  localstackVersion: ['LSS_LOCALSTACK_VERSION'],
-  localstackImage: ['LSS_LOCALSTACK_IMAGE'],
-  localstackAuthToken: ['LOCALSTACK_AUTH_TOKEN'],
   // Note: the deprecated unprefixed ENABLE_DYNAMO_PROXY is NOT listed — it is
   // only a getter-time fallback (isEnableDynamoProxy) that a file value always
   // beats, so it never masks a saved value.
@@ -543,6 +469,20 @@ export interface ConfigUpdateResult extends ConfigReloadResult {
   envOverridden: string[];
 }
 
+// v1 shipped two engines. v2 ships one, so `engine: "localstack"` (from a file
+// or from LSS_ENGINE) cannot be honoured and must not be ignored either.
+export function assertNoLocalStackEngine(value: string | undefined, source: string): void {
+  if (!value) return;
+  const kind = value.toLowerCase();
+  if (kind === 'localstack') {
+    throw new Error(
+      `${source} is set to "localstack", which LSS v2 no longer supports — the self engine is the only engine. `
+      + 'Remove the setting (and any localstack* keys) from your configuration. '
+      + 'See docs/MIGRATION-v2.md.',
+    );
+  }
+}
+
 export class ConfigManager {
   private static instance: ConfigManager;
   private config: LSSConfig = {};
@@ -583,15 +523,19 @@ export class ConfigManager {
           this.config = JSON.parse(content);
           this.configPath = candidate;
           console.log(`✅ Configuration loaded from ${candidate}`);
-          break;
         } catch (error) {
           console.warn(`⚠️  Failed to parse config file ${candidate}:`, error instanceof Error ? error.message : 'Unknown error');
+          continue;
         }
+        // Outside the try: a v1 `engine` value is a migration error the user
+        // must see, not a parse warning to swallow.
+        assertNoLocalStackEngine(this.config.engine, `"engine" in ${candidate}`);
+        break;
       }
     }
 
-    // Environment variables override file values so secrets like LOCALSTACK_AUTH_TOKEN
-    // can be injected without committing them to disk.
+    // Environment variables override file values, so an instance can be
+    // retargeted (ports, engine data dir, region) without touching the file.
     this.loadFromEnv();
   }
 
@@ -601,33 +545,6 @@ export class ConfigManager {
       /* istanbul ignore next: the enclosing if guarantees one of these is truthy, so the `|| ''` fallback is unreachable */
       this.config.serverPort = parseInt(process.env.LSS_DASHBOARD_PORT || process.env.PORT || '', 10);
     }
-    if (process.env.LSS_LOCALSTACK_PORT) {
-      this.config.localstackPort = parseInt(process.env.LSS_LOCALSTACK_PORT, 10);
-    }
-    if (process.env.LSS_LOCALSTACK_ENDPOINT) {
-      this.config.localstackEndpoint = process.env.LSS_LOCALSTACK_ENDPOINT;
-    }
-    if (process.env.LSS_LOCALSTACK_MODE) {
-      const mode = process.env.LSS_LOCALSTACK_MODE.toLowerCase();
-      if (mode === 'managed' || mode === 'external') {
-        this.config.mode = mode;
-      }
-    }
-    if (process.env.LSS_LOCALSTACK_EDITION) {
-      const edition = process.env.LSS_LOCALSTACK_EDITION.toLowerCase();
-      if (edition === 'community' || edition === 'pro') {
-        this.config.localstackEdition = edition;
-      }
-    }
-    if (process.env.LSS_LOCALSTACK_VERSION) {
-      this.config.localstackVersion = process.env.LSS_LOCALSTACK_VERSION;
-    }
-    if (process.env.LSS_LOCALSTACK_IMAGE) {
-      this.config.localstackImage = process.env.LSS_LOCALSTACK_IMAGE;
-    }
-    if (process.env.LOCALSTACK_AUTH_TOKEN) {
-      this.config.localstackAuthToken = process.env.LOCALSTACK_AUTH_TOKEN;
-    }
     if (process.env.LSS_ENABLE_DYNAMO_PROXY) {
       this.config.enableDynamoProxy = process.env.LSS_ENABLE_DYNAMO_PROXY === 'true' || process.env.LSS_ENABLE_DYNAMO_PROXY === '1';
     }
@@ -636,9 +553,6 @@ export class ConfigManager {
     }
     if (process.env.AWS_REGION) {
       this.config.region = process.env.AWS_REGION;
-    }
-    if (process.env.LSS_SERVICES) {
-      this.config.services = process.env.LSS_SERVICES.split(',');
     }
     if (process.env.LSS_PERSISTENCE) {
       this.config.persistence = process.env.LSS_PERSISTENCE === 'true' || process.env.LSS_PERSISTENCE === '1';
@@ -685,12 +599,10 @@ export class ConfigManager {
         invokeHost: process.env.LSS_INVOKE_HOST,
       };
     }
-    if (process.env.LSS_ENGINE) {
-      const engine = process.env.LSS_ENGINE.toLowerCase();
-      if (engine === 'localstack' || engine === 'self') {
-        this.config.engine = engine;
-      }
-    }
+    // v1 chose a backend with LSS_ENGINE / `engine`. v2 has one engine, so a
+    // leftover "localstack" is a loud, actionable error rather than a silent
+    // no-op that would quietly run against the wrong thing.
+    assertNoLocalStackEngine(process.env.LSS_ENGINE, 'LSS_ENGINE');
     if (process.env.LSS_ENGINE_PORT) {
       this.config.selfEngine = {
         ...this.config.selfEngine,
@@ -721,46 +633,6 @@ export class ConfigManager {
     return this.getServerPort();
   }
 
-  getLocalStackPort(): number {
-    return this.config.localstackPort ?? 4566;
-  }
-
-  getLocalStackEndpoint(): string {
-    if (this.config.localstackEndpoint) {
-      return this.config.localstackEndpoint;
-    }
-    const port = this.getLocalStackPort();
-    return `http://localhost:${port}`;
-  }
-
-  getMode(): LocalStackMode {
-    return this.config.mode ?? 'managed';
-  }
-
-  isExternal(): boolean {
-    return this.getMode() === 'external';
-  }
-
-  getLocalStackEdition(): LocalStackEdition {
-    return this.config.localstackEdition ?? 'community';
-  }
-
-  getLocalStackVersion(): string {
-    return this.config.localstackVersion ?? 'latest';
-  }
-
-  getLocalStackImage(): string {
-    if (this.config.localstackImage) {
-      return this.config.localstackImage;
-    }
-    const repo = this.getLocalStackEdition() === 'pro' ? 'localstack/localstack-pro' : 'localstack/localstack';
-    return `${repo}:${this.getLocalStackVersion()}`;
-  }
-
-  getLocalStackAuthToken(): string | undefined {
-    return this.config.localstackAuthToken;
-  }
-
   isEnableDynamoProxy(): boolean {
     if (this.config.enableDynamoProxy !== undefined) {
       return this.config.enableDynamoProxy;
@@ -775,10 +647,6 @@ export class ConfigManager {
 
   getRegion(): string {
     return this.config.region ?? (process.env.AWS_REGION || 'us-east-1');
-  }
-
-  getServices(): string[] {
-    return this.config.services ?? ['dynamodb', 'sqs', 'sns', 's3', 'lambda', 'events'];
   }
 
   isPersistence(): boolean {
@@ -889,9 +757,9 @@ export class ConfigManager {
     if (this.config.lambdaRuntime?.invokeHost) {
       return this.config.lambdaRuntime.invokeHost;
     }
-    // Self engine: nothing runs inside Docker, so callbacks into the invoke
-    // listeners resolve on the loopback directly.
-    return this.isSelfEngine() ? '127.0.0.1' : 'host.docker.internal';
+    // Nothing runs inside a container, so callbacks into the invoke listeners
+    // resolve on the loopback directly.
+    return '127.0.0.1';
   }
 
   /**
@@ -916,21 +784,13 @@ export class ConfigManager {
     };
   }
 
-  getEngineKind(): EngineKind {
-    return this.config.engine ?? 'localstack';
-  }
-
-  isSelfEngine(): boolean {
-    return this.getEngineKind() === 'self';
-  }
-
   getSelfEngineConfig(): ResolvedSelfEngineConfig {
     const selfEngine = this.config.selfEngine ?? {};
     const stateDir = this.getStateDir();
     const rawDataDir = selfEngine.dataDir
       ?? (stateDir ? path.join(stateDir, 'engine') : this.homeStateDir('engine'));
     return {
-      port: selfEngine.port ?? 14566,
+      port: selfEngine.port ?? DEFAULT_ENGINE_PORT,
       dataDir: path.isAbsolute(rawDataDir) ? rawDataDir : path.resolve(process.cwd(), rawDataDir),
       account: selfEngine.account ?? '000000000000',
       idleUnloadMs: selfEngine.idleUnloadMs ?? 300000,
@@ -939,22 +799,6 @@ export class ConfigManager {
       fallbackEndpoint: selfEngine.fallbackEndpoint ?? null,
       persistence: this.isPersistence(),
       region: this.getRegion(),
-    };
-  }
-
-  getAossSidecarConfig(): ResolvedAossSidecarConfig {
-    // The self engine serves aoss natively — the sidecar must never run there.
-    const enabled = !this.isSelfEngine() && this.config.aossSidecar?.enabled !== false;
-    const port = this.config.aossSidecar?.port ?? 14567;
-    const stateDir = this.getStateDir();
-    return {
-      enabled,
-      port,
-      endpoint: `http://localhost:${port}`,
-      // Mirrors the self-engine default so both persistence roots sit side by
-      // side (<stateDir>/aoss for test isolation, else the per-project dir
-      // under ~/.lss).
-      dataDir: stateDir ? path.join(stateDir, 'aoss') : this.homeStateDir('aoss'),
     };
   }
 
@@ -967,12 +811,11 @@ export class ConfigManager {
   }
 
   // The AWS endpoint every SDK-based consumer (provisioner, explorers, seeds)
-  // should target for the active engine.
+  // targets. Reads the port directly rather than through getSelfEngineConfig(),
+  // which would also resolve the data dir — needless work for a URL, and it
+  // drags the project-root lookup into every caller that only wants an endpoint.
   getEngineEndpoint(): string {
-    if (this.isSelfEngine()) {
-      return `http://localhost:${this.getSelfEngineConfig().port}`;
-    }
-    return this.getLocalStackEndpoint();
+    return `http://localhost:${this.config.selfEngine?.port ?? DEFAULT_ENGINE_PORT}`;
   }
 
   getConfigPath(): string {
@@ -1060,26 +903,16 @@ export class ConfigManager {
   // (per request/registration/seed run) and follows a reload immediately.
   private resolvedBootValues(): Record<string, unknown> {
     const selfEngine = this.getSelfEngineConfig();
-    const aossSidecar = this.getAossSidecarConfig();
     return {
       serverPort: this.getServerPort(),
-      localstackPort: this.getLocalStackPort(),
-      localstackEndpoint: this.getLocalStackEndpoint(),
-      mode: this.getMode(),
-      localstackEdition: this.getLocalStackEdition(),
-      localstackVersion: this.getLocalStackVersion(),
-      localstackImage: this.getLocalStackImage(),
       enableDynamoProxy: this.isEnableDynamoProxy(),
       dynamoProxyPort: this.getDynamoProxyPort(),
       region: this.getRegion(),
-      services: this.getServices(),
       persistence: this.isPersistence(),
       debug: this.isDebug(),
       stateDir: this.getStateDir(),
-      engine: this.getEngineKind(),
-      // Only the block's OWN settings: region/persistence (self engine) and the
-      // stateDir-derived dataDir (aoss) are tracked under their own keys above,
-      // so one change never flags two entries.
+      // Only the block's OWN settings: region/persistence are tracked under
+      // their own keys above, so one change never flags two entries.
       selfEngine: {
         port: selfEngine.port,
         dataDir: selfEngine.dataDir,
@@ -1089,7 +922,6 @@ export class ConfigManager {
         fsync: selfEngine.fsync,
         fallbackEndpoint: selfEngine.fallbackEndpoint,
       },
-      aossSidecar: { enabled: aossSidecar.enabled, port: aossSidecar.port },
     };
   }
 
@@ -1229,28 +1061,17 @@ export class ConfigManager {
   printSummary(): void {
     console.log('\n📋 Configuration Summary:');
     console.log(`  Server Port: ${this.getServerPort()} (http://localhost:${this.getServerPort()})`);
-    console.log(`  Engine: ${this.getEngineKind()}`);
-    if (this.isSelfEngine()) {
-      const selfEngine = this.getSelfEngineConfig();
-      console.log(`  Self Engine Port: ${selfEngine.port} (http://localhost:${selfEngine.port})`);
-      console.log(`  Self Engine Data Dir: ${selfEngine.dataDir}`);
-      if (selfEngine.fallbackEndpoint) {
-        console.log(`  Self Engine Fallback: ${selfEngine.fallbackEndpoint}`);
-      }
-    } else {
-      console.log(`  LocalStack Mode: ${this.getMode()}`);
-      console.log(`  LocalStack Port: ${this.getLocalStackPort()} (${this.getLocalStackEndpoint()})`);
-      if (!this.isExternal()) {
-        console.log(`  LocalStack Image: ${this.getLocalStackImage()} (${this.getLocalStackEdition()})`);
-        console.log(`  LocalStack Auth Token: ${this.getLocalStackAuthToken() ? 'set' : 'not set'}`);
-      }
+    const selfEngine = this.getSelfEngineConfig();
+    console.log(`  Self Engine Port: ${selfEngine.port} (http://localhost:${selfEngine.port})`);
+    console.log(`  Self Engine Data Dir: ${selfEngine.dataDir}`);
+    if (selfEngine.fallbackEndpoint) {
+      console.log(`  Self Engine Fallback: ${selfEngine.fallbackEndpoint}`);
     }
     console.log(`  DynamoDB Proxy Enabled: ${this.isEnableDynamoProxy()}`);
     if (this.isEnableDynamoProxy()) {
       console.log(`  DynamoDB Proxy Port: ${this.getDynamoProxyPort()}`);
     }
     console.log(`  AWS Region: ${this.getRegion()}`);
-    console.log(`  Services: ${this.getServices().join(', ')}`);
     console.log(`  Persistence: ${this.isPersistence()}`);
     console.log(`  Seeds Dir: ${this.getSeedsDir()}`);
     const secretSeedCount = Object.keys(this.getSecretSeeds()).length;

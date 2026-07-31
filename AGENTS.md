@@ -10,9 +10,9 @@
 
 LSS is a **local control plane for serverless development**. One orchestrator provisions and serves
 every AWS resource your services declare, so a monorepo of 15+ microservices needs a single local
-stack instead of one LocalStack per service. It ships two interchangeable backends: the **self
-engine** (an in-process AWS emulator — no Docker, no token, the project's differentiator) and
-**LocalStack** (community or Pro). It also replaces `serverless-offline` with its own Lambda runtime
+stack instead of one emulator per service. The AWS provider is the **self engine**: an in-process
+emulator — no Docker, no container, no auth token — and since v2 the only engine LSS ships. It also
+replaces `serverless-offline` with its own Lambda runtime
 and API Gateway emulation.
 
 Published as the npm package `local-serverless-stack` (CLI: `lss`), plus the workspace package
@@ -31,7 +31,7 @@ Published as the npm package `local-serverless-stack` (CLI: `lss`), plus the wor
 | `src/mcp/` | MCP server (`lss mcp`) — the stack as tools for an AI coding agent |
 | `src/ui/` | Vue 3 dashboard (own workspace) |
 | `packages/serverless-plugin/` | The `serverless-lss` plugin (separately versioned & published) |
-| `examples/` | `self-hosted` (self engine, no Docker), `localstack-free`, `localstack-ultimate` |
+| `examples/` | `self-hosted` — four microservices on the engine (DynamoDB, SQS, S3, EventBridge, OpenSearch, Secrets) |
 | `tests/` | `unit/`, `integration/` (Docker + token gated), `fixtures/` |
 | `docs/` | `FEATURES.md`, `SELF_ENGINE.md`, `CONFIGURATION.md`, `RELEASE.md`, PRDs |
 
@@ -97,8 +97,6 @@ shipping the change, not an afterthought.
 End-to-end proof lives in `examples/`, not in ad-hoc scripts:
 
 - `examples/self-hosted` — four microservices on the self engine (DynamoDB, SQS, S3, EventBridge). The default target.
-- `examples/localstack-free` — API Gateway proxy, cross-service Lambda authorizers, shared bus, streams, S3 notifications.
-- `examples/localstack-ultimate` — Pro-only surfaces.
 
 A new engine capability should gain (or extend) a fixture in one of these plus an assertion. When a
 full boot e2e isn't practical, drive the real backend from a `tests/unit/engine/wire-*.test.ts`

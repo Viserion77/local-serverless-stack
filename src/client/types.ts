@@ -236,6 +236,16 @@ export interface StartServiceInput {
 // ── Health ────────────────────────────────────────────────────────────────────
 export interface HealthStatus {
   status: string;
-  localstack: boolean;
+  /** True once the in-process AWS engine is serving. */
+  engineRunning: boolean;
+  engine: {
+    kind: 'self';
+    running: boolean;
+    endpoint: string;
+    /** Emulated AWS services the engine answers for. */
+    services?: string[];
+    eventSourceLoops?: { sqs: number; streams: number };
+    scheduleRules?: number;
+  };
   dynamoProxy: { enabled: boolean; running: boolean; port: number };
 }

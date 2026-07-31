@@ -4,7 +4,7 @@ import {
   TCard, TButton, TInput, TFormField, TBadge, TTable, TEmptyState,
   TStack, TModal, TConfirmDialog, TSpinner, TTag, TText, TIcon, TLink, TCodeBlock, useToast,
 } from '@treeui/vue';
-import type { TreeBadgeTone } from '@treeui/vue';
+import type { TBadgeTone } from '@treeui/vue';
 
 interface TableColumn {
   key: string;
@@ -15,7 +15,7 @@ interface TableColumn {
 }
 import { api } from '../services/api';
 import type { ServiceSummary } from '../services/api';
-import { engineLabel } from '../services/engine';
+import { ENGINE_LABEL } from '../services/engine';
 
 const toast = useToast();
 const services = ref<ServiceSummary[]>([]);
@@ -151,7 +151,7 @@ function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
 }
 
-function statusTone(status: string): TreeBadgeTone {
+function statusTone(status: string): TBadgeTone {
   switch (status) {
     case 'running': return 'success';
     case 'registered': return 'warning';
@@ -344,7 +344,7 @@ onBeforeUnmount(() => {
     <TConfirmDialog
       v-model:open="deleteDialogOpen"
       :title="`Delete service${deleteTarget ? ` “${deleteTarget}”` : ''}?`"
-      :description="`This removes the service from the cache and cleans up its provisioned resources on the ${engineLabel}.`"
+      :description="`This removes the service from the cache and cleans up its provisioned resources on the ${ENGINE_LABEL}.`"
       confirm-label="Delete"
       cancel-label="Cancel"
       confirm-variant="danger"

@@ -88,16 +88,12 @@ function loadConfig() {
 function getConfig(config) {
   return {
     serverPort: config.serverPort || 3100,
-    localstackPort: config.localstackPort || 4566,
+
     enableDynamoProxy: config.enableDynamoProxy || false,
     dynamoProxyPort: config.dynamoProxyPort || 8000,
     mode: config.mode || 'managed',
-    localstackEdition: config.localstackEdition || 'community',
-    localstackVersion: config.localstackVersion || 'latest',
-    localstackImage: config.localstackImage,
-    localstackAuthToken: config.localstackAuthToken,
     stateDir: config.stateDir,
-    engine: config.engine || 'localstack',
+    engine: config.engine,
     selfEnginePort: (config.selfEngine && config.selfEngine.port) || 14566,
   };
 }
@@ -121,6 +117,22 @@ const EXPLICIT_CONFIG = (() => {
   return v ? path.resolve(v) : undefined;
 })();
 
+// v1 shipped a LocalStack backend selected by flags and config keys. v2 ships
+// one engine, so anything left over from that world must fail loudly here
+// rather than be quietly ignored.
+function assertNoLocalStackFlags() {
+  const legacy = ['--external', '--pro', '--self-engine', '--localstack-token']
+    .filter(flag => process.argv.includes(flag) || process.argv.some(a => a.startsWith(`${flag}=`)));
+  const cfg = loadConfig();
+  if (String(cfg.engine || '').toLowerCase() === 'localstack') {
+    legacy.push('engine: "localstack"');
+  }
+  if (legacy.length === 0) return;
+  console.error(`❌ ${legacy.join(', ')} — LSS v2 removed the LocalStack backend; the self engine is the only engine.`);
+  console.error('   Drop the flag and any localstack* keys from lss.config.json. See docs/MIGRATION-v2.md.');
+  process.exit(1);
+}
+
 // Resolve orchestrator path - works both in development and when installed via npm
 function getOrchestratorPath() {
   // Try to find the orchestrator relative to this script
@@ -143,6 +155,11 @@ function getOrchestratorPath() {
 }
 
 function startOrchestrator() {
+  // Before anything else — including the already-running short-circuit — so a
+  // stale v1 flag or config value always fails loudly instead of looking like
+  // a successful no-op.
+  assertNoLocalStackFlags();
+
   const { pidFile, logFile } = runtimePaths();
 
   if (fs.existsSync(pidFile)) {
@@ -153,11 +170,7 @@ function startOrchestrator() {
       const cfg = getConfig(config);
       console.log('✅ LSS Orchestrator already running (PID:', pid + ')');
       console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
-      if (cfg.engine === 'self') {
-        console.log(`🔧 Self Engine: http://localhost:${cfg.selfEnginePort}`);
-      } else {
-        console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort}`);
-      }
+      console.log(`🔧 Self Engine: http://localhost:${cfg.selfEnginePort}`);
       if (cfg.enableDynamoProxy) {
         console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
       }
@@ -185,22 +198,7 @@ function startOrchestrator() {
   const config = loadConfig();
   const cfg = getConfig(config);
   
-  // Check for flags
   const enableDynamoProxy = process.argv.includes('--enable-dynamo-proxy') || cfg.enableDynamoProxy;
-  const useExternal = process.argv.includes('--external');
-  const usePro = process.argv.includes('--pro');
-  const cliToken = getArgValue('--localstack-token');
-  const useSelfEngine = process.argv.includes('--self-engine');
-
-  const engine = useSelfEngine ? 'self' : cfg.engine;
-  if (engine === 'self' && (useExternal || usePro || cliToken)) {
-    console.error('❌ --self-engine cannot be combined with --external, --pro or --localstack-token (those are LocalStack options).');
-    process.exit(1);
-  }
-
-  const mode = useExternal ? 'external' : cfg.mode;
-  const edition = usePro ? 'pro' : cfg.localstackEdition;
-  const authToken = cliToken || cfg.localstackAuthToken || process.env.LOCALSTACK_AUTH_TOKEN;
 
   // Build environment variables from config
   const env = { ...process.env };
@@ -215,40 +213,9 @@ function startOrchestrator() {
   if (cfg.dynamoProxyPort) {
     env.LSS_DYNAMO_PROXY_PORT = cfg.dynamoProxyPort;
   }
-  if (engine === 'self') {
-    // Self engine: not one LocalStack variable is exported. They would be dead
-    // weight in the child's environment, they leak "there is a LocalStack here"
-    // into a mode whose whole point is that there isn't, and every key exported
-    // this way is reported by GET /api/config as env-overridden — which greys
-    // it out in the dashboard's Settings tab for a value the user never set.
-    env.LSS_ENGINE = 'self';
-  } else {
-    /* istanbul ignore else: getConfig() always defaults localstackPort to 4566, so the else is unreachable */
-    if (cfg.localstackPort) {
-      env.LSS_LOCALSTACK_PORT = cfg.localstackPort;
-    }
-    /* istanbul ignore else: mode resolves to cfg.mode which getConfig() defaults to 'managed', so the else is unreachable */
-    if (mode) {
-      env.LSS_LOCALSTACK_MODE = mode;
-    }
-    /* istanbul ignore else: edition resolves to localstackEdition which getConfig() defaults to 'community', so the else is unreachable */
-    if (edition) {
-      env.LSS_LOCALSTACK_EDITION = edition;
-    }
-    /* istanbul ignore else: getConfig() always defaults localstackVersion to 'latest', so the else is unreachable */
-    if (cfg.localstackVersion) {
-      env.LSS_LOCALSTACK_VERSION = cfg.localstackVersion;
-    }
-    if (cfg.localstackImage) {
-      env.LSS_LOCALSTACK_IMAGE = cfg.localstackImage;
-    }
-    if (authToken) {
-      env.LOCALSTACK_AUTH_TOKEN = authToken;
-    }
-  }
   // Hand the same config file to the server so its ConfigManager reads the
-  // identical serverPort/localstackPort/seedsDir/region/mode (not just the
-  // hand-translated subset above). Keeps the two config loaders in agreement.
+  // identical serverPort/seedsDir/region (not just the hand-translated subset
+  // above). Keeps the two config loaders in agreement.
   if (EXPLICIT_CONFIG) {
     env.LSS_CONFIG_PATH = EXPLICIT_CONFIG;
   }
@@ -266,11 +233,7 @@ function startOrchestrator() {
 
   console.log('🚀 LSS Orchestrator started (PID:', child.pid + ')');
   console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
-  if (engine === 'self') {
-    console.log(`🔧 Self Engine: http://localhost:${cfg.selfEnginePort} (no Docker)`);
-  } else {
-    console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort} (mode: ${mode}, edition: ${edition})`);
-  }
+  console.log(`🔧 Self Engine: http://localhost:${cfg.selfEnginePort} (no Docker)`);
   if (enableDynamoProxy) {
     console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
   }
@@ -365,7 +328,7 @@ function showStatus() {
     const cfg = getConfig(config);
     console.log('🟢 LSS Orchestrator: RUNNING (PID:', pid + ')');
     console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
-    console.log(`🔧 LocalStack: http://localhost:${cfg.localstackPort}`);
+    console.log(`🔧 Self Engine: http://localhost:${cfg.selfEnginePort}`);
     if (cfg.enableDynamoProxy) {
       console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
     }
@@ -453,7 +416,7 @@ function printSeedRunResults(results) {
   for (const r of results) {
     if (r.skipped) {
       console.log(`  ⚠ ${r.tableName}: skipped (${r.reason})`);
-      if (r.reason && r.reason.includes('does not exist in LocalStack')) {
+      if (r.reason && r.reason.includes('does not exist in the engine')) {
         missingTables++;
       }
     } else {
@@ -464,7 +427,7 @@ function printSeedRunResults(results) {
 }
 
 // Show the user both sides of the comparison: the seed files we found, and
-// the DynamoDB tables actually living in LocalStack. This is the difference
+// the DynamoDB tables actually living in the engine. This is the difference
 // between "I didn't deploy yet" (no live tables at all) and "my seed file
 // name doesn't match the CFN TableName" (live tables exist, just not those).
 function printSeedMismatchDiagnostic({ entries, liveTables, focusTable }) {
@@ -483,16 +446,16 @@ function printSeedMismatchDiagnostic({ entries, liveTables, focusTable }) {
 
   if (liveTables && liveTables.length > 0) {
     console.log('');
-    console.log(`🗂️  Tabelas vivas no LocalStack (${liveTables.length}):`);
+    console.log(`🗂️  Tabelas vivas no engine (${liveTables.length}):`);
     for (const name of liveTables) console.log(`     - ${name}`);
     console.log('');
     console.log('💡 Os nomes dos arquivos de seed precisam bater EXATAMENTE com o `TableName` no CloudFormation.');
     console.log('   Confira se há prefixo/sufixo divergente entre o arquivo e a tabela.');
   } else {
     console.log('');
-    console.log('🗂️  Nenhuma tabela viva no LocalStack ainda.');
+    console.log('🗂️  Nenhuma tabela viva no engine ainda.');
     console.log('💡 Provavelmente o stack ainda não foi provisionado. Tente:');
-    console.log('     npx lss start                # garante LocalStack rodando');
+    console.log('     npx lss start                # garante o orquestrador rodando');
     console.log('     npx serverless deploy        # cria as tabelas');
     console.log('   E rode `npx lss seed` novamente.');
   }
@@ -584,8 +547,8 @@ async function clearSeed(tableName) {
 
   // Show the user exactly what's about to be wiped before they confirm.
   // Hitting the orchestrator's GET /api/seeds also implicitly proves we're
-  // talking to LocalStack and not AWS — the orchestrator only ever connects
-  // to the configured local LocalStack endpoint.
+  // talking to the local engine and not AWS — the orchestrator only ever
+  // connects to the configured local engine endpoint.
   let scopeDescription;
   try {
     const list = await getJson('/api/seeds');
@@ -596,11 +559,11 @@ async function clearSeed(tableName) {
 
     if (liveTargets.length === 0) {
       if (tableName) {
-        console.log(`⚠️  Nenhuma tabela "${tableName}" existente no LocalStack para limpar.`);
+        console.log(`⚠️  Nenhuma tabela "${tableName}" existente no engine para limpar.`);
       } else if (entries.length === 0) {
         console.log('⚠️  Nenhum arquivo de seed (*.json) encontrado no seedsDir — nada para limpar.');
       } else {
-        console.log(`⚠️  ${entries.length} arquivo(s) de seed encontrados, mas NENHUMA das tabelas correspondentes existe no LocalStack.`);
+        console.log(`⚠️  ${entries.length} arquivo(s) de seed encontrados, mas NENHUMA das tabelas correspondentes existe no engine.`);
       }
       printSeedMismatchDiagnostic({ entries, liveTables, focusTable: tableName });
       return;
@@ -613,8 +576,8 @@ async function clearSeed(tableName) {
     console.log('');
     console.log('⚠️  ATENÇÃO: operação destrutiva');
     console.log(`   Alvo:      ${scopeDescription}`);
-    console.log(`   LocalStack: http://localhost:${cfg.localstackPort}`);
-    console.log('   Esta ação NÃO toca em nenhuma conta AWS — apenas o LocalStack acima.');
+    console.log(`   Engine:    http://localhost:${cfg.selfEnginePort}`);
+    console.log('   Esta ação NÃO toca em nenhuma conta AWS — apenas o engine local acima.');
     console.log('');
   } catch (e) {
     console.error('❌ Não consegui listar as tabelas antes de limpar:', formatError(e));
@@ -711,14 +674,13 @@ Options:
                                Applies to start/stop/status/logs so an isolated instance
                                can be addressed without cd-ing into its folder.
   --enable-dynamo-proxy        Enable DynamoDB proxy on port 8000 (for start command)
-  --self-engine                Use the in-process AWS engine instead of LocalStack (no Docker)
-  --external                   Connect to a LocalStack already running, do not spawn a container
-  --pro                        Use the LocalStack Pro image (requires LOCALSTACK_AUTH_TOKEN)
-  --localstack-token <token>   Pass a LOCALSTACK_AUTH_TOKEN to the container
   --yes, -y                    Skip interactive confirmation on seed:clear (use only in CI)
 
 Environment:
-  LOCALSTACK_AUTH_TOKEN        Token forwarded to LocalStack (Pro and >=2026.5 community)
+  LSS_DASHBOARD_PORT           Orchestrator port (overrides serverPort)
+  LSS_ENGINE_PORT              Self engine port (overrides selfEngine.port)
+  LSS_ENGINE_DATA_DIR          Self engine state directory (overrides selfEngine.dataDir)
+  AWS_REGION                   Default region for provisioning and the explorers
 
 Configuration:
   Create a lss.config.json or .lssrc file in your project root to customize:
@@ -726,14 +688,10 @@ Configuration:
   Example lss.config.json:
   {
     "serverPort": 3100,
-    "localstackPort": 4566,
-    "mode": "managed",
-    "localstackEdition": "community",
-    "localstackVersion": "latest",
+    "selfEngine": { "port": 14566 },
     "enableDynamoProxy": false,
     "dynamoProxyPort": 8000,
     "region": "us-east-1",
-    "services": ["dynamodb", "sqs", "sns", "lambda"],
     "persistence": true,
     "debug": false,
     "stateDir": ".lss"
@@ -750,12 +708,9 @@ Configuration:
       orchestratorUrl: http://localhost:3100
 
 Examples:
-  npx lss start                              # Start the orchestrator (managed LocalStack)
-  npx lss start --self-engine                # Use the in-process engine (no Docker, port 14566)
+  npx lss start                              # Start the orchestrator + self engine (no Docker)
   npx lss start --enable-dynamo-proxy        # Start with DynamoDB proxy enabled
-  npx lss start --external                   # Connect to an external LocalStack
-  npx lss start --pro                        # Use LocalStack Pro (token required)
-  LOCALSTACK_AUTH_TOKEN=xxx npx lss start    # Inject a token via env var
+  npx lss mcp                                # Serve MCP tools to an AI agent on stdio
   npx lss stop                               # Stop the orchestrator
   npx lss status                             # Check status
   npx lss logs                               # View logs

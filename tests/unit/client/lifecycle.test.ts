@@ -11,6 +11,16 @@ function healthStub(get: HealthApi['get']): HealthApi {
   return { get };
 }
 
+// A /api/health payload shaped the way v2 answers it.
+function okHealth(engineRunning = true) {
+  return {
+    status: 'ok',
+    engineRunning,
+    engine: { kind: 'self' as const, running: engineRunning, endpoint: 'http://localhost:14566' },
+    dynamoProxy: { enabled: false, running: false, port: 8000 },
+  };
+}
+
 describe('client lifecycle', () => {
   let saved: Record<string, string | undefined>;
   let cwd: string;
@@ -45,7 +55,7 @@ describe('client lifecycle', () => {
   });
 
   describe('start', () => {
-    const health = healthStub(async () => ({ status: 'ok', localstack: true, dynamoProxy: { enabled: false, running: false, port: 8000 } }));
+    const health = healthStub(async () => okHealth());
 
     it('reports a fresh start', async () => {
       const r = await new Lifecycle({ health, cwd }).start();
@@ -59,13 +69,10 @@ describe('client lifecycle', () => {
       expect(r.alreadyRunning).toBe(true);
     });
 
-    it('threads --config (per-call override) and all flags into the CLI argv', async () => {
+    it('threads --config (per-call override) and the proxy flag into the CLI argv', async () => {
       const r = await new Lifecycle({ health, cwd }).start({
         configPath: 'e2e.json',
         enableDynamoProxy: true,
-        external: true,
-        pro: true,
-        localstackToken: 'tok-123',
       });
       const args = JSON.parse(r.raw.split('\n')[0].replace('ARGS:', ''));
       expect(args).toEqual([
@@ -73,10 +80,6 @@ describe('client lifecycle', () => {
         '--config',
         path.resolve(cwd, 'e2e.json'),
         '--enable-dynamo-proxy',
-        '--external',
-        '--pro',
-        '--localstack-token',
-        'tok-123',
       ]);
     });
 
@@ -87,7 +90,7 @@ describe('client lifecycle', () => {
   });
 
   describe('stop', () => {
-    const health = healthStub(async () => ({ status: 'ok', localstack: true, dynamoProxy: { enabled: false, running: false, port: 8000 } }));
+    const health = healthStub(async () => okHealth());
 
     it('reports a stopped instance', async () => {
       const r = await new Lifecycle({ health, cwd }).stop();
@@ -108,7 +111,7 @@ describe('client lifecycle', () => {
   });
 
   describe('status / logs', () => {
-    const health = healthStub(async () => ({ status: 'ok', localstack: true, dynamoProxy: { enabled: false, running: false, port: 8000 } }));
+    const health = healthStub(async () => okHealth());
 
     it('reads RUNNING and threads the instance configPath', async () => {
       const r = await new Lifecycle({ health, cwd, configPath: 'e2e.json' }).status();
@@ -130,8 +133,8 @@ describe('client lifecycle', () => {
   });
 
   describe('waitUntilReady', () => {
-    it('resolves once LocalStack reports ready (default options)', async () => {
-      const get = jest.fn().mockResolvedValue({ status: 'ok', localstack: true, dynamoProxy: { enabled: false, running: false, port: 8000 } });
+    it('resolves once the engine reports ready (default options)', async () => {
+      const get = jest.fn().mockResolvedValue(okHealth());
       await expect(new Lifecycle({ health: healthStub(get), cwd }).waitUntilReady()).resolves.toBeUndefined();
       expect(get).toHaveBeenCalledTimes(1);
     });
@@ -139,8 +142,8 @@ describe('client lifecycle', () => {
     it('keeps polling while LocalStack is not yet up', async () => {
       const get = jest
         .fn()
-        .mockResolvedValueOnce({ status: 'ok', localstack: false, dynamoProxy: { enabled: false, running: false, port: 8000 } })
-        .mockResolvedValueOnce({ status: 'ok', localstack: true, dynamoProxy: { enabled: false, running: false, port: 8000 } });
+        .mockResolvedValueOnce(okHealth(false))
+        .mockResolvedValueOnce(okHealth());
       await new Lifecycle({ health: healthStub(get), cwd }).waitUntilReady({ timeoutMs: 2000, intervalMs: 1 });
       expect(get).toHaveBeenCalledTimes(2);
     });

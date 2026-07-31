@@ -24,7 +24,6 @@ import { GatewayManager } from './services/gateway-manager.js';
 import { SourceWatcher } from './services/source-watcher.js';
 import { startDynamoProxy } from './dev/dynamo-proxy.js';
 import { applyRegionToExplorers } from './services/explorer-region.js';
-import type { AossSidecarHandle } from './engine/aoss-sidecar.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -33,7 +32,6 @@ const app = express();
 const configManager = ConfigManager.getInstance();
 const PORT = configManager.getDashboardPort();
 let dynamoProxyServer: http.Server | null = null;
-let aossSidecar: AossSidecarHandle | null = null;
 
 // Middleware
 app.use(cors());
@@ -57,21 +55,12 @@ app.get('/api/health', (_req, res) => {
   const engine = EngineManager.getInstance();
   res.json({
     status: 'ok',
-    // Deprecated alias for engineRunning, kept so older clients keep working.
-    // It says "localstack" even when the self engine is the one running, which
-    // is exactly the naming the dashboard now avoids.
-    localstack: engine.isRunning(),
     engineRunning: engine.isRunning(),
     engine: engine.healthDetail(),
     dynamoProxy: {
       enabled: configManager.isEnableDynamoProxy(),
       running: Boolean(dynamoProxyServer?.listening),
       port: configManager.getDynamoProxyPort(),
-    },
-    aossSidecar: {
-      enabled: configManager.getAossSidecarConfig().enabled,
-      running: aossSidecar !== null,
-      port: configManager.getAossSidecarConfig().port,
     },
   });
 });
@@ -93,40 +82,14 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(uiBuildPath, 'index.html'));
 });
 
-// Start server and LocalStack
+// Boot: engine → HTTP → services.
 async function start() {
   try {
     console.log('🚀 Starting Orchestrator Server...');
 
-    // Initialize the AWS engine (LocalStack container or in-process self engine)
+    // In-process AWS engine: no Docker, no container, no auth token.
     const engine = EngineManager.getInstance();
     await engine.start();
-
-    // OpenSearch Serverless (aoss) sidecar: no LocalStack edition provides
-    // aoss, so LSS serves the self-engine emulator in-process next to it.
-    // Dynamic import keeps the LocalStack-mode memory profile lean, matching
-    // how the self backend is loaded. Failure is non-fatal — everything but
-    // aoss still works.
-    const aossConfig = configManager.getAossSidecarConfig();
-    if (aossConfig.enabled) {
-      try {
-        const { startAossSidecar } = await import('./engine/aoss-sidecar.js');
-        aossSidecar = await startAossSidecar({
-          port: aossConfig.port,
-          dataDir: aossConfig.dataDir,
-          region: configManager.getRegion(),
-        });
-        console.log(
-          `🔎 OpenSearch Serverless (aoss) sidecar on ${aossSidecar.endpoint} — ` +
-            'LocalStack does not provide aoss; LSS serves it in-process',
-        );
-      } catch (error) {
-        console.warn(
-          '⚠️  Failed to start the aoss sidecar (OpenSearch Serverless will be unavailable):',
-          error instanceof Error ? error.message : error,
-        );
-      }
-    }
 
     // An EADDRINUSE on the dashboard port has to be a named, actionable
     // failure: without an 'error' listener it surfaces as an unhandled
@@ -134,7 +97,7 @@ async function start() {
     // its delivery loops, leaving a half-alive process behind.
     const httpServer = app.listen(PORT, () => {
       console.log(`✅ Server running on http://localhost:${PORT}`);
-      console.log(`✅ Engine (${engine.getKind()}) running on ${engine.getEndpoint()}`);
+      console.log(`✅ Self engine running on ${engine.getEndpoint()}`);
     });
     httpServer.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') {
@@ -167,7 +130,7 @@ async function start() {
     // Seed Secrets Manager BEFORE reactivating services so any handler that
     // reads a secret on its first invocation (including relay-triggered handlers
     // that fire during rehydrate) already finds an AWSCURRENT version. Non-fatal
-    // — a seed failure must not abort startup (matches the aoss-sidecar block).
+    // — a seed failure must not abort startup.
     try {
       SeedManager.getInstance().setDefaultRegion(configManager.getRegion());
       await SeedManager.getInstance().seedAllSecrets(configManager.getRegion());
@@ -207,8 +170,6 @@ async function shutdown(code = 0) {
   await LambdaRuntimeManager.getInstance().stopAll();
   processManager.stopAll();
   await processManager.cleanup();
-  await aossSidecar?.close();
-  aossSidecar = null;
   await EngineManager.getInstance().stop();
   process.exit(code);
 }

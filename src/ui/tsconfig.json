@@ -12,6 +12,12 @@
     "src/**/*.tsx",
     "src/**/*.vue"
   ],
+  // The root tsconfig excludes "src/ui" (so the server/client projects never
+  // pull the dashboard in), and `exclude` is INHERITED by every config that
+  // extends it — with paths resolved against the ROOT file. Left alone, that
+  // excluded this whole directory from its own project and `vue-tsc --noEmit`
+  // silently checked nothing. Reset it here.
+  "exclude": ["node_modules", "dist"],
   "references": [
     {
       "path": "./tsconfig.node.json"

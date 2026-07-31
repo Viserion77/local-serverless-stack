@@ -6,7 +6,7 @@ import {
   TSpinner, TAlert, TTag, TTable, TText, TInput,
 } from '@treeui/vue';
 import { api } from '../../services/api';
-import type { OpenSearchCollectionSummary } from '../../services/api';
+import type { OpenSearchCollectionSummary, ResourceOwnersResponse } from '../../services/api';
 
 const emit = defineEmits<{ (e: 'open', name: string): void }>();
 
@@ -53,7 +53,7 @@ async function load() {
   try {
     const [list, owners] = await Promise.all([
       api.listOpenSearchCollections(),
-      api.listResourceOwners().catch(() => ({ tables: [], queues: [], topics: [], buckets: [] })),
+      api.listResourceOwners().catch((): ResourceOwnersResponse => ({ tables: [], queues: [], topics: [], buckets: [], collections: [] })),
     ]);
     collections.value = list.collections;
     const map: Record<string, string> = {};

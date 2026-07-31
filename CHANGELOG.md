@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-07-31
+
+**LSS runs on one engine.** The LocalStack backend is gone — not deprecated, removed. The self
+engine, an in-process AWS emulator with no Docker, no container and no auth token, is what LSS is.
+Migration guide: [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md); for a project already on
+`engine: "self"` it is a matter of deleting a few config keys.
+
+The trigger was evidence, not preference. Both shipped LocalStack examples were run end to end
+against the self engine first: `localstack-ultimate` (45 resources, `eu-west-1`) exercised REST
+payload-v1 routes, a DynamoDB composite key + GSI + stream, SQS with DLQ redrive at
+`maxReceiveCount: 3`, `SNS Publish` from a stream handler, an EventBridge bus with a pattern rule,
+a `rate(2 minutes)` schedule, an S3 notification with a prefix filter and an OpenSearch Serverless
+catalog — **every path fired, zero errors**. `localstack-free` added a REST v1 authorizer, an
+httpApi v2 simple-response authorizer written in TypeScript, and a cross-service authorizer
+resolved by ARN. Nothing the project supported on LocalStack needed LocalStack.
+
+### Removed
+- **The LocalStack backend**: `src/server/engine/backends/localstack-backend.ts`,
+  `src/server/services/localstack-manager.ts`, `src/server/engine/aoss-sidecar.ts` and the
+  `EngineBackend` interface. `EngineManager` now owns the one engine.
+- **Config keys**: `engine` (accepted only to reject a v1 `"localstack"` with a migration error),
+  `mode`, `localstackPort`, `localstackEndpoint`, `localstackEdition`, `localstackVersion`,
+  `localstackImage`, `localstackAuthToken`, `services`, `aossSidecar`. Editing any of them through
+  `PUT /api/config` now answers `unknown config key`.
+- **Env vars**: `LSS_LOCALSTACK_*`, `LOCALSTACK_AUTH_TOKEN`, `LSS_SERVICES`. `LSS_ENGINE` survives
+  only to reject `localstack`.
+- **CLI flags**: `--self-engine`, `--external`, `--pro`, `--localstack-token`. Each exits 1 naming
+  the migration guide — checked before the already-running short-circuit, so a stale script fails
+  visibly instead of looking like a successful no-op.
+- **API fields**: `GET /api/health` → `localstack` (use `engineRunning`); `GET /api/config` →
+  the `localstack` block, `aossSidecar` and `services`. `LssClient`: `HealthStatus.localstack` and
+  `lifecycle.start({ external, pro, localstackToken })`.
+- **Examples**: `examples/localstack-free` and `examples/localstack-ultimate` (760 MB). Their raw
+  `AWS::ApiGatewayV2::*` cross-stack topology was preserved at
+  `tests/integration/fixtures/apigw-raw/`, where its end-to-end test still runs.
+
+### Changed
+- **The integration suite runs everywhere.** It boots an isolated orchestrator on the self engine
+  instead of a LocalStack container, so it needs no Docker and no secret: **19 end-to-end
+  assertions in ~20 s**, unconditional locally and in CI. Under v1 the same suite skipped itself
+  whenever the LocalStack auth token was absent — which was most of the time, meaning the project's
+  only end-to-end coverage usually did not run.
+- OpenSearch Serverless is served natively by the engine on its own endpoint; the sidecar that
+  existed only because no LocalStack edition provides `aoss` is gone.
+- `lambdaRuntime.invokeHost` defaults to `127.0.0.1` (nothing runs in a container).
+- The dashboard, the CLI and every log line name the engine instead of LocalStack.
+
+### Fixed
+- **The UI was never type-checked.** `src/ui/tsconfig.json` extends the root config, which excludes
+  `src/ui` — and `exclude` is inherited with paths resolved against the *root* file, so the
+  dashboard excluded itself from its own project and `vue-tsc --noEmit` silently checked nothing.
+  With that reset, 12 real pre-existing errors surfaced and were fixed: a TreeUI `TreeBadgeTone` →
+  `TBadgeTone` rename across 6 components, two unused imports, a `TableRow`/`Record` mismatch, an
+  `unknown` in a table slot, and a `ResourceOwnersResponse` fallback missing `collections`.
+
 ## [0.17.0] - 2026-07-18
 
 The raw `AWS::ApiGatewayV2::*` support that shipped in 0.16.0 met a real Serverless Framework project and lost: it reduced a hand-authored idiom only, so the shapes `serverless package` actually emits fell through as `no ::Integration for Target "(none)"` and the routes were skipped without ever answering a request. Every one of those shapes now reduces, proven against a committed real packaging snapshot rather than a hand-written fixture. Alongside it, SQS grows **queue-level redrive**: a poison message finally lands in its dead-letter queue instead of being redelivered until retention quietly eats it.

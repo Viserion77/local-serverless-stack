@@ -25,7 +25,7 @@ jest.mock('fs');
 import fs from 'fs';
 
 import { SeedManager } from '../../../src/server/services/seed-manager';
-import { LocalStackManager } from '../../../src/server/services/localstack-manager';
+import { EngineManager } from '../../../src/server/engine/engine-manager';
 import { ConfigManager } from '../../../src/server/services/config-manager';
 
 const ddbMock = mockClient(DynamoDBClient);
@@ -336,7 +336,7 @@ describe('seedAll', () => {
       tableName: 'Ghost',
       inserted: 0,
       skipped: true,
-      reason: 'table does not exist in LocalStack',
+      reason: 'table does not exist in the engine',
     });
   });
 
@@ -374,7 +374,7 @@ describe('getTableKeyAttributes (via clearTable)', () => {
   let endpointSpy: jest.SpyInstance;
   beforeEach(() => {
     endpointSpy = jest
-      .spyOn(LocalStackManager.getInstance(), 'getEndpoint')
+      .spyOn(EngineManager.getInstance(), 'getEndpoint')
       .mockReturnValue('http://localhost:4566');
   });
   afterEach(() => endpointSpy.mockRestore());
@@ -408,7 +408,7 @@ describe('clearTable', () => {
   let endpointSpy: jest.SpyInstance;
   beforeEach(() => {
     endpointSpy = jest
-      .spyOn(LocalStackManager.getInstance(), 'getEndpoint')
+      .spyOn(EngineManager.getInstance(), 'getEndpoint')
       .mockReturnValue('http://localhost:4566');
   });
   afterEach(() => endpointSpy.mockRestore());
@@ -463,7 +463,7 @@ describe('clearAllSeeded', () => {
   let endpointSpy: jest.SpyInstance;
   beforeEach(() => {
     endpointSpy = jest
-      .spyOn(LocalStackManager.getInstance(), 'getEndpoint')
+      .spyOn(EngineManager.getInstance(), 'getEndpoint')
       .mockReturnValue('http://localhost:4566');
   });
   afterEach(() => endpointSpy.mockRestore());
@@ -485,7 +485,7 @@ describe('clearAllSeeded', () => {
       tableName: 'Ghost',
       deleted: 0,
       skipped: true,
-      reason: 'table does not exist in LocalStack',
+      reason: 'table does not exist in the engine',
     });
   });
 

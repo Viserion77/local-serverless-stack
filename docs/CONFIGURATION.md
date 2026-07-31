@@ -1,6 +1,6 @@
 # Configuration Guide for LSS
 
-LSS (Local Serverless Stack) supports configuration files to customize the behavior of the orchestrator, including server port, engine selection, LocalStack settings, DynamoDB proxy, and dashboard branding.
+LSS (Local Serverless Stack) supports configuration files to customize the behavior of the orchestrator: ports, the in-process AWS engine, the Lambda runtime, seeds, packaging, the DynamoDB proxy and dashboard branding.
 
 ## Configuration Files
 
@@ -17,7 +17,7 @@ The first file found will be used. Environment variables are always read afterwa
 ```mermaid
 flowchart LR
     A[Defaults<br/>config-manager.ts] --> B[Config file<br/>--config > cwd > home]
-    B --> C[Environment variables<br/>LSS_*, LOCALSTACK_AUTH_TOKEN]
+    B --> C[Environment variables<br/>LSS_*, AWS_REGION]
     C --> D[Effective config<br/>printed on lss start]
 ```
 
@@ -30,15 +30,10 @@ Both files should contain valid JSON with the following optional properties:
 ```json
 {
   "serverPort": 3100,
-  "localstackPort": 4566,
-  "localstackEndpoint": "http://localhost:4566",
-  "mode": "managed",
-  "localstackEdition": "community",
-  "localstackVersion": "latest",
+  "selfEngine": { "port": 14566 },
   "enableDynamoProxy": false,
   "dynamoProxyPort": 8000,
   "region": "us-east-1",
-  "services": ["dynamodb", "sqs", "sns", "s3", "lambda", "events"],
   "persistence": true,
   "debug": false,
   "autoPackage": false,
@@ -48,7 +43,8 @@ Both files should contain valid JSON with the following optional properties:
     "enabled": true,
     "execution": "auto",
     "invokePortOffset": 10000,
-    "invokeHost": "host.docker.internal"
+    "lazy": true,
+    "idleTimeoutMs": 60000
   }
 }
 ```
@@ -61,66 +57,14 @@ Both files should contain valid JSON with the following optional properties:
   - The Serverless Plugin connects to this server to register services
   - Example: `3100`
 
-- **engine** (`"localstack"` | `"self"`, default: `"localstack"`)
-  - Which AWS provider backs the orchestrator: the LocalStack container, or the
-    in-process self engine (no Docker, no auth token). Env: `LSS_ENGINE`; CLI:
-    `lss start --self-engine`. The `localstack*` keys below are ignored in self
-    mode. See [SELF_ENGINE.md](SELF_ENGINE.md).
-
-- **selfEngine** (object, optional — only used when `engine` is `"self"`)
+- **selfEngine** (object, optional)
   - `port` (default 14566, env `LSS_ENGINE_PORT`), `dataDir` (default
     `~/.lss/projects/<project-slug>-<hash>/engine`, or `<stateDir>/engine` when
     `stateDir` is set — the home fallback is scoped per project so two checkouts
     never share one set of tables), `account`,
-    `idleUnloadMs`, `memoryBudgetMb`, `fsync`, `fallbackEndpoint` (forward
-    unimplemented AWS calls to a LocalStack instance during migration).
+    `idleUnloadMs`, `memoryBudgetMb`, `fsync`, `fallbackEndpoint` (reverse-proxy
+    AWS operations the engine does not implement to any AWS-compatible endpoint).
   - Full reference: [SELF_ENGINE.md](SELF_ENGINE.md).
-
-- **aossSidecar** (object, optional — only used on LocalStack engines)
-  - OpenSearch Serverless (aoss) sidecar. **No LocalStack edition provides
-    aoss**, so whenever the active engine is LocalStack, LSS serves the
-    self-engine OpenSearch emulator in-process on its own port — the aoss
-    control plane (CreateCollection, BatchGetCollection, ...) and the
-    OpenSearch data plane (`http://localhost:14567/_aoss/<collection>`) both
-    answer there. On the self engine the sidecar never runs: aoss is native.
-  - `enabled` (boolean, default `true` on LocalStack engines): set `false` to
-    opt out — aoss provisioning then fails with a hint pointing back here.
-  - `port` (number, default `14567` — one above the self engine's 14566): the
-    sidecar's endpoint is `http://localhost:<port>`.
-  - Data persists under `~/.lss/projects/<project-slug>-<hash>/aoss` (or `<stateDir>/aoss` when `stateDir` is
-    set), independent of the LocalStack container's lifecycle.
-  - Example — move the sidecar off a busy port:
-    ```jsonc
-    "aossSidecar": { "port": 24567 }
-    ```
-
-- **localstackPort** (number, default: 4566)
-  - Port where LocalStack container will expose its API
-  - Example: `4566`
-
-- **localstackEndpoint** (string, optional)
-  - Custom endpoint for LocalStack
-  - Example: `"http://localhost:4566"` or `"http://192.168.1.100:4566"`
-
-- **mode** (`"managed"` | `"external"`, default: `"managed"`)
-  - `managed`: LSS starts and stops a LocalStack container via Docker.
-  - `external`: LSS connects to a LocalStack instance you started yourself and never touches Docker.
-
-- **localstackEdition** (`"community"` | `"pro"`, default: `"community"`)
-  - Which LocalStack image to pull (community is free; pro requires a valid auth token).
-  - Ignored when `localstackImage` is set.
-
-- **localstackVersion** (string, default: `"latest"`)
-  - Tag appended to the resolved image (e.g. `4.0`, `stable`, `2026.4`).
-  - Ignored when `localstackImage` is set.
-
-- **localstackImage** (string, optional)
-  - Full image override (e.g. `"my-registry/localstack:custom"`). Takes precedence over edition + version.
-
-- **localstackAuthToken** (string, optional)
-  - Forwarded as `LOCALSTACK_AUTH_TOKEN` inside the container.
-  - Required for `pro` edition and for community images `>= 2026.5`.
-  - Prefer the `LOCALSTACK_AUTH_TOKEN` env var over writing the token to a config file.
 
 - **enableDynamoProxy** (boolean, default: false)
   - Enable a proxy for DynamoDB on a separate port
@@ -138,17 +82,9 @@ Both files should contain valid JSON with the following optional properties:
     trailing `region` argument) to inspect resources provisioned elsewhere
   - Example: `"us-east-1"`
 
-- **services** (array, default: ["dynamodb", "sqs", "sns", "s3", "lambda", "events"])
-  - AWS services to enable in LocalStack (`SERVICES` env of the container).
-    Ignored by the self engine, which always serves its full set — including
-    OpenSearch Serverless (`aoss`), which community LocalStack images don't
-    provide.
-  - Example: `["dynamodb", "sqs", "sns", "lambda", "s3", "secretsmanager"]`
-
 - **persistence** (boolean, default: true)
   - Whether engine data survives a restart.
-  - LocalStack engine: sets `PERSISTENCE` on the container.
-  - Self engine: `false` swaps the file-backed store for an **in-memory** one — no
+  - `false` swaps the file-backed store for an **in-memory** one — no
     `dataDir` is created, no catalog, WAL or blob is written, and every boot starts
     from an empty engine. That is the mode to use for an automated test run that
     needs a guaranteed clean slate and no leftover files. (The residency knobs —
@@ -157,7 +93,7 @@ Both files should contain valid JSON with the following optional properties:
   - Example: `true`
 
 - **debug** (boolean, default: false)
-  - Enable debug mode for LocalStack
+  - Verbose orchestrator logging.
   - Example: `false`
 
 - **seedsDir** (string, default: `"./seeds"`)
@@ -177,7 +113,7 @@ Both files should contain valid JSON with the following optional properties:
     instance needs:
     ```bash
     LSS_DASHBOARD_PORT=3250 LSS_ENGINE_PORT=14766 \
-      LSS_ENGINE_DATA_DIR=/tmp/lss-run-7/engine npx lss start --self-engine
+      LSS_ENGINE_DATA_DIR=/tmp/lss-run-7/engine npx lss start
     ```
   - Reported as an env override by `GET /api/config`, like every other `LSS_*` var.
 
@@ -186,7 +122,7 @@ Both files should contain valid JSON with the following optional properties:
     relative to the working directory. Setting it isolates an instance so
     `lss stop --config <path>` targets it and not your dev instance — useful for
     e2e stacks running next to a normal one.
-  - It is also where the engine's `dataDir` and the aoss sidecar's data dir land.
+  - It is also where the engine's `dataDir` lands.
     Without it they fall back to a **per-project** directory under
     `~/.lss/projects/<project-slug>-<hash>/`, derived from the absolute project
     root — so two checkouts of the same repo, or two examples, never share state.
@@ -240,7 +176,7 @@ Both files should contain valid JSON with the following optional properties:
     }
     ```
 
-- **lambdaRuntime** (object, default: `{ "enabled": true, "execution": "auto", "invokePortOffset": 10000, "invokeHost": "host.docker.internal" }`)
+- **lambdaRuntime** (object, default: `{ "enabled": true, "execution": "auto", "invokePortOffset": 10000, "invokeHost": "127.0.0.1", "lazy": true, "idleTimeoutMs": 60000 }`)
   - Controls the Lambda runtime + API emulation (the serverless-offline replacement).
     When a service registers, LSS starts a runtime worker for its functions, binds an
     API Gateway emulator on the service's `apiPort` (30xx) and an AWS Lambda Invoke API
@@ -257,14 +193,10 @@ Both files should contain valid JSON with the following optional properties:
   - `invokePortOffset` (number, default `10000`): when a service declares only an
     `apiPort`, its invoke port is derived as `apiPort + invokePortOffset`
     (e.g. 3010 → 13010).
-  - `invokeHost` (string, default: `"host.docker.internal"` on the LocalStack
-    engine, `"127.0.0.1"` on the self engine — nothing runs in Docker there):
-    hostname the LocalStack Lambda proxy functions use when calling back into the
-    service invoke listener (`http://{invokeHost}:{invokePort}`). In
-    Docker-in-Docker/devcontainer setups, `host.docker.internal` may point at
-    Docker Desktop instead of the devcontainer; set this to the Docker network
-    gateway reachable from the LocalStack container (for example `"172.19.0.1"`).
-    Only relevant on the LocalStack engine.
+  - `invokeHost` (string, default `"127.0.0.1"` — everything runs in this process):
+    hostname used to build the invoke URL a service's event proxies call back on
+    (`http://{invokeHost}:{invokePort}`). Override only when the orchestrator must
+    be reachable under another name.
   - `lazy` (boolean, default `true`): fork a service's runtime worker on its **first
     invocation** instead of at registration. A worker is a Node process costing ~48 MB
     resident, so a 40-service monorepo paid ~1.9 GB before a single handler ran;
@@ -423,7 +355,7 @@ Custom ports — remember to point the plugin at the new server port too:
 
 ```jsonc
 // lss.config.json
-{ "serverPort": 3200, "localstackPort": 4600, "localstackEndpoint": "http://localhost:4600" }
+{ "serverPort": 3200, "selfEngine": { "port": 14766 } }
 ```
 
 ```yaml
@@ -444,17 +376,9 @@ Environment variables can be used instead of — or to override — a configurat
 - `LSS_CONFIG` - Explicit config file path for the CLI (equivalent to `--config <path>`; also honored by `LssClient`)
 - `LSS_CONFIG_PATH` - Explicit config file path for the server (the CLI sets it from `--config` when spawning)
 - `PORT` or `LSS_DASHBOARD_PORT` - Server port
-- `LSS_LOCALSTACK_PORT` - LocalStack port
-- `LSS_LOCALSTACK_ENDPOINT` - LocalStack endpoint
-- `LSS_LOCALSTACK_MODE` - `managed` or `external`
-- `LSS_LOCALSTACK_EDITION` - `community` or `pro`
-- `LSS_LOCALSTACK_VERSION` - Image tag (e.g. `latest`, `4.0`)
-- `LSS_LOCALSTACK_IMAGE` - Full image override
-- `LOCALSTACK_AUTH_TOKEN` - Forwarded into the container
 - `LSS_ENABLE_DYNAMO_PROXY` - Enable DynamoDB proxy (true/false or 1/0; the legacy unprefixed `ENABLE_DYNAMO_PROXY` is still honored as a fallback, deprecated)
 - `LSS_DYNAMO_PROXY_PORT` - DynamoDB proxy port
 - `AWS_REGION` - AWS region
-- `LSS_SERVICES` - Services (comma-separated)
 - `LSS_PERSISTENCE` - Persistence (true/false or 1/0)
 - `LSS_DEBUG` - Debug mode (true/false or 1/0)
 - `LSS_AUTO_PACKAGE` - Run package command when template is missing (true/false or 1/0)
@@ -463,11 +387,10 @@ Environment variables can be used instead of — or to override — a configurat
 - `LSS_LAMBDA_RUNTIME` - Enable/disable Lambda runtime + API emulation (true/false or 1/0)
 - `LSS_LAMBDA_EXECUTION` - `auto`, `artifact`, or `source`
 - `LSS_LAMBDA_WATCH` - Enable/disable runtime source watching (true/false or 1/0)
-- `LSS_INVOKE_HOST` - Override `lambdaRuntime.invokeHost` for LocalStack proxy callbacks
+- `LSS_INVOKE_HOST` - Override `lambdaRuntime.invokeHost`
 - `LSS_SEEDS_DIR` - Directory with DynamoDB seed files
-- `LSS_ENGINE` - AWS engine: `localstack` or `self`
 - `LSS_ENGINE_PORT` - Self engine port (default: 14566)
-- `LOCALSTACK_ACCESS_KEY_ID` / `LOCALSTACK_SECRET_ACCESS_KEY` - Credentials the orchestrator's SDK clients present to the engine (default: `test`/`test`); set them when an external LocalStack validates credentials
+- `LSS_ENGINE_DATA_DIR` - Self engine state directory (overrides `selfEngine.dataDir`)
 
 ### LssClient environment variables
 
@@ -488,8 +411,8 @@ export LSS_DASHBOARD_PORT=3200
 # Enable DynamoDB proxy
 export LSS_ENABLE_DYNAMO_PROXY=true
 
-# Set LocalStack port
-export LSS_LOCALSTACK_PORT=4600
+# Move the engine off its default port
+export LSS_ENGINE_PORT=14766
 
 # Start the orchestrator
 npx lss start
@@ -501,39 +424,7 @@ Configuration is resolved in this order (later values override earlier ones):
 
 1. Default values
 2. Configuration file (`lss.config.json` or `.lssrc`)
-3. Environment variables (so secrets like `LOCALSTACK_AUTH_TOKEN` can be injected without touching the file)
-
-## LocalStack: managed vs external
-
-`mode: "managed"` is the default and works for most setups — LSS will `docker run` and `docker stop` the container for you.
-
-Use `mode: "external"` when you want to keep an already-running LocalStack across multiple `lss start` invocations, or when LocalStack is running in another container/host you own:
-
-```json
-{
-  "mode": "external",
-  "localstackEndpoint": "http://localhost:4566"
-}
-```
-
-In external mode, `lss start` only health-checks the endpoint and `lss stop` leaves the container running.
-
-## LocalStack Pro and auth tokens
-
-The `localstack/localstack-pro` image and recent `localstack/localstack` images (`>= 2026.5`) require `LOCALSTACK_AUTH_TOKEN`.
-
-Two ways to provide it:
-
-```bash
-# 1. Environment variable (preferred — never commit the token)
-export LOCALSTACK_AUTH_TOKEN=ls-xxxxxxxx
-npx lss start --pro
-
-# 2. CLI flag (handy for one-off runs)
-npx lss start --pro --localstack-token ls-xxxxxxxx
-```
-
-If `localstackEdition` is `pro` and no token is found, the orchestrator fails fast with a clear message. For `community`, it just warns and tries anyway (older images still work without a token).
+3. Environment variables (so an instance can be retargeted — ports, engine data dir, region — without touching the file)
 
 ## Getting Started
 
@@ -568,21 +459,20 @@ The HTTP surface behind it:
 
 | Endpoint | What it does |
 |---|---|
-| `GET /api/config` | Full public-safe snapshot: engine kind + endpoint, LocalStack block, self-engine block, aoss sidecar, lambda runtime, packaging, branding, `configPath`/`projectRoot`, and `envOverrides` (keys currently masked by env vars). Secret **values** never appear: the auth token collapses to `hasAuthToken`, `packageEnv` maps collapse to key names, the `secrets` seed map collapses to a count. |
+| `GET /api/config` | Full public-safe snapshot: engine kind + endpoint, self-engine block, lambda runtime (with the resolved residency policy), packaging, branding, `configPath`/`projectRoot`, and `envOverrides` (keys currently masked by env vars). Secret **values** never appear: `packageEnv` maps collapse to key names and the `secrets` seed map collapses to a count. |
 | `PUT /api/config` | Persist a partial patch. Scalar/array keys replace; `null` deletes the key (the default returns). Object blocks (`lambdaRuntime`, `selfEngine`, `aossSidecar`, `branding`, …) merge **one level deep** — a partial edit never drops sibling settings like `branding.logo` — and a `null` subkey deletes just that subkey. Nested keys are validated too (`selfEngine.port` must be a port, `lambdaRuntime.execution` must be a known mode, unknown subkeys are rejected). Invalid patches answer `400` with every problem listed in `details` and nothing touches the file. |
 | `POST /api/config/reload` | Re-read the config file from disk after a hand edit, without restarting the orchestrator. A file that no longer parses answers `400` and the working in-memory config stays untouched. |
-| `GET /api/config/ports` | Every local port the stack exposes: orchestrator, active engine (LocalStack edge or self engine), aoss sidecar, DynamoDB proxy, plus each registered service's HTTP API and Lambda invoke listeners. Shown on the dashboard Overview. |
+| `GET /api/config/ports` | Every local port the stack exposes: orchestrator, engine, DynamoDB proxy, plus each registered service's HTTP API and Lambda invoke listeners. Shown on the dashboard Overview. |
 
-Two keys are **never editable via the API**: `localstackAuthToken` (use the
-`LOCALSTACK_AUTH_TOKEN` env var — the token must not transit the dashboard) and `secrets`
-(seed material — edit the file directly).
+One key is **never editable via the API**: `secrets` (seed material — edit the file
+directly).
 
 Both `PUT` and `reload` classify what changed:
 
 - **Lazily-consumed keys** (`seedsDir`, `autoPackage`, packaging settings, `branding`,
   `lambdaRuntime`/`serviceRuntime` for the *next* registration) take effect immediately.
-- **Boot-materialized keys** (ports, `engine`, LocalStack mode/image, `persistence`,
-  `region`, `stateDir`, `selfEngine`, `aossSidecar`) come back in `restartRequired` — the
+- **Boot-materialized keys** (ports, `persistence`, `region`, `stateDir`, `selfEngine`)
+  come back in `restartRequired` — the
   running process keeps the old value until `lss stop && lss start` (the
   `restart (rebuild local)` VSCode tasks chain build + stop + start for the examples).
 - Patch keys currently masked by an env var come back in `envOverridden`: the file was
@@ -615,7 +505,7 @@ If a port is already in use, change it in the configuration file:
 ```json
 {
   "serverPort": 3200,
-  "localstackPort": 4600
+  "selfEngine": { "port": 14766 }
 }
 ```
 

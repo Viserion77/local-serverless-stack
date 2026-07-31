@@ -5,7 +5,7 @@ import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
   TTag, TSpinner, TAlert, TDivider, TText, TLink, useToast,
 } from '@treeui/vue';
-import type { TreeBadgeTone } from '@treeui/vue';
+import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { ApiRouteInfo, ServiceApiInfo } from '../../services/api';
 
@@ -91,7 +91,7 @@ function copyCurl(svc: ServiceApiInfo, route: ApiRouteInfo) {
   });
 }
 
-function listenerTone(status: string): TreeBadgeTone {
+function listenerTone(status: string): TBadgeTone {
   switch (status) {
     case 'online': return 'success';
     case 'port-conflict': return 'warning';
@@ -99,7 +99,7 @@ function listenerTone(status: string): TreeBadgeTone {
   }
 }
 
-function methodTone(method: string): TreeBadgeTone {
+function methodTone(method: string): TBadgeTone {
   return method === 'ANY' ? 'info' : 'neutral';
 }
 

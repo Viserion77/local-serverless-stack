@@ -12,7 +12,7 @@ import {
   GetSecretValueCommand,
   type SecretListEntry,
 } from '@aws-sdk/client-secrets-manager';
-import { LocalStackManager } from './localstack-manager.js';
+import { EngineManager } from '../engine/engine-manager.js';
 
 export interface SecretSummary {
   name: string;
@@ -51,7 +51,7 @@ export class SecretsExplorer {
   // (CLI, LssClient, curl) still reads the project's own region — see the
   // matching note in DynamoExplorer.
   private constructor() {
-    const region = LocalStackManager.getInstance().getConfig().region;
+    const region = EngineManager.getInstance().getConfig().region;
     if (region) this.defaultRegion = region;
   }
 
@@ -68,7 +68,7 @@ export class SecretsExplorer {
     const r = region || this.defaultRegion;
     let client = this.clients.get(r);
     if (!client) {
-      const baseConfig = LocalStackManager.getInstance().getConfig();
+      const baseConfig = EngineManager.getInstance().getConfig();
       client = new SecretsManagerClient({ ...baseConfig, region: r });
       this.clients.set(r, client);
     }

@@ -137,11 +137,11 @@ describe('loadConfig file precedence', () => {
   it('falls back to .lssrc in HOME', () => {
     const homeRc = path.join('/home/tester', '.lssrc');
     fs.existsSync.mockImplementation((p) => p === homeRc);
-    fs.readFileSync.mockReturnValue(JSON.stringify({ mode: 'external' }));
+    fs.readFileSync.mockReturnValue(JSON.stringify({ region: 'eu-west-3' }));
 
     const cm = freshConfigManager();
     expect(cm.getConfigPath()).toBe(homeRc);
-    expect(cm.getMode()).toBe('external');
+    expect(cm.getRegion()).toBe('eu-west-3');
   });
 
   it('uses ~ as the home base when HOME is unset', () => {
@@ -194,63 +194,6 @@ describe('loadFromEnv overrides every variable', () => {
     expect(freshConfigManager().getServerPort()).toBe(5600);
   });
 
-  it('localstackPort', () => {
-    process.env.LSS_LOCALSTACK_PORT = '4567';
-    expect(freshConfigManager().getLocalStackPort()).toBe(4567);
-  });
-
-  it('localstackEndpoint', () => {
-    process.env.LSS_LOCALSTACK_ENDPOINT = 'http://ls:4566';
-    expect(freshConfigManager().getLocalStackEndpoint()).toBe('http://ls:4566');
-  });
-
-  it('mode managed (lowercased)', () => {
-    process.env.LSS_LOCALSTACK_MODE = 'MANAGED';
-    expect(freshConfigManager().getMode()).toBe('managed');
-  });
-
-  it('mode external', () => {
-    process.env.LSS_LOCALSTACK_MODE = 'external';
-    const cm = freshConfigManager();
-    expect(cm.getMode()).toBe('external');
-    expect(cm.isExternal()).toBe(true);
-  });
-
-  it('mode ignores invalid values', () => {
-    process.env.LSS_LOCALSTACK_MODE = 'bogus';
-    expect(freshConfigManager().getMode()).toBe('managed');
-  });
-
-  it('edition pro (lowercased)', () => {
-    process.env.LSS_LOCALSTACK_EDITION = 'PRO';
-    expect(freshConfigManager().getLocalStackEdition()).toBe('pro');
-  });
-
-  it('edition community', () => {
-    process.env.LSS_LOCALSTACK_EDITION = 'community';
-    expect(freshConfigManager().getLocalStackEdition()).toBe('community');
-  });
-
-  it('edition ignores invalid values', () => {
-    process.env.LSS_LOCALSTACK_EDITION = 'enterprise';
-    expect(freshConfigManager().getLocalStackEdition()).toBe('community');
-  });
-
-  it('localstackVersion', () => {
-    process.env.LSS_LOCALSTACK_VERSION = '3.0.0';
-    expect(freshConfigManager().getLocalStackVersion()).toBe('3.0.0');
-  });
-
-  it('localstackImage', () => {
-    process.env.LSS_LOCALSTACK_IMAGE = 'myrepo/ls:custom';
-    expect(freshConfigManager().getLocalStackImage()).toBe('myrepo/ls:custom');
-  });
-
-  it('localstackAuthToken', () => {
-    process.env.LOCALSTACK_AUTH_TOKEN = 'tok-123';
-    expect(freshConfigManager().getLocalStackAuthToken()).toBe('tok-123');
-  });
-
   it('enableDynamoProxy true', () => {
     process.env.LSS_ENABLE_DYNAMO_PROXY = 'true';
     expect(freshConfigManager().isEnableDynamoProxy()).toBe(true);
@@ -274,11 +217,6 @@ describe('loadFromEnv overrides every variable', () => {
   it('region from AWS_REGION', () => {
     process.env.AWS_REGION = 'ap-south-1';
     expect(freshConfigManager().getRegion()).toBe('ap-south-1');
-  });
-
-  it('services from LSS_SERVICES (comma split)', () => {
-    process.env.LSS_SERVICES = 'dynamodb,sqs';
-    expect(freshConfigManager().getServices()).toEqual(['dynamodb', 'sqs']);
   });
 
   it('persistence true', () => {
@@ -375,38 +313,6 @@ describe('getters: defaults (no file, no env)', () => {
     expect(cm.getDashboardPort()).toBe(3100);
   });
 
-  it('getLocalStackPort defaults to 4566', () => {
-    expect(cm.getLocalStackPort()).toBe(4566);
-  });
-
-  it('getLocalStackEndpoint defaults from port', () => {
-    expect(cm.getLocalStackEndpoint()).toBe('http://localhost:4566');
-  });
-
-  it('getMode defaults to managed', () => {
-    expect(cm.getMode()).toBe('managed');
-  });
-
-  it('isExternal defaults to false', () => {
-    expect(cm.isExternal()).toBe(false);
-  });
-
-  it('getLocalStackEdition defaults to community', () => {
-    expect(cm.getLocalStackEdition()).toBe('community');
-  });
-
-  it('getLocalStackVersion defaults to latest', () => {
-    expect(cm.getLocalStackVersion()).toBe('latest');
-  });
-
-  it('getLocalStackImage defaults to community repo + latest', () => {
-    expect(cm.getLocalStackImage()).toBe('localstack/localstack:latest');
-  });
-
-  it('getLocalStackAuthToken defaults to undefined', () => {
-    expect(cm.getLocalStackAuthToken()).toBeUndefined();
-  });
-
   it('isEnableDynamoProxy defaults to false', () => {
     expect(cm.isEnableDynamoProxy()).toBe(false);
   });
@@ -422,10 +328,6 @@ describe('getters: defaults (no file, no env)', () => {
   it('getRegion reads AWS_REGION env at call time when config unset', () => {
     process.env.AWS_REGION = 'us-west-2';
     expect(cm.getRegion()).toBe('us-west-2');
-  });
-
-  it('getServices defaults to the standard list', () => {
-    expect(cm.getServices()).toEqual(['dynamodb', 'sqs', 'sns', 's3', 'lambda', 'events']);
   });
 
   it('isPersistence defaults to true', () => {
@@ -466,20 +368,6 @@ describe('getters: defaults (no file, no env)', () => {
 });
 
 describe('getters: branch coverage on config-provided values', () => {
-  it('getLocalStackEndpoint returns the explicit endpoint when set', () => {
-    const cwdFile = path.join(process.cwd(), 'lss.config.json');
-    fs.existsSync.mockImplementation((p) => p === cwdFile);
-    fs.readFileSync.mockReturnValue(JSON.stringify({ localstackEndpoint: 'http://explicit:1' }));
-    expect(freshConfigManager().getLocalStackEndpoint()).toBe('http://explicit:1');
-  });
-
-  it('getLocalStackImage uses the pro repo for the pro edition', () => {
-    const cwdFile = path.join(process.cwd(), 'lss.config.json');
-    fs.existsSync.mockImplementation((p) => p === cwdFile);
-    fs.readFileSync.mockReturnValue(JSON.stringify({ localstackEdition: 'pro', localstackVersion: '3.0' }));
-    expect(freshConfigManager().getLocalStackImage()).toBe('localstack/localstack-pro:3.0');
-  });
-
   it('isEnableDynamoProxy honors the ENABLE_DYNAMO_PROXY env fallback ("true")', () => {
     process.env.ENABLE_DYNAMO_PROXY = 'TRUE';
     expect(freshConfigManager().isEnableDynamoProxy()).toBe(true);
@@ -670,12 +558,12 @@ describe('lambdaRuntime config', () => {
     return freshConfigManager();
   }
 
-  it('defaults: enabled, auto execution, offset 10000 and host.docker.internal invoke host', () => {
+  it('defaults: enabled, auto execution, offset 10000 and loopback invoke host', () => {
     const cm = freshConfigManager();
     expect(cm.isLambdaRuntimeEnabled()).toBe(true);
     expect(cm.getLambdaExecutionMode()).toBe('auto');
     expect(cm.getInvokePortOffset()).toBe(10000);
-    expect(cm.getInvokeHost()).toBe('host.docker.internal');
+    expect(cm.getInvokeHost()).toBe('127.0.0.1');
   });
 
   it('reads enabled/execution/invokePortOffset from the config file', () => {
@@ -866,34 +754,26 @@ describe('getRuntimeConfigForService', () => {
 });
 
 describe('printSummary', () => {
-  it('prints a full summary in managed mode with dynamo proxy + auto package + config file', () => {
+  it('prints a full summary with dynamo proxy + auto package + config file', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
     fs.existsSync.mockImplementation((p) => p === cwdFile);
     fs.readFileSync.mockReturnValue(
-      JSON.stringify({
-        mode: 'managed',
-        enableDynamoProxy: true,
-        autoPackage: true,
-        localstackAuthToken: 'secret',
-      }),
+      JSON.stringify({ enableDynamoProxy: true, autoPackage: true }),
     );
     const cm = freshConfigManager();
     expect(() => cm.printSummary()).not.toThrow();
     const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
     expect(out).toContain('Configuration Summary');
+    expect(out).toContain('Self Engine Port: 14566');
     expect(out).toContain('DynamoDB Proxy Port');
     expect(out).toContain('Package Command');
     expect(out).toContain('Config File');
-    expect(out).toContain('LocalStack Auth Token: set');
   });
 
-  it('prints a summary in external mode without image/proxy/package/config sections', () => {
-    process.env.LSS_LOCALSTACK_MODE = 'external';
+  it('omits the proxy/package/config sections when they are off', () => {
     const cm = freshConfigManager();
     expect(() => cm.printSummary()).not.toThrow();
     const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
-    // External mode skips the image/auth-token block.
-    expect(out).not.toContain('LocalStack Image');
     // No dynamo proxy → no proxy port line; no auto package → no command line.
     expect(out).not.toContain('DynamoDB Proxy Port');
     expect(out).not.toContain('Package Command');
@@ -922,13 +802,6 @@ describe('printSummary', () => {
     expect(out).not.toContain('super-secret');
   });
 
-  it('prints "not set" for the auth token when it is absent (managed mode)', () => {
-    const cm = freshConfigManager();
-    cm.printSummary();
-    const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(out).toContain('LocalStack Auth Token: not set');
-  });
-
   it('prints "Config Secrets: N" when the config declares a non-empty secrets map', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
     fs.existsSync.mockImplementation((p) => p === cwdFile);
@@ -940,38 +813,37 @@ describe('printSummary', () => {
   });
 });
 
-describe('engine selection (self engine)', () => {
+// v1 chose a backend with `engine` / LSS_ENGINE. v2 has one engine, so a
+// leftover "localstack" must fail loudly rather than be silently ignored — a
+// silent no-op would run the stack against something the user did not ask for.
+describe('v1 engine migration guard', () => {
+  it('rejects engine: "localstack" from the config file', () => {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify({ engine: 'localstack' }));
+    expect(() => freshConfigManager()).toThrow(/no longer supports.*self engine is the only engine/s);
+  });
+
+  it('rejects LSS_ENGINE=localstack, case-insensitively', () => {
+    process.env.LSS_ENGINE = 'LocalStack';
+    expect(() => freshConfigManager()).toThrow(/LSS_ENGINE is set to "localstack"/);
+  });
+
+  it('accepts "self" and an absent value', () => {
+    process.env.LSS_ENGINE = 'self';
+    expect(() => freshConfigManager()).not.toThrow();
+    delete process.env.LSS_ENGINE;
+    expect(() => freshConfigManager()).not.toThrow();
+  });
+});
+
+describe('self engine configuration', () => {
   function cmWith(config: Record<string, unknown>): CM {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
     fs.existsSync.mockImplementation((p) => p === cwdFile);
     fs.readFileSync.mockReturnValue(JSON.stringify(config));
     return freshConfigManager();
   }
-
-  it('getEngineKind defaults to localstack', () => {
-    const cm = freshConfigManager();
-    expect(cm.getEngineKind()).toBe('localstack');
-    expect(cm.isSelfEngine()).toBe(false);
-  });
-
-  it('engine from the config file', () => {
-    expect(cmWith({ engine: 'self' }).getEngineKind()).toBe('self');
-  });
-
-  it('LSS_ENGINE env overrides the file (case-insensitive)', () => {
-    process.env.LSS_ENGINE = 'SELF';
-    expect(cmWith({ engine: 'localstack' }).getEngineKind()).toBe('self');
-  });
-
-  it('LSS_ENGINE accepts localstack', () => {
-    process.env.LSS_ENGINE = 'localstack';
-    expect(cmWith({ engine: 'self' }).getEngineKind()).toBe('localstack');
-  });
-
-  it('LSS_ENGINE ignores invalid values', () => {
-    process.env.LSS_ENGINE = 'bogus';
-    expect(freshConfigManager().getEngineKind()).toBe('localstack');
-  });
 
   it('LSS_ENGINE_PORT merges over the file selfEngine block', () => {
     process.env.LSS_ENGINE_PORT = '24566';
@@ -1037,97 +909,40 @@ describe('engine selection (self engine)', () => {
     expect(cm.getSelfEngineConfig().dataDir).toBe(path.join('/abs/state', 'engine'));
   });
 
-  it('getEngineEndpoint follows the active engine', () => {
-    expect(freshConfigManager().getEngineEndpoint()).toBe('http://localhost:4566');
-    expect(cmWith({ engine: 'self', selfEngine: { port: 15000 } }).getEngineEndpoint())
+  it('getEngineEndpoint points at the self engine port', () => {
+    expect(freshConfigManager().getEngineEndpoint()).toBe('http://localhost:14566');
+    expect(cmWith({ selfEngine: { port: 15000 } }).getEngineEndpoint())
       .toBe('http://localhost:15000');
   });
 
-  it('printSummary in self mode shows engine lines and hides LocalStack lines', () => {
-    const cm = cmWith({
-      engine: 'self',
-      selfEngine: { fallbackEndpoint: 'http://localhost:4566' },
-    });
+  it('printSummary shows the engine lines', () => {
+    const cm = cmWith({ selfEngine: { fallbackEndpoint: 'http://legacy:4566' } });
     cm.printSummary();
     const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(out).toContain('Engine: self');
     expect(out).toContain('Self Engine Port: 14566');
     expect(out).toContain('Self Engine Data Dir:');
-    expect(out).toContain('Self Engine Fallback: http://localhost:4566');
-    expect(out).not.toContain('LocalStack Mode');
+    expect(out).toContain('Self Engine Fallback: http://legacy:4566');
   });
 
-  it('printSummary in self mode omits the fallback line when unset', () => {
-    const cm = cmWith({ engine: 'self' });
+  it('printSummary omits the fallback line when unset', () => {
+    const cm = cmWith({});
     cm.printSummary();
     const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(out).toContain('Engine: self');
+    expect(out).toContain('Self Engine Port:');
     expect(out).not.toContain('Self Engine Fallback');
   });
 
-  it('printSummary in localstack mode shows the engine kind and LocalStack lines', () => {
-    const cm = freshConfigManager();
-    cm.printSummary();
-    const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(out).toContain('Engine: localstack');
-    expect(out).toContain('LocalStack Mode: managed');
-  });
 });
 
-describe('getAossSidecarConfig', () => {
-  function cmWith(config: Record<string, unknown>): CM {
-    const cwdFile = path.join(process.cwd(), 'lss.config.json');
-    fs.existsSync.mockImplementation((p) => p === cwdFile);
-    fs.readFileSync.mockReturnValue(JSON.stringify(config));
-    return freshConfigManager();
-  }
-
-  it('defaults: enabled on the LocalStack engine, port 14567, per-project dataDir under ~/.lss', () => {
-    const cm = freshConfigManager();
-    const resolved = cm.getAossSidecarConfig();
-    expect(resolved.enabled).toBe(true);
-    expect(resolved.port).toBe(14567);
-    expect(resolved.endpoint).toBe('http://localhost:14567');
-    expect(resolved.dataDir).toBe(
-      path.join(require('os').homedir(), '.lss', 'projects', projectCacheSegment(cm.getProjectRoot()), 'aoss'),
-    );
-  });
-
-  it('defaults dataDir under stateDir when stateDir is set (test isolation)', () => {
-    const cm = cmWith({ stateDir: '/abs/state' });
-    expect(cm.getAossSidecarConfig().dataDir).toBe(path.join('/abs/state', 'aoss'));
-  });
-
-  it('aossSidecar.enabled false opts out', () => {
-    expect(cmWith({ aossSidecar: { enabled: false } }).getAossSidecarConfig().enabled).toBe(false);
-  });
-
-  it('an explicit enabled true stays on (LocalStack engine)', () => {
-    expect(cmWith({ aossSidecar: { enabled: true } }).getAossSidecarConfig().enabled).toBe(true);
-  });
-
-  it('a custom port flows into the endpoint', () => {
-    const resolved = cmWith({ aossSidecar: { port: 24567 } }).getAossSidecarConfig();
-    expect(resolved.port).toBe(24567);
-    expect(resolved.endpoint).toBe('http://localhost:24567');
-  });
-
-  it('the self engine forces enabled=false — it serves aoss natively', () => {
-    process.env.LSS_ENGINE = 'self';
-    const resolved = cmWith({ aossSidecar: { enabled: true } }).getAossSidecarConfig();
-    expect(resolved.enabled).toBe(false);
-  });
-});
-
-describe('getInvokeHost under the self engine', () => {
-  it('defaults to 127.0.0.1 in self mode (nothing runs in Docker)', () => {
+describe('getInvokeHost', () => {
+  it('defaults to 127.0.0.1 (nothing runs in a container)', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
     fs.existsSync.mockImplementation((p) => p === cwdFile);
     fs.readFileSync.mockReturnValue(JSON.stringify({ engine: 'self' }));
     expect(freshConfigManager().getInvokeHost()).toBe('127.0.0.1');
   });
 
-  it('an explicit invokeHost still wins in self mode', () => {
+  it('an explicit invokeHost still wins', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
     fs.existsSync.mockImplementation((p) => p === cwdFile);
     fs.readFileSync.mockReturnValue(
@@ -1355,16 +1170,30 @@ describe('updateConfig', () => {
     expect(err.details[0]).toContain('JSON object');
   });
 
-  it('rejects the blocked keys (auth token and secrets) and unknown keys', () => {
+  it('rejects the blocked secrets key and unknown keys', () => {
+    const err = updateErr(setupFile({}), { secrets: { a: 'x' }, bogusKey: 1 });
+    expect(err.details).toHaveLength(2);
+    expect(err.details[0]).toContain('"secrets" cannot be edited');
+    expect(err.details[1]).toContain('unknown config key "bogusKey"');
+  });
+
+  // v1's LocalStack keys are gone, not silently accepted: an old config that
+  // still carries them tells the user which ones to drop.
+  it('reports removed LocalStack keys as unknown', () => {
     const err = updateErr(setupFile({}), {
-      localstackAuthToken: 'tok',
-      secrets: { a: 'x' },
-      bogusKey: 1,
+      mode: 'external',
+      localstackPort: 4566,
+      localstackEdition: 'pro',
+      services: ['dynamodb'],
+      aossSidecar: { enabled: true },
     });
-    expect(err.details).toHaveLength(3);
-    expect(err.details[0]).toContain('"localstackAuthToken" cannot be edited');
-    expect(err.details[1]).toContain('"secrets" cannot be edited');
-    expect(err.details[2]).toContain('unknown config key "bogusKey"');
+    expect(err.details).toEqual([
+      'unknown config key "mode"',
+      'unknown config key "localstackPort"',
+      'unknown config key "localstackEdition"',
+      'unknown config key "services"',
+      'unknown config key "aossSidecar"',
+    ]);
   });
 
   it('aggregates every value-shape error instead of failing on the first', () => {
@@ -1374,8 +1203,6 @@ describe('updateConfig', () => {
       packageTimeoutMs: 0, // positiveInt
       persistence: 'yes', // boolean
       region: '', // empty string
-      mode: 'bogus', // enum
-      services: 'dynamodb,sqs', // stringArray (not an array)
       packageArgs: [1], // stringArray (non-string element)
       packageEnv: { A: 1 }, // stringRecord (non-string value)
       lambdaRuntime: [], // object (array is not a plain object)
@@ -1386,8 +1213,6 @@ describe('updateConfig', () => {
       '"packageTimeoutMs" must be a positive integer',
       '"persistence" must be a boolean',
       '"region" must be a non-empty string',
-      '"mode" must be one of: managed, external',
-      '"services" must be an array of strings',
       '"packageArgs" must be an array of strings',
       '"packageEnv" must be an object of string values',
       '"lambdaRuntime" must be an object',
@@ -1397,6 +1222,15 @@ describe('updateConfig', () => {
 
   // idleTimeoutMs accepts 0 (meaning "never unload"), so it validates as
   // nonNegativeInt rather than positiveInt.
+  it('rejects a value outside a subkey enum', () => {
+    expect(updateErr(setupFile({}), { lambdaRuntime: { execution: 'bogus' } }).details).toEqual([
+      '"lambdaRuntime.execution" must be one of: auto, artifact, source',
+    ]);
+    expect(updateErr(setupFile({}), { branding: { defaultTheme: 'sepia' } }).details).toEqual([
+      '"branding.defaultTheme" must be one of: dark, light',
+    ]);
+  });
+
   it('rejects a negative or fractional idleTimeoutMs but accepts 0', () => {
     expect(updateErr(setupFile({}), { lambdaRuntime: { idleTimeoutMs: -5 } }).details).toEqual([
       '"lambdaRuntime.idleTimeoutMs" must be an integer >= 0',
@@ -1480,18 +1314,16 @@ describe('updateConfig', () => {
     const result = cm.updateConfig({
       serverPort: 3200,
       region: 'eu-west-1',
-      mode: 'external',
-      services: ['dynamodb'],
       debug: true,
       packageTimeoutMs: 1000,
+      packageArgs: ['--param=custom-stage=offline'],
       packageEnv: { A: '1' },
     });
     expect(written()).toMatchObject({
       serverPort: 3200,
       region: 'eu-west-1',
-      mode: 'external',
-      services: ['dynamodb'],
       debug: true,
+      packageArgs: ['--param=custom-stage=offline'],
       packageTimeoutMs: 1000,
       packageEnv: { A: '1' },
       someCustomKey: true,
@@ -1503,7 +1335,7 @@ describe('updateConfig', () => {
     expect(cm.getRegion()).toBe('eu-west-1');
     expect(result.path).toBe(cwdFile);
     // Boot-materialized keys need stop/start; packageTimeoutMs/packageEnv are lazy.
-    expect(result.restartRequired).toEqual(['serverPort', 'mode', 'region', 'services', 'debug']);
+    expect(result.restartRequired).toEqual(['serverPort', 'region', 'debug']);
     expect(result.envOverridden).toEqual([]);
   });
 

@@ -180,16 +180,11 @@ describe('bin/cli.js helpers', () => {
       const cli = loadCli();
       expect(cli.getConfig({})).toEqual({
         serverPort: 3100,
-        localstackPort: 4566,
         enableDynamoProxy: false,
         dynamoProxyPort: 8000,
         mode: 'managed',
-        localstackEdition: 'community',
-        localstackVersion: 'latest',
-        localstackImage: undefined,
-        localstackAuthToken: undefined,
         stateDir: undefined,
-        engine: 'localstack',
+        engine: undefined,
         selfEnginePort: 14566,
       });
     });
@@ -198,21 +193,15 @@ describe('bin/cli.js helpers', () => {
       const cli = loadCli();
       const out = cli.getConfig({
         serverPort: 4000,
-        localstackPort: 4600,
         enableDynamoProxy: true,
         dynamoProxyPort: 9000,
-        mode: 'external',
-        localstackEdition: 'pro',
-        localstackVersion: '3.0',
-        localstackImage: 'custom/image',
-        localstackAuthToken: 'tok',
         stateDir: '.lss',
         engine: 'self',
         selfEngine: { port: 15000 },
       });
       expect(out.serverPort).toBe(4000);
       expect(out.enableDynamoProxy).toBe(true);
-      expect(out.localstackImage).toBe('custom/image');
+      expect(out.dynamoProxyPort).toBe(9000);
       expect(out.stateDir).toBe('.lss');
       expect(out.engine).toBe('self');
       expect(out.selfEnginePort).toBe(15000);
@@ -473,7 +462,7 @@ describe('bin/cli.js helpers', () => {
       const cli = loadCli();
       const out = cli.printSeedRunResults([
         { tableName: 'A', inserted: 3 },
-        { tableName: 'B', skipped: true, reason: 'B does not exist in LocalStack' },
+        { tableName: 'B', skipped: true, reason: 'B does not exist in the engine' },
         { tableName: 'C', skipped: true, reason: 'empty seed file' },
         { tableName: 'D', skipped: true },
       ]);
@@ -510,7 +499,7 @@ describe('bin/cli.js helpers', () => {
         focusTable: 'Users',
       });
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Arquivo de seed inspecionado: Users.json'));
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Tabelas vivas no LocalStack'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Tabelas vivas no engine'));
     });
 
     it('lists multiple seed files when no focusTable and no live tables', () => {
@@ -750,7 +739,7 @@ describe('bin/cli.js helpers', () => {
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Orchestrator not found'));
     });
 
-    it('threads config + CLI flags into the spawned env and prints the proxy line', () => {
+    it('threads config into the spawned env and prints the proxy line', () => {
       jest.useFakeTimers();
       mockFs.existsSync.mockImplementation((p: any) => {
         const s = String(p);
@@ -761,123 +750,77 @@ describe('bin/cli.js helpers', () => {
         return false;
       });
       mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({
-          serverPort: 3300,
-          localstackPort: 4600,
-          dynamoProxyPort: 8123,
-          localstackVersion: '3.0',
-          localstackImage: 'my/img',
-        }),
+        JSON.stringify({ serverPort: 3300, dynamoProxyPort: 8123 }),
       );
       mockSpawn.mockReturnValue(makeChild() as any);
       const cli = loadCli([
-        'node',
-        'cli.js',
-        'start',
-        '--enable-dynamo-proxy',
-        '--external',
-        '--pro',
-        '--localstack-token',
-        'TKN',
-        '--config',
-        '/abs/lss.config.json',
+        'node', 'cli.js', 'start', '--enable-dynamo-proxy', '--config', '/abs/lss.config.json',
       ]);
       cli.startOrchestrator();
       expect(mockSpawn).toHaveBeenCalledTimes(1);
       const [, , opts] = mockSpawn.mock.calls[0];
       const env = (opts as any).env;
       expect(env.PORT).toBe(3300);
-      expect(env.LSS_LOCALSTACK_PORT).toBe(4600);
       expect(env.LSS_ENABLE_DYNAMO_PROXY).toBe('true');
       expect(env.LSS_DYNAMO_PROXY_PORT).toBe(8123);
-      expect(env.LSS_LOCALSTACK_MODE).toBe('external');
-      expect(env.LSS_LOCALSTACK_EDITION).toBe('pro');
-      expect(env.LSS_LOCALSTACK_VERSION).toBe('3.0');
-      expect(env.LSS_LOCALSTACK_IMAGE).toBe('my/img');
-      expect(env.LOCALSTACK_AUTH_TOKEN).toBe('TKN');
       expect(env.LSS_CONFIG_PATH).toBe('/abs/lss.config.json');
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('DynamoDB Proxy'));
     });
 
-    it('--self-engine sets LSS_ENGINE=self in the spawned env and prints the Self Engine line', () => {
+    // v2 has one engine, so not one LocalStack variable reaches the child (and
+    // therefore every forked worker). Each one exported would also be reported
+    // by GET /api/config as env-overridden, greying out a Settings field for a
+    // value the user never set.
+    it('exports no LocalStack env var', () => {
       jest.useFakeTimers();
       mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
-      mockSpawn.mockReturnValue(makeChild() as any);
-      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine']);
-      cli.startOrchestrator();
-      const [, , opts] = mockSpawn.mock.calls[0];
-      expect((opts as any).env.LSS_ENGINE).toBe('self');
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Self Engine: http://localhost:14566'));
-    });
-
-    // The self engine's whole premise is "no LocalStack here". Exporting
-    // LSS_LOCALSTACK_* would also make GET /api/config report those keys as
-    // env-overridden, greying them out in the Settings tab for values the user
-    // never set.
-    it('exports no LocalStack env var in self-engine mode', () => {
-      jest.useFakeTimers();
-      mockFs.existsSync.mockImplementation((p: any) => {
-        const s = String(p);
-        return s.endsWith('index.js') || s.endsWith('lss.config.json');
-      });
-      mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({ engine: 'self', localstackPort: 4600, localstackVersion: '3.0', localstackImage: 'my/img' }),
-      );
       mockSpawn.mockReturnValue(makeChild() as any);
       const cli = loadCli(['node', 'cli.js', 'start']);
       cli.startOrchestrator();
       const [, , opts] = mockSpawn.mock.calls[0];
       const env = (opts as any).env;
-      expect(env.LSS_ENGINE).toBe('self');
-      for (const key of [
-        'LSS_LOCALSTACK_PORT',
-        'LSS_LOCALSTACK_MODE',
-        'LSS_LOCALSTACK_EDITION',
-        'LSS_LOCALSTACK_VERSION',
-        'LSS_LOCALSTACK_IMAGE',
-        'LOCALSTACK_AUTH_TOKEN',
-      ]) {
-        expect(env[key]).toBeUndefined();
+      for (const key of Object.keys(env)) {
+        expect(key).not.toMatch(/LOCALSTACK/);
       }
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Self Engine: http://localhost:14566'));
     });
 
-    it('engine "self" from the config file selects the self engine with its configured port', () => {
+    it('prints the configured self engine port', () => {
       jest.useFakeTimers();
       mockFs.existsSync.mockImplementation((p: any) => {
         const s = String(p);
         return s.endsWith('index.js') || s.endsWith('lss.config.json');
       });
-      mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({ engine: 'self', selfEngine: { port: 15000 } }),
-      );
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ selfEngine: { port: 15000 } }));
       mockSpawn.mockReturnValue(makeChild() as any);
       const cli = loadCli(['node', 'cli.js', 'start']);
       cli.startOrchestrator();
-      const [, , opts] = mockSpawn.mock.calls[0];
-      expect((opts as any).env.LSS_ENGINE).toBe('self');
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Self Engine: http://localhost:15000'));
     });
 
-    it('rejects --self-engine combined with --external', async () => {
+    // A v1 flag or config value must fail loudly, never be silently ignored.
+    it.each([
+      ['--self-engine'],
+      ['--external'],
+      ['--pro'],
+      ['--localstack-token'],
+    ])('rejects the removed flag %s', async (flag) => {
       mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
-      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine', '--external']);
+      const cli = loadCli(['node', 'cli.js', 'start', flag]);
       expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('cannot be combined'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('removed the LocalStack backend'));
       expect(mockSpawn).not.toHaveBeenCalled();
     });
 
-    it('rejects --self-engine combined with --pro', async () => {
-      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
-      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine', '--pro']);
+    it('rejects a leftover engine: "localstack" in the config file', async () => {
+      mockFs.existsSync.mockImplementation((p: any) => {
+        const s = String(p);
+        return s.endsWith('index.js') || s.endsWith('lss.config.json');
+      });
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ engine: 'localstack' }));
+      const cli = loadCli(['node', 'cli.js', 'start']);
       expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('cannot be combined'));
-    });
-
-    it('rejects --self-engine combined with --localstack-token', async () => {
-      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
-      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine', '--localstack-token', 'TKN']);
-      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('cannot be combined'));
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('engine: "localstack"'));
     });
 
     it('reports already running with the Self Engine line when engine is self', () => {
@@ -1136,7 +1079,7 @@ describe('bin/cli.js helpers', () => {
         POST: {
           status: 200,
           body: JSON.stringify({
-            results: [{ tableName: 'Users', skipped: true, reason: 'Users does not exist in LocalStack' }],
+            results: [{ tableName: 'Users', skipped: true, reason: 'Users does not exist in the engine' }],
           }),
         },
         GET: {
@@ -1152,7 +1095,7 @@ describe('bin/cli.js helpers', () => {
       });
       const cli = loadCli(['node', 'cli.js', 'seed', 'Users']);
       await cli.runSeed('Users');
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Tabelas vivas no LocalStack'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Tabelas vivas no engine'));
     });
 
     it('falls back to empty diagnostic fields when the list response is sparse', async () => {
@@ -1161,7 +1104,7 @@ describe('bin/cli.js helpers', () => {
         POST: {
           status: 200,
           body: JSON.stringify({
-            results: [{ tableName: 'X', skipped: true, reason: 'X does not exist in LocalStack' }],
+            results: [{ tableName: 'X', skipped: true, reason: 'X does not exist in the engine' }],
           }),
         },
         GET: { status: 200, body: JSON.stringify({}) }, // no entries, no liveTables
@@ -1177,7 +1120,7 @@ describe('bin/cli.js helpers', () => {
         POST: {
           status: 200,
           body: JSON.stringify({
-            results: [{ tableName: 'X', skipped: true, reason: 'X does not exist in LocalStack' }],
+            results: [{ tableName: 'X', skipped: true, reason: 'X does not exist in the engine' }],
           }),
         },
         GET: { err: new Error('list failed') },
@@ -1318,7 +1261,7 @@ describe('bin/cli.js helpers', () => {
       expect(mockCreateInterface).not.toHaveBeenCalled();
     });
 
-    it('exits early with a hint when the named table does not exist in LocalStack', async () => {
+    it('exits early with a hint when the named table does not exist in the engine', async () => {
       mockFs.existsSync.mockReturnValue(true);
       const httpSpy = installHttp({
         GET: {

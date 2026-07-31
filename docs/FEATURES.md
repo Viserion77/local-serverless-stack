@@ -2,7 +2,7 @@
 
 This is the canonical inventory of what `local-serverless-stack` (LSS) promises. It doubles as the
 checklist for the integration suite (`tests/integration/features.test.ts`), which boots a real isolated
-LSS + LocalStack and asserts each capability against the live HTTP API.
+LSS instance on the self engine — no Docker, no auth token — and asserts each capability against the live HTTP API.
 
 > **⚠️ Keep this document current.** Every new capability MUST be recorded here as part of shipping
 > the change — never after the fact. Keep it in sync with the **Features** section of
@@ -19,7 +19,7 @@ by the live integration suite (`npm run test:integration`).
 
 | Feature | Promise | Asserted by |
 |---|---|---|
-| `lss start` | Starts the orchestrator (managed LocalStack by default) in the background; writes a PID file and logs. | integration (`features.test.ts` boots via `lss start --config`) + unit (`cli`) |
+| `lss start` | Starts the orchestrator + engine in the background; writes a PID file and logs. | integration (`features.test.ts` boots via `lss start --config`) + unit (`cli`) |
 | `lss stop` | Gracefully stops the orchestrator addressed by the active config. | integration (`features.test.ts` teardown) + unit (`cli`) |
 | `lss status` | Reports RUNNING/NOT RUNNING + ports for the addressed instance. | unit (`cli`) |
 | `lss logs` | Prints the tail of the instance log. | unit (`cli`) |
@@ -27,7 +27,7 @@ by the live integration suite (`npm run test:integration`).
 | `lss seed [table]` | Applies `{table}.json` seed files from `seedsDir` into DynamoDB (all matching tables, or one). | unit (`cli-seed`) + integration |
 | `lss seed:clear [table]` | Deletes seeded items after an interactive `confirmar` prompt (or `--yes`); refuses any non-local endpoint. | unit (`cli-seed`, `seed-manager-guard`) |
 | `--config <path>` | Loads config from an explicit file, taking precedence over the cwd/home search; also via `LSS_CONFIG`. | unit (`cli`) + integration |
-| `--external` / `--pro` / `--localstack-token` | Connect to an external LocalStack / use the Pro image / pass an auth token. | unit (`cli`) |
+| v1 flag guard | `--self-engine` / `--external` / `--pro` / `--localstack-token`, and `engine: "localstack"` in a config file, exit 1 naming `docs/MIGRATION-v2.md` — a stale script fails visibly instead of quietly starting the wrong thing. | unit (`cli`, `config-manager`) |
 
 ## 2. Configuration & instance isolation
 
@@ -38,18 +38,17 @@ by the live integration suite (`npm run test:integration`).
 | `LSS_ENGINE_DATA_DIR` | Points the self engine's state at an explicit directory from the environment. With `LSS_DASHBOARD_PORT` and `LSS_ENGINE_PORT` it is everything a second instance needs — no config file to write, nothing shared with the dev stack. | unit (`config-manager`) |
 | `LSS_CONFIG_PATH` passthrough | The CLI hands the chosen config to the spawned server so both loaders agree on ports/seedsDir/region/mode. | unit (`config-manager`) + integration |
 | Per-project state, no `stateDir` | With no `stateDir`, the engine `dataDir`, the aoss sidecar data dir and the artifact-extraction dir all fall back to `~/.lss/projects/<project-slug>-<hash>/…` instead of one shared path — two checkouts (or two examples) never read each other's tables, and re-registering in one no longer `rm -rf`s the code another instance's worker is running from. | unit (`config-manager`, `cache-manager`) |
-| No LocalStack env in self mode | `lss start` with `engine: "self"` exports **no** `LSS_LOCALSTACK_*` / `LOCALSTACK_AUTH_TOKEN` to the orchestrator (and therefore to every forked worker). Besides the leak, each exported key was reported by `GET /api/config` as env-overridden, greying it out in the Settings tab for a value the user never set. | unit (`cli`) |
-| Managed vs external mode | `mode: managed` runs a LocalStack container; `external` connects to a running one. | unit (`config-manager`) |
+| No LocalStack env | `lss start` exports **no** `LSS_LOCALSTACK_*` / `LOCALSTACK_AUTH_TOKEN` to the orchestrator (and therefore to every forked worker). Each key exported this way was also reported by `GET /api/config` as env-overridden, greying out a Settings field for a value the user never set. | unit (`cli`) |
 | Edition / version / image / services / persistence / region | All configurable; sensible defaults (community/latest, us-east-1, dynamodb+sqs+sns+s3+lambda+events). | unit (`config-manager`) |
 | `GET /api/config` | Public-safe full config snapshot for the UI: engine kind/endpoint, self-engine + aoss sidecar + lambda-runtime blocks, packaging, `envOverrides` (keys masked by env vars). Secret values never appear — auth token → `hasAuthToken`, `packageEnv` → key names, `secrets` → count. | unit (`routes/config`) + integration |
-| `PUT /api/config` | Edit the config from the dashboard Settings tab: writes only the patched keys into the loaded config file (creating `lss.config.json` when none is loaded), `null` deletes, object blocks merge one level deep; hot-reloads and reports `restartRequired` (boot-materialized keys) + `envOverridden` (file value masked by env). `localstackAuthToken`/`secrets` are rejected. | unit (`config-manager`, `routes/config`) |
+| `PUT /api/config` | Edit the config from the dashboard Settings tab: writes only the patched keys into the loaded config file (creating `lss.config.json` when none is loaded), `null` deletes, object blocks merge one level deep; hot-reloads and reports `restartRequired` (boot-materialized keys) + `envOverridden` (file value masked by env). `secrets` is rejected. | unit (`config-manager`, `routes/config`) |
 | `POST /api/config/reload` | Re-read the config file from disk after a hand edit, without restarting; same `restartRequired` classification. | unit (`config-manager`, `routes/config`) |
 | `GET /api/config/ports` | Every local port the stack exposes (orchestrator, active engine, aoss sidecar, DynamoDB proxy, per-service HTTP API + invoke listeners) — backs the Overview "Exposed ports" card. | unit (`routes/config`) |
 
 ## 3. Resource provisioning (from CloudFormation)
 
 LSS parses the CloudFormation template produced by `serverless package` and provisions the resources in
-LocalStack. `autoPackage` can run the packaging command on demand when the template is missing.
+the engine. `autoPackage` can run the packaging command on demand when the template is missing.
 
 | Resource | Promise | Asserted by |
 |---|---|---|
@@ -57,9 +56,9 @@ LocalStack. `autoPackage` can run the packaging command on demand when the templ
 | SQS queues | Created (incl. FIFO), with visibility timeout / retention, and `RedrivePolicy` (dead-letter queue + `maxReceiveCount`) — the `deadLetterTargetArn` intrinsic is resolved from the template, so the DLQ may be declared after the queue that points at it; a policy added to an existing queue is applied with `SetQueueAttributes`. | unit (`cloudformation-parser`, `resource-provisioner`) + integration |
 | SNS topics | Created and discoverable. | unit + integration |
 | S3 buckets | Created with versioning, `s3:ObjectCreated:*` notifications (prefix/suffix filters) and `CorsConfiguration` — `CorsRules[]` (`AllowedOrigins`/`AllowedMethods`/`AllowedHeaders`, `ExposedHeaders` or the wire spelling `ExposeHeaders`, `MaxAge` or `MaxAgeSeconds` with a literal `0` preserved, `Id`; a rule declaring no origins or no methods is skipped, as AWS requires both) applied with `PutBucketCors` when the bucket is created, so a browser preflight succeeds on the first boot with no bootstrap step. | unit (`cloudformation-parser`, `resource-provisioner`, `engine/wire-s3-cors-cfn`) + integration |
-| Lambda event source mappings | SQS→Lambda and DynamoDB Stream→Lambda wired via LocalStack. | unit (`resource-provisioner`) + integration |
-| EventBridge buses & rules | `AWS::Events::EventBus` created in LocalStack; `AWS::Events::Rule` (pattern or schedule) wired to Lambda targets through the same proxy → invoke-API model; `AWS::Events::Archive` skipped with a warning (LocalStack mocks it). | unit (`cloudformation-parser`, `resource-provisioner`) |
-| OpenSearch Serverless collections | `AWS::OpenSearchServerless::Collection` created via the `aoss` control plane (idempotent on `ConflictException`); `SecurityPolicy`/`AccessPolicy`/`VpcEndpoint` accepted and skipped with a warning (nothing enforces them locally); on engines without an aoss provider (community LocalStack) the failure names the self engine as the fix. | unit (`cloudformation-parser`, `resource-provisioner`) |
+| Lambda event source mappings | SQS→Lambda and DynamoDB Stream→Lambda wired through the engine's in-process dispatch. | unit (`resource-provisioner`) + integration |
+| EventBridge buses & rules | `AWS::Events::EventBus` created on the engine; `AWS::Events::Rule` (pattern or schedule) wired to Lambda targets; `AWS::Events::Archive` skipped with a warning (never listed or replayable). | unit (`cloudformation-parser`, `resource-provisioner`) |
+| OpenSearch Serverless collections | `AWS::OpenSearchServerless::Collection` created via the `aoss` control plane (idempotent on `ConflictException`); `SecurityPolicy`/`AccessPolicy`/`VpcEndpoint` accepted and skipped with a warning (nothing enforces them locally). | unit (`cloudformation-parser`, `resource-provisioner`) |
 | Secrets Manager secrets | `AWS::SecretsManager::Secret` created at registration — `SecretString` verbatim, or `GenerateSecretString` expanded through the engine's `GetRandomPassword` with the AWS defaults (`PasswordLength` 32, `RequireEachIncludedType` true) and injected into `SecretStringTemplate` at `GenerateStringKey` when both are present — carrying `Description`/`KmsKeyId`/`Tags`. Idempotent (an existing active secret is skipped, never clobbered) and non-fatal. | unit (`cloudformation-parser`, `resource-provisioner`, `secret-value`) |
 | Lambda proxies | Generated proxy functions forward events to the service's Lambda Invoke API endpoint (the LSS invoke listener, contract-compatible with serverless-offline's `lambdaPort`). | unit (`resource-provisioner`) |
 | `GET /api/resources` / `…/owners` | List provisioned resources (tables/queues/topics/buckets/collections) and map them to owning services. | unit (`routes/resources`) + integration |
@@ -123,15 +122,14 @@ non-fatally (a failure warns, boot continues). Asserted by: unit (`seed-manager`
 ## 9. DynamoDB proxy (dev)
 
 Optional reverse proxy (`enableDynamoProxy` / `dynamoProxyPort`, default 8000) forwarding to the active AWS
-engine (LocalStack, or the self engine when `engine: "self"`), for tools that expect DynamoDB on the standard
+engine, for tools that expect DynamoDB on the standard
 port. Asserted by: unit (`dev/dynamo-proxy`).
 
 ## 10. Health & dashboard
 
 `GET /api/health` reports orchestrator + engine + dynamo-proxy status. Liveness of the **active** engine
-(LocalStack or self) is `engineRunning`; the older `localstack` field is a deprecated alias for it, kept for
-existing clients — it says "localstack" even when the self engine is what is running. `engine.kind` tells the
-two apart, and the dashboard reads it so no screen says "LocalStack" on a self-engine stack.
+is `engineRunning`; `engine.kind` is always `"self"`, and `engine.services` lists what the engine answers for.
+(v1's `localstack` boolean is gone — see [MIGRATION-v2.md](MIGRATION-v2.md).)
 
 Any `/api/*` path no router claims answers **404 with a JSON body**, not the SPA's `200 text/html` — a mistyped
 API path used to read as success to curl, to the `LssClient` and to any test asserting on the response. The Vue dashboard
@@ -160,7 +158,7 @@ Everything the CLI/orchestrator exposes, importable for Jest e2e at runtime inst
 `import { LssClient } from 'local-serverless-stack'`. The data-plane (`seeds`, `queues`, `dynamo`, `buckets`,
 `resources`, `services`, `lambdas`, `apis`, `config`, `health`) is HTTP against the running orchestrator; `lifecycle`
 (`start`/`stop`/`status`/`logs`) shells out to `bin/cli.js`, and `lifecycle.waitUntilReady()` polls `/api/health`
-until LocalStack is up. The constructor resolves the target from options → env (`LSS_CONFIG`, `LSS_BASE_URL`,
+until the engine is serving. The constructor resolves the target from options → env (`LSS_CONFIG`, `LSS_BASE_URL`,
 `LSS_SERVER_PORT`, `AWS_REGION`) → config file, so `new LssClient()` works purely from the environment; options
 also include `timeoutMs` (HTTP timeout per request, default 15000 — raise it for long `awaitIdle` waits). Shipped as
 a self-contained CommonJS build (`dist/client`, package `main`/`exports`). Asserted by: unit (`client/*`) +
@@ -179,7 +177,7 @@ LSS registers every function and HTTP route from the `sls package` artifacts
 (`cloudformation-template-update-stack.json` + `serverless-state.json`), runs handlers in
 per-service worker processes, and binds two listeners per service: an API Gateway emulator on
 the service's `apiPort` (30xx) and an AWS Lambda Invoke API on its `invokePort` (130xx) —
-so monorepo callers and the LocalStack event proxies keep their ports and contracts with no
+so monorepo callers keep their ports and contracts with no
 serverless-offline process running. See `docs/PRD_API_LAMBDA_EMULATION.md` for the full design.
 
 | Feature | Promise | Asserted by |
@@ -188,7 +186,7 @@ serverless-offline process running. See `docs/PRD_API_LAMBDA_EMULATION.md` for t
 | Lambda runtime workers | One worker per service loads handlers lazily (warm starts), applies function env/timeout/context, captures per-invocation logs, restarts on crash. | unit (`api-gateway-events` helpers) + integration |
 | Lazy workers, idle unload and a warm ceiling | A worker is a Node process costing ~48 MB resident, and LSS is a development stack — a handler only needs to be resident while it is being used. `lambdaRuntime.lazy` (default **true**) forks on the first invocation instead of at registration; `idleTimeoutMs` (default **60000**) unloads a worker that has served nothing for a minute; `maxWarmWorkers` (default: one per GB of RAM, clamped 2..12) caps how many may be resident at once, evicting the least-recently-invoked. Together they make host memory a function of the services *in flight*, not the services *registered*. Handler resolution (and artifact extraction) still runs at registration, so broken packaging still fails there, and an in-flight invocation is never interrupted. Measured on 40 services / 400 lambdas / 400 tables: **2.0 GB → 128 MB** at rest, 329 MB right after invoking all 40 with a ceiling of 4, back to 132 MB once idle — next request still 23 ms. `GET /api/services` reports `runtimeWarm`, `GET /api/lambdas` reports `warm`; `status` stays `online` either way, because the service serves an invoke regardless. | unit (`config-manager`, `routes/lambdas`, `routes/services`) |
 | Execution modes | `artifact` (extracted `sls package` zip — TS/JS uniform), `source` (direct require/import; TS uses Node native type stripping when available, then `esbuild-register`/`tsx`/`ts-node`), `auto` picks artifact when present. | unit (`config-manager`) + integration |
-| Invoke API (130xx) | `POST /2015-03-31/functions/{name}/invocations` with `X-Amz-Invocation-Type` (RequestResponse 200 / Event 202 / DryRun 204) and `X-Amz-Function-Error` — same contract the LocalStack event proxies already call. | integration |
+| Invoke API (130xx) | `POST /2015-03-31/functions/{name}/invocations` with `X-Amz-Invocation-Type` (RequestResponse 200 / Event 202 / DryRun 204) and `X-Amz-Function-Error` — the same contract a monorepo's existing callers already use. | integration |
 | Gateway proxy (30xx) | Multi-port routing (literal > `{param}` > `{proxy+}` > `$default`; exact method > ANY), API Gateway payload v1/v2 events, v1 malformed → 502, v2 inferred responses, CORS preflight, `port-conflict` status instead of failing registration. | unit (`api-gateway-events`) + integration |
 | Lambda authorizers | REST `token`/`request` (payload 1.0) and HTTP API `request` (payload 1.0/2.0, `enableSimpleResponses`), identity-source extraction (missing → 401), TTL cache + `POST /api/apis/authorizer-cache/clear`, cross-service resolution by ARN through the global registry. | unit (`authorizer-service`) + integration |
 | Raw `AWS::ApiGatewayV2::*` routes | `::Api`/`::Route`/`::Integration`/`::Authorizer` (+ the advisory `AWS::Lambda::Permission` grant) declared under CFN `resources:` register into the same route registry `httpApi:` events feed, whether they hang off their own `::Api` or the framework's `HttpApi`. `Target` (`integrations/<id>`, `Fn::Join`, `!Sub 'integrations/${Id}'`), `IntegrationUri`/`AuthorizerUri` (literal ARN, `Fn::GetAtt`, `Fn::Sub` incl. `${Id.Arn}`, `Fn::Join`, `Fn::ImportValue`, and the API Gateway *invocation-URI* wrapper `arn:aws:apigateway:…:lambda:path/2015-03-31/functions/<arn>/invocations`), pseudo-parameters via `Ref` **and** `Fn::Sub`, and `Permission.FunctionName` as `{Ref}`/ARN/bare name (matched by name **or** ARN) all reduce. De-duplicated against serverless-state by `(METHOD, normalized path)` — state wins. | unit (`cloudformation-parser`, `raw-api-assembler`, `raw-api-serverless-idiom`, `raw-api-cross-stack`) + integration |
@@ -214,19 +212,19 @@ their description so a client can surface that before a human approves. Failures
 configured; `.mcp.json` (project-scoped) plus the client's own toggle are the on/off switch.
 Full guide: [MCP.md](MCP.md). Asserted by: unit (`mcp/protocol`, `mcp/tools`, `mcp/http`, `mcp/server`, `cli`).
 
-## 13. Self engine (in-process AWS emulator — LocalStack replacement)
+## 13. Self engine (the in-process AWS emulator)
 
 Opt-in via `engine: "self"` / `lss start --self-engine`: the orchestrator serves the AWS wire API
 itself on one port (default 14566) — no Docker, no auth token. The provisioner, explorers, seeds and
 application SDKs work unchanged (the endpoint is the seam); events are delivered in-process to the
 LSS Lambda runtime. Coverage matrix and storage model: `docs/SELF_ENGINE.md`; design:
-`docs/PRD_SELF_ENGINE.md`. Status: v1 — the differential (self vs LocalStack) integration suite is
+`docs/PRD_SELF_ENGINE.md`. Status: the only engine as of v2 — the integration suite is
 the next milestone and rows below will gain integration assertions with it.
 
 | Feature | Promise | Asserted by |
 |---|---|---|
-| Engine selection | `engine`/`selfEngine` config keys, `LSS_ENGINE`/`LSS_ENGINE_PORT` env, `--self-engine` CLI (rejected combined with `--external`/`--pro`/`--localstack-token`); LocalStack remains the default. | unit (`config-manager`, `cli`) |
-| Wire front door | SigV4-scope/X-Amz-Target/path routing on one port; per-protocol error shapes (`__type`, Query XML, S3 XML with body-less HEAD, Lambda + `x-amzn-ErrorType`); `x-amzn-query-error` SQS compat header; aws-chunked PutObject decoding; `/_localstack/health` alias; `fallbackEndpoint` verbatim reverse proxy for anything unimplemented. | unit (`engine/http`) |
+| Engine configuration | `selfEngine` config block; `LSS_ENGINE_PORT` / `LSS_ENGINE_DATA_DIR` env overrides — with `LSS_DASHBOARD_PORT`, everything a second instance needs without writing a config file. | unit (`config-manager`, `cli`) |
+| Wire front door | SigV4-scope/X-Amz-Target/path routing on one port; per-protocol error shapes (`__type`, Query XML, S3 XML with body-less HEAD, Lambda + `x-amzn-ErrorType`); `x-amzn-query-error` SQS compat header; aws-chunked PutObject decoding; `fallbackEndpoint` verbatim reverse proxy for anything unimplemented. | unit (`engine/http`) |
 | Storage & footprint | JSONL snapshot + WAL per table (torn-tail-safe replay, compaction), atomic JSON catalogs, content-addressed S3 blobs (never in heap), hydrate-on-first-touch + idle dehydrate + `memoryBudgetMb` LRU, debounced flushes with opt-in fsync. | unit (`engine/store`) |
 | DynamoDB emulation | Full expression language (KeyCondition/Condition/Filter/Update/Projection, decimal-exact `N` arithmetic), GSI/LSI with projection + sparse semantics, Limit-before-filter parity, LEK paging, streams records, lazy TTL, `TransactWriteItems`/`TransactGetItems` (all-or-nothing, `CancellationReasons`, `ClientRequestToken` idempotency, stream records for committed writes only), AWS error names the provisioner relies on. | unit (`engine/dynamodb`, `engine/dynamodb/transactions`) |
 | SQS emulation | Queues (FIFO groups/dedup), event-driven long poll, visibility redelivery, **queue-level redrive** (`RedrivePolicy` → DLQ once `ApproximateReceiveCount` exceeds `maxReceiveCount`, preserving `MessageId`/body/MD5s and releasing the FIFO `MessageGroupId`), live counters for QueueInspector, MD5 digests, CreateQueue idempotency duality. | unit (`engine/sqs`, `wire-sqs-redrive`) |
@@ -243,8 +241,9 @@ the next milestone and rows below will gain integration assertions with it.
 ### How the integration suite boots
 
 `tests/integration/features.test.ts` uses an isolated config fixture
-(`tests/integration/fixtures/lss.integration.config.json`: distinct ports, its own `stateDir`, managed mode,
-`autoPackage`, token from `LOCALSTACK_AUTH_TOKEN`), runs `npx lss start --config <fixture>`, registers
-the `tests/integration/fixtures/sample-microservice` rig, asserts the rows above via the HTTP API, then `npx lss stop --config <fixture>`
-and removes the scoped LocalStack container/volume. It runs locally and in a CI job gated on the
-`LOCALSTACK_AUTH_TOKEN` secret (community LocalStack images ≥ 2026.5 require a token).
+(`tests/integration/fixtures/lss.integration.config.json`: distinct ports, its own `stateDir`,
+`persistence: false`, `autoPackage`), runs `npx lss start --config <fixture>`, registers
+the `tests/integration/fixtures/sample-microservice` rig, asserts the rows above via the HTTP API, then
+`npx lss stop --config <fixture>` and removes the state dir — there is no container or volume to reap.
+It runs **unconditionally**, locally and in CI: no Docker, no secret, ~20 seconds. (Under v1 the same
+suite skipped itself whenever the LocalStack auth token was absent, which was most of the time.)

@@ -14,7 +14,7 @@ import {
   ListEventSourceMappingsCommand,
   UpdateEventSourceMappingCommand,
 } from '@aws-sdk/client-lambda';
-import { LocalStackManager } from './localstack-manager.js';
+import { EngineManager } from '../engine/engine-manager.js';
 
 export interface QueueConsumer {
   functionName: string;
@@ -111,7 +111,7 @@ export class QueueInspector {
   private defaultRegion = 'us-east-1';
 
   private constructor() {
-    const region = LocalStackManager.getInstance().getConfig().region;
+    const region = EngineManager.getInstance().getConfig().region;
     if (region) this.defaultRegion = region;
   }
 
@@ -130,7 +130,7 @@ export class QueueInspector {
     const r = region || this.defaultRegion;
     let client = this.sqsClients.get(r);
     if (!client) {
-      const base = LocalStackManager.getInstance().getConfig();
+      const base = EngineManager.getInstance().getConfig();
       client = new SQSClient({ ...base, region: r });
       this.sqsClients.set(r, client);
     }
@@ -141,7 +141,7 @@ export class QueueInspector {
     const r = region || this.defaultRegion;
     let client = this.lambdaClients.get(r);
     if (!client) {
-      const base = LocalStackManager.getInstance().getConfig();
+      const base = EngineManager.getInstance().getConfig();
       client = new LambdaClient({ ...base, region: r });
       this.lambdaClients.set(r, client);
     }

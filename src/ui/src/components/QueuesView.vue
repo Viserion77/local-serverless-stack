@@ -5,10 +5,10 @@ import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
   TTag, TSpinner, TAlert, TText, TLink,
 } from '@treeui/vue';
-import type { TreeBadgeTone } from '@treeui/vue';
+import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
 import type { QueueSnapshot } from '../services/api';
-import { engineLabel } from '../services/engine';
+import { ENGINE_LABEL } from '../services/engine';
 
 const router = useRouter();
 const queues = ref<QueueSnapshot[]>([]);
@@ -64,7 +64,7 @@ function openDetail(name: string) {
   router.push(`/queues/${encodeURIComponent(name)}`);
 }
 
-function activityTone(queue: QueueSnapshot): TreeBadgeTone {
+function activityTone(queue: QueueSnapshot): TBadgeTone {
   if (queue.available > 0) return 'warning';
   if (queue.inFlight > 0) return 'info';
   if (queue.consumers.some(c => c.enabled)) return 'success';
@@ -136,7 +136,7 @@ onBeforeUnmount(() => {
       <TEmptyState
         v-else-if="!queues.length"
         title="No queues found"
-        :description="`Register a microservice that defines SQS resources, or create queues directly on the ${engineLabel}.`"
+        :description="`Register a microservice that defines SQS resources, or create queues directly on the ${ENGINE_LABEL}.`"
       />
 
       <TTable v-else :columns="columns" :rows="rows" aria-label="SQS queues">

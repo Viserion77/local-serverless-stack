@@ -21,18 +21,6 @@ const error = ref<string | null>(null);
 const restartKeys = ref<string[]>([]);
 const envMasked = ref<string[]>([]);
 
-const engineOptions = [
-  { value: 'localstack', label: 'LocalStack' },
-  { value: 'self', label: 'Self engine' },
-];
-const modeOptions = [
-  { value: 'managed', label: 'Managed' },
-  { value: 'external', label: 'External' },
-];
-const editionOptions = [
-  { value: 'community', label: 'Community' },
-  { value: 'pro', label: 'Pro' },
-];
 const executionOptions = [
   { value: 'auto', label: 'Auto' },
   { value: 'artifact', label: 'Artifact' },
@@ -54,15 +42,6 @@ const form = reactive({
   region: 'us-east-1',
   persistence: true,
   debug: false,
-  engine: 'localstack',
-  mode: 'managed',
-  edition: 'community',
-  version: '',
-  image: '',
-  endpoint: '',
-  localstackPort: 4566,
-  aossEnabled: true,
-  aossPort: 14567,
   sePort: 14566,
   seAccount: '000000000000',
   seMemoryBudgetMb: 128,
@@ -80,7 +59,6 @@ const form = reactive({
   packageCommand: '',
   packageTimeoutMs: 300000,
   seedsDir: '',
-  servicesCsv: '',
   brTitle: '',
   brSubtitle: '',
   brTheme: 'dark',
@@ -99,15 +77,6 @@ function applySnapshot(s: LssConfigSnapshot) {
   form.region = s.region;
   form.persistence = s.persistence;
   form.debug = s.debug;
-  form.engine = s.engine.kind;
-  form.mode = s.localstack.mode;
-  form.edition = s.localstack.edition;
-  form.version = s.localstack.version;
-  form.image = s.localstack.image;
-  form.endpoint = s.localstack.endpoint;
-  form.localstackPort = s.localstack.port;
-  form.aossEnabled = s.aossSidecar.enabled;
-  form.aossPort = s.aossSidecar.port;
   form.sePort = s.selfEngine.port;
   form.seAccount = s.selfEngine.account;
   form.seMemoryBudgetMb = s.selfEngine.memoryBudgetMb;
@@ -125,7 +94,6 @@ function applySnapshot(s: LssConfigSnapshot) {
   form.packageCommand = s.packageCommand;
   form.packageTimeoutMs = s.packageTimeoutMs;
   form.seedsDir = s.seedsDir;
-  form.servicesCsv = s.services.join(', ');
   form.brTitle = s.branding.title;
   form.brSubtitle = s.branding.subtitle;
   form.brTheme = s.branding.defaultTheme;
@@ -176,30 +144,12 @@ function buildPatch(): { patch: LssConfigUpdate; errors: string[] } {
   if (dirty.has('region')) patch.region = form.region;
   if (dirty.has('persistence')) patch.persistence = form.persistence;
   if (dirty.has('debug')) patch.debug = form.debug;
-  if (dirty.has('engine')) patch.engine = form.engine as 'localstack' | 'self';
-  if (dirty.has('mode')) patch.mode = form.mode as 'managed' | 'external';
-  if (dirty.has('edition')) patch.localstackEdition = form.edition as 'community' | 'pro';
-  if (dirty.has('version')) patch.localstackVersion = orNull(form.version);
-  if (dirty.has('image')) patch.localstackImage = orNull(form.image);
-  if (dirty.has('endpoint')) patch.localstackEndpoint = orNull(form.endpoint);
-  if (dirty.has('localstackPort')) patch.localstackPort = asPort(form.localstackPort, 'LocalStack port');
   if (dirty.has('proxyEnabled')) patch.enableDynamoProxy = form.proxyEnabled;
   if (dirty.has('proxyPort')) patch.dynamoProxyPort = asPort(form.proxyPort, 'Dynamo proxy port');
   if (dirty.has('autoPackage')) patch.autoPackage = form.autoPackage;
   if (dirty.has('packageCommand')) patch.packageCommand = orNull(form.packageCommand);
   if (dirty.has('packageTimeoutMs')) patch.packageTimeoutMs = asPositive(form.packageTimeoutMs, 'Package timeout');
   if (dirty.has('seedsDir')) patch.seedsDir = orNull(form.seedsDir);
-  if (dirty.has('servicesCsv')) {
-    const list = form.servicesCsv.split(',').map(s => s.trim()).filter(Boolean);
-    patch.services = list.length ? list : null;
-  }
-
-  if (dirty.has('aossEnabled') || dirty.has('aossPort')) {
-    patch.aossSidecar = {
-      ...(dirty.has('aossEnabled') ? { enabled: form.aossEnabled } : {}),
-      ...(dirty.has('aossPort') ? { port: asPort(form.aossPort, 'aoss sidecar port') } : {}),
-    };
-  }
 
   const selfEngine: NonNullable<LssConfigUpdate['selfEngine']> = {};
   if (dirty.has('sePort')) selfEngine.port = asPort(form.sePort, 'Self engine port');
@@ -385,69 +335,31 @@ onMounted(load);
           <template #header>
             <TStack direction="horizontal" justify="space-between" align="center">
               <TText weight="semibold">Engine</TText>
-              <TBadge tone="info" variant="soft">{{ snapshot.engine.kind }}</TBadge>
+              <TBadge tone="info" variant="soft">self — in-process</TBadge>
             </TStack>
           </template>
           <TStack direction="vertical" gap="0.75rem">
-            <TFormField label="Engine" :hint="envHint('engine', 'Self engine needs no Docker; LocalStack needs it')">
-              <TToggleGroup v-model="form.engine" :options="engineOptions" size="md" />
+            <TGrid :columns="2" gap="0.75rem">
+              <TFormField label="Port" :hint="envHint('selfEngine', 'Default 14566')">
+                <TInput v-model.number="form.sePort" type="number" min="1" max="65535" />
+              </TFormField>
+              <TFormField label="Account id" hint="Used in every ARN">
+                <TInput v-model="form.seAccount" placeholder="000000000000" />
+              </TFormField>
+              <TFormField label="Memory budget (MB)" hint="LRU cap for hydrated data">
+                <TInput v-model.number="form.seMemoryBudgetMb" type="number" min="1" />
+              </TFormField>
+              <TFormField label="Idle unload (ms)" hint="Dehydrate idle stores after">
+                <TInput v-model.number="form.seIdleUnloadMs" type="number" min="1" />
+              </TFormField>
+            </TGrid>
+            <TFormField label="fsync every WAL flush" hint="Paranoid durability — slower writes">
+              <TSwitch v-model="form.seFsync" />
             </TFormField>
-            <template v-if="form.engine === 'self'">
-              <TGrid :columns="2" gap="0.75rem">
-                <TFormField label="Port" :hint="envHint('selfEngine', 'Default 14566')">
-                  <TInput v-model.number="form.sePort" type="number" min="1" max="65535" />
-                </TFormField>
-                <TFormField label="Account id" hint="Used in every ARN">
-                  <TInput v-model="form.seAccount" placeholder="000000000000" />
-                </TFormField>
-                <TFormField label="Memory budget (MB)" hint="LRU cap for hydrated data">
-                  <TInput v-model.number="form.seMemoryBudgetMb" type="number" min="1" />
-                </TFormField>
-                <TFormField label="Idle unload (ms)" hint="Dehydrate idle stores after">
-                  <TInput v-model.number="form.seIdleUnloadMs" type="number" min="1" />
-                </TFormField>
-              </TGrid>
-              <TFormField label="fsync every WAL flush" hint="Paranoid durability — slower writes">
-                <TSwitch v-model="form.seFsync" />
-              </TFormField>
-              <TFormField label="Fallback endpoint" hint="Proxy unimplemented AWS calls here — blank disables">
-                <TInput v-model="form.seFallback" placeholder="http://localhost:4566" />
-              </TFormField>
-              <TText tone="muted" size="xs" family="mono">Data dir: {{ snapshot.selfEngine.dataDir }}</TText>
-            </template>
-            <template v-else>
-              <TFormField label="Mode" :hint="envHint('mode', 'Managed: LSS runs the container; external: you do')">
-                <TToggleGroup v-model="form.mode" :options="modeOptions" size="md" />
-              </TFormField>
-              <TGrid :columns="2" gap="0.75rem">
-                <TFormField label="Edition" :hint="envHint('localstackEdition', 'Pro requires an auth token')">
-                  <TToggleGroup v-model="form.edition" :options="editionOptions" size="md" />
-                </TFormField>
-                <TFormField label="Version" :hint="envHint('localstackVersion', 'Image tag — blank restores latest')">
-                  <TInput v-model="form.version" placeholder="latest" />
-                </TFormField>
-                <TFormField label="Edge port" :hint="envHint('localstackPort', 'Default 4566')">
-                  <TInput v-model.number="form.localstackPort" type="number" min="1" max="65535" />
-                </TFormField>
-                <TFormField label="Endpoint override" :hint="envHint('localstackEndpoint', 'Blank derives from the port')">
-                  <TInput v-model="form.endpoint" placeholder="http://localhost:4566" />
-                </TFormField>
-              </TGrid>
-              <TFormField label="Image override" :hint="envHint('localstackImage', 'Wins over edition + version — blank derives')">
-                <TInput v-model="form.image" placeholder="localstack/localstack:latest" />
-              </TFormField>
-              <TFormField label="LocalStack services" :hint="envHint('services', 'Comma-separated SERVICES env — blank restores the default list')">
-                <TInput v-model="form.servicesCsv" placeholder="dynamodb, sqs, sns, s3, lambda, events" />
-              </TFormField>
-              <TStack direction="horizontal" gap="0.5rem" align="center">
-                <TBadge :tone="snapshot.localstack.hasAuthToken ? 'success' : 'neutral'" variant="soft">
-                  Auth token {{ snapshot.localstack.hasAuthToken ? 'set' : 'not set' }}
-                </TBadge>
-                <TText tone="muted" size="xs">
-                  Set via the LOCALSTACK_AUTH_TOKEN env var — never editable here.
-                </TText>
-              </TStack>
-            </template>
+            <TFormField label="Fallback endpoint" hint="Proxy unimplemented AWS calls here — blank disables">
+              <TInput v-model="form.seFallback" placeholder="" />
+            </TFormField>
+            <TText tone="muted" size="xs" family="mono">Data dir: {{ snapshot.selfEngine.dataDir }}</TText>
           </TStack>
         </TCard>
 
@@ -478,15 +390,9 @@ onMounted(load);
 
         <TCard variant="outline">
           <template #header>
-            <TText weight="semibold">Sidecars &amp; proxy</TText>
+            <TText weight="semibold">DynamoDB proxy</TText>
           </template>
           <TStack direction="vertical" gap="0.75rem">
-            <TFormField label="OpenSearch Serverless sidecar" hint="aoss served in-process on LocalStack engines">
-              <TSwitch v-model="form.aossEnabled" />
-            </TFormField>
-            <TFormField label="Sidecar port" hint="Default 14567">
-              <TInput v-model.number="form.aossPort" type="number" min="1" max="65535" :disabled="!form.aossEnabled" />
-            </TFormField>
             <TFormField label="DynamoDB proxy" :hint="envHint('enableDynamoProxy', 'For tools that expect DynamoDB on a fixed port')">
               <TSwitch v-model="form.proxyEnabled" />
             </TFormField>

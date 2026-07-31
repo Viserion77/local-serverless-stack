@@ -1,0 +1,11 @@
+{
+  "serverPort": 3397,
+  "engine": "self",
+  "selfEngine": { "port": 14572 },
+  "stateDir": "tests/.lss-apigw-integration",
+  "persistence": false,
+  "region": "sa-east-1",
+  "autoPackage": true,
+  "packageCommand": "npx serverless package",
+  "packageTimeoutMs": 300000
+}

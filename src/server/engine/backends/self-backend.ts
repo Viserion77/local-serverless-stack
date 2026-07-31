@@ -9,7 +9,6 @@ import fs from 'fs';
 import path from 'path';
 import type { Socket } from 'net';
 import type { AddressInfo } from 'net';
-import type { EngineBackend } from '../engine-backend.js';
 import { ConfigManager, type ResolvedSelfEngineConfig } from '../../services/config-manager.js';
 import type { DispatcherApi, EngineContext } from '../types.js';
 import { EngineBus } from '../bus.js';
@@ -31,7 +30,7 @@ import { EngineScheduler } from '../dispatch/scheduler.js';
 const SERVICES = ['dynamodb', 'sqs', 'sns', 's3', 'events', 'lambda', 'sts', 'secretsmanager', 'aoss'] as const;
 const SQS_SNAPSHOT_FILE = 'sqs-messages.snapshot.json';
 
-export class SelfEngineBackend implements EngineBackend {
+export class SelfEngineBackend {
   readonly kind = 'self' as const;
 
   private readonly overrides: Partial<ResolvedSelfEngineConfig>;

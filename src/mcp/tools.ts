@@ -52,7 +52,7 @@ export const TOOLS: ToolDefinition[] = [
   {
     name: 'lss_health',
     description:
-      'Orchestrator and engine health: which engine is active (self or localstack), its endpoint, '
+      'Orchestrator and engine health: the engine endpoint, the AWS services it answers for, '
       + 'how many event-source loops and schedule rules are armed. Use this first to confirm a stack is up.',
     inputSchema: { type: 'object', properties: {} },
     run: (_a, http) => http('GET', '/api/health'),

@@ -1,15 +1,16 @@
 {
   "serverPort": 3100,
-  "engine": "localstack",
-  "mode": "managed",
-  "localstackEdition": "community",
-  "localstackVersion": "latest",
-  "localstackPort": 4566,
-  "localstackEndpoint": "http://localhost:4566",
+  "selfEngine": {
+    "port": 14566,
+    "account": "000000000000",
+    "idleUnloadMs": 300000,
+    "memoryBudgetMb": 128,
+    "fsync": false,
+    "fallbackEndpoint": null
+  },
   "enableDynamoProxy": false,
   "dynamoProxyPort": 8000,
   "region": "us-east-1",
-  "services": ["dynamodb", "sqs", "sns", "s3", "lambda", "events"],
   "persistence": true,
   "debug": false,
   "seedsDir": "./seeds",
@@ -25,14 +26,13 @@
   "lambdaRuntime": {
     "enabled": true,
     "execution": "auto",
-    "invokePortOffset": 10000
+    "invokePortOffset": 10000,
+    "lazy": true,
+    "idleTimeoutMs": 60000,
+    "maxWarmWorkers": 8
   },
   "serviceRuntime": {
     "users-service": { "apiPort": 3010, "invokePort": 13010 }
-  },
-  "selfEngine": {
-    "port": 14566,
-    "fallbackEndpoint": null
   },
   "branding": {
     "title": "Local Serverless Stack",
@@ -41,12 +41,12 @@
     "favicon": "./assets/favicon.ico",
     "defaultTheme": "dark",
     "colors": {
-      "brand-primary": "#3b82f6",
-      "brand-hover": "#2563eb"
+      "brand-primary": "#0d9488",
+      "brand-hover": "#0f766e"
     },
     "themeColors": {
-      "dark": { "bg-primary": "#0d1117" },
-      "light": { "bg-primary": "#f8fafc" }
+      "dark": { "brand-primary": "#2dd4bf" },
+      "light": { "brand-primary": "#0d9488" }
     }
   }
 }

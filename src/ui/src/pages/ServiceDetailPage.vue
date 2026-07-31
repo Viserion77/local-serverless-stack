@@ -6,10 +6,10 @@ import {
   TTag, TEmptyState, TModal, TConfirmDialog, TText, TIcon, TCodeBlock, useToast,
   TDescriptionList, TDescriptionItem,
 } from '@treeui/vue';
-import type { TreeBadgeTone } from '@treeui/vue';
+import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
 import type { ServiceDetail, ServiceResource } from '../services/api';
-import { engineLabel } from '../services/engine';
+import { ENGINE_LABEL } from '../services/engine';
 
 const props = defineProps<{ serviceName: string }>();
 const router = useRouter();
@@ -114,7 +114,7 @@ async function confirmDelete() {
   }
 }
 
-function statusTone(status?: string): TreeBadgeTone {
+function statusTone(status?: string): TBadgeTone {
   switch (status) {
     case 'running': return 'success';
     case 'registered': return 'warning';
@@ -403,7 +403,7 @@ watch(() => props.serviceName, load);
     <TConfirmDialog
       v-model:open="deleteDialogOpen"
       :title="`Delete service “${serviceName}”?`"
-      :description="`This removes the service from the cache and cleans up its provisioned resources on the ${engineLabel}.`"
+      :description="`This removes the service from the cache and cleans up its provisioned resources on the ${ENGINE_LABEL}.`"
       confirm-label="Delete"
       cancel-label="Cancel"
       confirm-variant="danger"

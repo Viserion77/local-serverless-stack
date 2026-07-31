@@ -6,18 +6,16 @@
 
 [![npm version](https://img.shields.io/npm/v/local-serverless-stack.svg)](https://www.npmjs.com/package/local-serverless-stack)
 
-**Local control plane for serverless development — with its own in-process AWS engine (no Docker) or LocalStack orchestration**
+**Local control plane for serverless development — with its own in-process AWS engine. No Docker, no container, no auth token.**
 
-LSS provides a unified local development environment for serverless microservices: one orchestrator provisions and serves every AWS resource your services declare, eliminating the need to run separate LocalStack instances (or, with the **self engine**, any LocalStack at all). It scales to monorepos with 15+ microservices sharing one stack.
+LSS provides a unified local development environment for serverless microservices: one orchestrator provisions and serves every AWS resource your services declare, so a monorepo needs a single local stack instead of one emulator per service. Measured on a synthetic 40-service / 400-lambda / 400-table monorepo: **128 MB resident and a 2 s boot**.
 
 ```mermaid
 flowchart LR
     DEV[Developer] -->|npx lss start| CLI[CLI<br/>bin/cli.js]
     CLI --> ORCH[Orchestrator<br/>Express API + dashboard :3100]
     SVC[Your services<br/>serverless.yml + serverless-lss] -->|sls package → register| ORCH
-    ORCH -->|provision + events| ENGINE{Engine}
-    ENGINE -->|"engine: self"| SELF[Self engine<br/>in-process :14566]
-    ENGINE -->|"engine: localstack"| LS[LocalStack<br/>Docker :4566]
+    ORCH -->|provision + events| SELF[Self engine<br/>in-process :14566]
     ORCH --> RT[Lambda runtime + API Gateway emulation<br/>your handlers, ports 30xx/130xx]
 ```
 
@@ -34,13 +32,14 @@ LSS features come in two layers:
 - **Platform** — the orchestrator, CLI, dashboard, plugin, programmatic client, Lambda/API runtime
   and seeds. **Engine-agnostic:** they behave the same whichever backend you choose.
 - **AWS engine** — the backend that actually serves the AWS wire protocols. You pick **one per
-  instance**: LocalStack Free, LocalStack Ultimate (Pro), or the in-process self engine.
+  instance**, served by the in-process self engine.
 
 ### 🧩 Platform (engine-agnostic)
 
 - **CLI (`npx lss …`)**
-  - `start` — runs the orchestrator detached (PID + log files), flags `--self-engine`, `--external`, `--pro`, `--localstack-token`, `--enable-dynamo-proxy`, `--config`
-  - `status` · `logs` · `stop` (also tears down the managed LocalStack)
+  - `start` — runs the orchestrator detached (PID + log files), flags `--enable-dynamo-proxy`, `--config`
+  - `status` · `logs` · `stop`
+  - `mcp` — serves the stack to an AI coding agent over MCP ([docs/MCP.md](docs/MCP.md))
   - `seed [table]` / `seed:clear [table] -y` — apply / wipe DynamoDB fixtures (hard local-endpoint guard on clear)
   - `help` — every command, flag and a config template
 - **Orchestration & provisioning**
@@ -82,39 +81,15 @@ LSS features come in two layers:
 - **DynamoDB seeds** — `seeds/{tableName}.json` fixtures auto-applied on table creation, re-applied via `lss seed` or the dashboard
 - **Secret seeds** — `seeds/secrets/{name}.json` fixtures (plus an optional `secrets:` config map) created on boot *before* services are reactivated, so a handler's first `GetSecretValue` finds an `AWSCURRENT` version with no bootstrap step; idempotent (an existing secret is never clobbered) and non-fatal
 
-### 🆓 Engine: LocalStack Free (community image, Docker)
-
-LSS spins up and manages its own community LocalStack container (`lss-localstack-<port>`) with
-`dynamodb, sqs, sns, s3, lambda, events`, a persistence volume and the local Lambda executor. Events
-reach your handlers through a generated proxy Lambda inside the container that calls the LSS invoke
-listener. This is the default engine; the [localstack-free example](examples/localstack-free/) runs
-community 4.0 with no token.
-
-- **Provisioned & wired**: DynamoDB tables (keys, GSI/LSI, streams, TTL), SQS queues (incl. FIFO), SNS topics, S3 buckets (versioning + `s3:ObjectCreated:*` notifications), EventBridge buses & rules (pattern or `rate()`/cron schedules), Lambda event source mappings
-- **Not available on community**: OpenSearch Serverless (`aoss`) — provisioning fails with an explicit error pointing you at Pro or the self engine
-- Community images `>= 2026.5` require `LOCALSTACK_AUTH_TOKEN`; `mode: external` / `--external` points at a LocalStack you already run
-
-### 💎 Engine: LocalStack Ultimate (Pro image, auth token)
-
-`npx lss start --pro` (optionally `--localstack-token ls-xxx`) runs the LocalStack **Pro** image — same
-provisioning and wiring as Free, plus the Pro-only services (OpenSearch Serverless and more). The
-[localstack-ultimate example](examples/localstack-ultimate/) keeps the serverless-offline path in
-charge of the ports and exercises the full resource menu (custom bus + pattern rule with an audit
-trail, `rate()` schedule, SQS DLQ redrive with `ReportBatchItemFailures`, DynamoDB GSI + streams →
-SNS, S3 notifications, TTL from the UI).
-
-- Requires `LOCALSTACK_AUTH_TOKEN` (Ultimate plan)
-- `localstackEdition` / `localstackVersion` / `localstackImage` select the exact image
-
-### ⚡ Engine: Self (in-process AWS emulator — no Docker, no token) — *the LSS differentiator*
+### ⚡ The engine: an in-process AWS emulator
 
 The orchestrator serves the AWS wire protocols itself on one port (default `14566`); events are
 delivered **in-process** straight to the LSS Lambda runtime — no container, no proxy Lambdas, no
 polling. Data persists as JSONL snapshot + WAL / content-addressed blobs under `~/.lss/engine`,
 hydrated on first touch and dehydrated when idle. Anything unimplemented answers with an explicit
-AWS-shaped error or is forwarded to `selfEngine.fallbackEndpoint`. See the [Self engine
-section](#self-engine--no-docker-no-localstack-no-auth-token) below for boot-time numbers and the
-migration story, and [docs/SELF_ENGINE.md](docs/SELF_ENGINE.md) for the full coverage matrix.
+AWS-shaped error or is forwarded to `selfEngine.fallbackEndpoint`. See the [engine
+section](#the-engine--no-docker-no-container-no-auth-token) below for boot-time numbers, and
+[docs/SELF_ENGINE.md](docs/SELF_ENGINE.md) for the full coverage matrix.
 
 - **DynamoDB**
   - Full expression language: KeyCondition, Condition, Filter, Update, Projection — decimal-exact `N` arithmetic
@@ -132,22 +107,25 @@ migration story, and [docs/SELF_ENGINE.md](docs/SELF_ENGINE.md) for the full cov
 - **STS** — GetCallerIdentity
 - **Lambda control plane** — proxy absorption as metadata (`INVOKE_URL` kept as HTTP fallback), event source mapping lifecycle (`Enabled` toggle = QueueInspector hold/release), Invoke passthrough
 - **In-process event delivery** — SQS→Lambda (batch size/window, visibility semantics), DynamoDB streams, S3 notifications (globs + prefix/suffix), EventBridge rule/schedule targets to Lambda (invoke) or SQS (enqueue; FIFO `MessageGroupId`) with `Input`/`InputPath`, schedules — no proxies, no polling
-- **Wire front door & storage** — single-port routing (SigV4-scope / X-Amz-Target / path), per-protocol error shapes, `/_localstack/health` alias, `fallbackEndpoint` reverse proxy; JSONL snapshot + WAL (torn-tail-safe, compaction), atomic JSON catalogs, content-addressed S3 blobs, hydrate-on-touch + idle dehydrate + `memoryBudgetMb` LRU
+- **Wire front door & storage** — single-port routing (SigV4-scope / X-Amz-Target / path), per-protocol error shapes, `fallbackEndpoint` reverse proxy; JSONL snapshot + WAL (torn-tail-safe, compaction), atomic JSON catalogs, content-addressed S3 blobs, hydrate-on-touch + idle dehydrate + `memoryBudgetMb` LRU
 
 For how each capability is tested (unit vs integration) see [docs/FEATURES.md](docs/FEATURES.md); the
 self-engine coverage matrix and known divergences from AWS live in
 [docs/SELF_ENGINE.md](docs/SELF_ENGINE.md).
 
-## Self engine — no Docker, no LocalStack, no auth token
+## The engine — no Docker, no container, no auth token
 
-LocalStack got heavy (a container eating 1 GB+ of RAM) and stopped being free by default
-(community images `>= 2026.5` require an auth token). The **self engine** replaces it for
-the typical serverless dev loop: the orchestrator itself serves the real AWS wire
-protocols on one port, so your application code, the AWS SDK, the dashboard and `lss seed`
-all work unchanged — there is simply no container underneath.
+Container-based emulators got heavy (1 GB+ of RAM each) and stopped being free by default.
+The LSS engine replaces them for the serverless dev loop: the orchestrator itself serves
+the real AWS wire protocols on one port, so your application code, the AWS SDK, the
+dashboard and `lss seed` all work unchanged — there is simply no container underneath.
+
+> **Upgrading from v1?** v2 removed the LocalStack backend. See
+> [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md) — for a project already on `engine: "self"`
+> it is a matter of deleting a few config keys.
 
 ```bash
-npx lss start --self-engine        # or "engine": "self" in lss.config.json
+npx lss start
 ```
 
 ```
@@ -188,9 +166,8 @@ engine boot **~10 ms**; a full pipeline crossing DynamoDB + SQS + S3 + EventBrid
 across the three pipeline services completes in **~170 ms** — with the whole stack
 being the orchestrator process plus one small worker per service.
 
-Migration is gradual: LocalStack mode remains the default and fully supported; a running
-instance picks one engine. Anything the self engine doesn't implement yet answers with an
-explicit error naming the operation — or is forwarded verbatim to a LocalStack via
+Anything the engine doesn't implement answers with an explicit error naming the
+operation — or is forwarded verbatim to any AWS-compatible endpoint via
 `selfEngine.fallbackEndpoint`. Coverage matrix and storage model:
 [docs/SELF_ENGINE.md](docs/SELF_ENGINE.md) · design/PRD:
 [docs/PRD_SELF_ENGINE.md](docs/PRD_SELF_ENGINE.md) · runnable demo:
@@ -198,14 +175,14 @@ explicit error naming the operation — or is forwarded verbatim to a LocalStack
 
 ## Quick Start
 
-Prerequisites: Node.js >= 20 · [osls](https://github.com/oss-serverless/serverless) 4.x (open-source Serverless Framework fork; provides the `serverless`/`sls` CLI) · Docker (**only** for the LocalStack engine)
+Prerequisites: Node.js >= 20 · [osls](https://github.com/oss-serverless/serverless) 4.x (open-source Serverless Framework fork; provides the `serverless`/`sls` CLI). **No Docker.**
 
 ```bash
 # 1. Install
 npm install -g local-serverless-stack
 
-# 2. Start the orchestrator (self engine: no Docker needed)
-npx lss start --self-engine        # or plain `npx lss start` for LocalStack
+# 2. Start the orchestrator (engine runs in-process — no Docker needed)
+npx lss start
 
 # 3. In each microservice: install the plugin and add it to serverless.yml
 npm install --save-dev serverless-lss
@@ -239,8 +216,6 @@ complete runnable projects live in [examples/](examples/) — one per engine fla
 
 | Example | Shows |
 | --- | --- |
-| [localstack-free](examples/localstack-free/) | LocalStack community 4.0 (Docker, no token): 3 services + a shared EventBridge bus — authorizers, SQS, schedules, DynamoDB stream → SNS, S3 notifications, seeds |
-| [localstack-ultimate](examples/localstack-ultimate/) | LocalStack Pro image (Ultimate plan, auth token) with the serverless-offline path preserved |
 | [self-hosted](examples/self-hosted/) | The no-Docker self engine end to end: orders → billing → notifications pipeline + an OpenSearch Serverless catalog |
 
 Each example ships an `index.html` validation console and its own dashboard
@@ -250,18 +225,15 @@ shared conventions.
 ## CLI
 
 ```bash
-npx lss start                  # start the orchestrator in background (managed LocalStack)
+npx lss start                  # start the orchestrator + engine in background
 npx lss start --self-engine    #   …with the in-process self engine (no Docker)
-npx lss start --external       #   …connecting to a LocalStack you already run
-npx lss start --pro            #   …with the LocalStack Pro image (needs auth token)
-npx lss start --pro --localstack-token ls-xxx  #   …passing the auth token inline
 npx lss start --enable-dynamo-proxy            #   …with the DynamoDB proxy on :8000
 npx lss start --config ./e2e/lss.config.json   # explicit config file (any command)
 npx lss status                 # is it running? which ports?
 npx lss logs                   # tail the orchestrator log
 npx lss seed [table]           # apply DynamoDB seed files (all tables or one)
 npx lss seed:clear [table] -y  # empty seeded tables (prompts unless --yes)
-npx lss stop                   # stop the orchestrator (and managed LocalStack)
+npx lss stop                   # stop the orchestrator
 npx lss help                   # all commands, flags and a config template
 ```
 
@@ -287,10 +259,7 @@ optional — [full reference](docs/CONFIGURATION.md)):
 ```jsonc
 {
   "serverPort": 3100,                // dashboard + API
-  "engine": "localstack",            // "localstack" (default) | "self" (no Docker)
-  "selfEngine": { "port": 14566 },   // engine "self" settings — docs/SELF_ENGINE.md
-  "localstackPort": 4566,
-  "services": ["dynamodb", "sqs", "sns", "s3", "lambda", "events"],
+  "selfEngine": { "port": 14566 },   // engine settings — docs/SELF_ENGINE.md
   "seedsDir": "./seeds",             // DynamoDB fixtures ({tableName}.json)
   "autoPackage": false,              // run `sls package` on register when template is missing
   "lambdaRuntime": { "enabled": true, "execution": "auto" },
@@ -303,29 +272,20 @@ optional — [full reference](docs/CONFIGURATION.md)):
 ```
 
 The most common environment overrides (env always wins over the file):
-`LSS_DASHBOARD_PORT`, `LSS_ENGINE` (`localstack`/`self`), `LOCALSTACK_AUTH_TOKEN`,
+`LSS_DASHBOARD_PORT`, `LSS_ENGINE_PORT`, `LSS_ENGINE_DATA_DIR`, `AWS_REGION`,
 `LSS_ENABLE_DYNAMO_PROXY`. Complete list: [docs/CONFIGURATION.md](docs/CONFIGURATION.md#environment-variables).
 
-The self engine's default port sits **outside 4566–4599** on purpose: a real LocalStack
-install intercepts that whole range on some hosts (Docker Desktop/WSL2). `--self-engine`
-cannot be combined with the LocalStack-only flags (`--external`, `--pro`,
-`--localstack-token`).
-
-### LocalStack: managed, external, Pro
-
-By default LSS spins up its own container (`lss-localstack-<port>`, services
-`dynamodb,sqs,sns,s3,lambda,events`, persistence volume, local Lambda executor). To point
-at an already-running instance set `mode: "external"` or pass `--external`. Recent
-LocalStack images (`>= 2026.5` community, all `pro`) require an auth token:
+Those three are all a second instance needs — no config file to write, nothing shared
+with your dev stack:
 
 ```bash
-export LOCALSTACK_AUTH_TOKEN=ls-xxxxxxxx
-npx lss start            # community image with token
-npx lss start --pro      # pro image (token required)
+LSS_DASHBOARD_PORT=3250 LSS_ENGINE_PORT=14766 \
+  LSS_ENGINE_DATA_DIR=/tmp/lss-run-7/engine npx lss start
 ```
 
-Details (`mode`, `localstackEdition`, `localstackVersion`, `localstackImage`):
-[docs/CONFIGURATION.md](docs/CONFIGURATION.md).
+The engine's default port sits **outside 4566–4599** on purpose: a real LocalStack
+install intercepts that whole range on some hosts (Docker Desktop/WSL2), and your machine
+may still have one.
 
 ## Dashboard
 
@@ -363,7 +323,7 @@ sequenceDiagram
     participant Dev as Developer
     participant Plugin as serverless-lss<br/>(plugin)
     participant Orch as Orchestrator
-    participant Eng as Engine<br/>(self or LocalStack)
+    participant Eng as Self engine<br/>(in-process)
 
     Dev->>Plugin: sls package
     Plugin->>Orch: POST /api/services/register
@@ -391,7 +351,7 @@ sequenceDiagram
 
     App->>Eng: SendMessage (AWS SDK)
     Eng->>RT: Event batch {Records: [...]}
-    Note over Eng,RT: self engine: in-process dispatch<br/>LocalStack: proxy Lambda → HTTP → invoke listener
+    Note over Eng,RT: in-process dispatch — no proxy Lambda, no polling
     RT->>H: handler(event, context)
     alt success
         H-->>RT: return
@@ -402,9 +362,8 @@ sequenceDiagram
     end
 ```
 
-The same flow applies to DynamoDB streams, S3 notifications and EventBridge targets.
-In LocalStack mode the hop goes through a generated proxy Lambda inside the container;
-in self-engine mode the dispatcher calls the runtime directly — no proxy, no polling.
+The same flow applies to DynamoDB streams, S3 notifications and EventBridge targets:
+the dispatcher calls the runtime directly — no proxy Lambda, no polling.
 
 If you still want serverless-offline to own the ports for a service, disable the
 LSS runtime globally or per service with `lambdaRuntime.enabled`/`serviceRuntime`.
@@ -431,7 +390,7 @@ local-serverless-stack/
 
 - **CLI** (`bin/cli.js`): background process management (start/stop/status/logs/seed)
 - **Server** (`src/server/`): Express API + engine orchestration; serves the built UI
-- **Engine** (`src/server/engine/`): the AWS provider behind everything — in-process **self engine** (:14566, no Docker) or managed/external **LocalStack** (:4566)
+- **Engine** (`src/server/engine/`): the AWS provider behind everything — the in-process **self engine** (:14566, no Docker)
 - **Client** (`src/client/`): `LssClient` — the same API surface as the dashboard, from code
 - **Plugin** (`packages/serverless-plugin/`): auto-registration on `sls package`
 
@@ -453,7 +412,7 @@ Granular builds: `server:build`, `ui:build`, `client:build`, `plugin:build`.
 npm test                    # unit suite (jest)
 npm run test:coverage       # with coverage (CI gate)
 npm run test:watch          # watch mode
-npm run test:integration    # boots a real orchestrator (Docker/LocalStack required)
+npm run test:integration    # boots a real orchestrator end to end (no Docker, no token)
 npm run lint                # eslint
 npx jest tests/unit/services/config-manager.test.ts   # a single suite
 ```

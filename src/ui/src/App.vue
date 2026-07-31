@@ -7,7 +7,6 @@ import {
 } from '@treeui/vue';
 import type { TNavMenuItem } from '@treeui/vue';
 import { currentRegion, regionOptions, applyConfiguredRegion } from './services/region';
-import { applyEngineKind, engineLabel } from './services/engine';
 import { api } from './services/api';
 import type { HealthInfo } from './services/api';
 import { branding, loadBranding, applyTheme } from './services/branding';
@@ -17,7 +16,7 @@ const router = useRouter();
 
 const health = ref<HealthInfo>({
   status: 'unknown',
-  localstack: false,
+  engineRunning: false,
   dynamoProxy: { enabled: false, running: false, port: 8000 },
 });
 const theme = ref<'dark' | 'light'>(
@@ -63,15 +62,12 @@ function onMenuSelect(value: string) {
 async function checkHealth() {
   try {
     health.value = await api.checkHealth();
-    applyEngineKind(health.value.engine?.kind);
   } catch (error) {
     console.error('Health check failed:', error);
   }
 }
 
-// `localstack` is the deprecated alias; prefer engineRunning when the server
-// is new enough to send it.
-const engineRunning = computed(() => health.value.engineRunning ?? health.value.localstack);
+const engineRunning = computed(() => health.value.engineRunning);
 
 onMounted(async () => {
   checkHealth();
@@ -80,10 +76,7 @@ onMounted(async () => {
   // but a region the user picks while /api/config is in flight must stick.
   const regionAtMount = currentRegion.value;
   api.getConfig()
-    .then((config) => {
-      applyConfiguredRegion(config.region, currentRegion.value !== regionAtMount);
-      applyEngineKind(config.engine.kind);
-    })
+    .then((config) => applyConfiguredRegion(config.region, currentRegion.value !== regionAtMount))
     .catch(() => { /* keep stored/default region */ });
   await loadBranding();
   theme.value =
@@ -124,7 +117,7 @@ onBeforeUnmount(() => {
             :tone="engineRunning ? 'success' : 'danger'"
             variant="soft"
           >
-            {{ engineLabel }}: {{ engineRunning ? 'Running' : 'Offline' }}
+            Engine: {{ engineRunning ? 'Running' : 'Offline' }}
           </TBadge>
           <TBadge
             v-if="health.dynamoProxy?.enabled"

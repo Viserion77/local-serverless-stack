@@ -8,7 +8,7 @@ import type { AddressInfo } from 'net';
 // These tests exercise bin/cli.js directly by spawning it as a subprocess
 // against a stub HTTP server that pretends to be the orchestrator. That lets
 // us validate the new confirmation flow, --yes bypass, and the "missing
-// tables" hint without needing a real LocalStack or orchestrator running.
+// tables" hint without needing a real engine or orchestrator running.
 
 const CLI_PATH = path.resolve(__dirname, '../../bin/cli.js');
 
@@ -98,7 +98,7 @@ function startStubOrchestrator(): Promise<Stub> {
                     tableName: e.tableName,
                     inserted: 0,
                     skipped: true,
-                    reason: 'table does not exist in LocalStack',
+                    reason: 'table does not exist in the engine',
                   },
             ),
           }),
@@ -168,7 +168,7 @@ describe('CLI — seed and seed:clear', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lss-cli-test-'));
     fs.writeFileSync(
       path.join(tempDir, 'lss.config.json'),
-      JSON.stringify({ serverPort: stub.port, localstackPort: 4566 }),
+      JSON.stringify({ serverPort: stub.port }),
     );
 
     // cli.js looks at `/tmp/lss-orchestrator-<port>.pid` for non-default ports,
@@ -233,7 +233,7 @@ describe('CLI — seed and seed:clear', () => {
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
-    it('shows scope summary mentioning LocalStack URL and the AWS safety guarantee', async () => {
+    it('shows scope summary mentioning the engine URL and the AWS safety guarantee', async () => {
       stub.state.seedsList = [
         { tableName: 'Users', file: 'Users.json', itemCount: 3, tableExists: true },
       ];
@@ -241,7 +241,7 @@ describe('CLI — seed and seed:clear', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('ATENÇÃO');
-      expect(result.stdout).toMatch(/LocalStack:\s+http:\/\/localhost:4566/);
+      expect(result.stdout).toMatch(/Engine:\s+http:\/\/localhost:14566/);
       expect(result.stdout).toMatch(/não toca em nenhuma conta AWS/i);
     });
 
@@ -334,7 +334,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('NENHUMA das tabelas correspondentes existe no LocalStack');
+      expect(result.stdout).toContain('NENHUMA das tabelas correspondentes existe no engine');
       expect(result.stdout).toContain('Ghost');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
@@ -383,7 +383,7 @@ describe('CLI — seed and seed:clear', () => {
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
-    it('exits early when the requested specific table does not exist in LocalStack', async () => {
+    it('exits early when the requested specific table does not exist in the engine', async () => {
       stub.state.seedsList = [
         { tableName: 'Users', file: 'Users.json', itemCount: 3, tableExists: true },
       ];
@@ -410,7 +410,7 @@ describe('CLI — seed and seed:clear', () => {
   });
 
   describe('seed', () => {
-    it('seeds all tables that exist in LocalStack', async () => {
+    it('seeds all tables that exist in the engine', async () => {
       stub.state.seedsList = [
         { tableName: 'Users', file: 'Users.json', itemCount: 3, tableExists: true },
         { tableName: 'Orders', file: 'Orders.json', itemCount: 5, tableExists: true },
@@ -436,7 +436,7 @@ describe('CLI — seed and seed:clear', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Users: 3 item(s) inserted');
       // The diagnostic now lists live tables (since some exist):
-      expect(result.stdout).toContain('Tabelas vivas no LocalStack');
+      expect(result.stdout).toContain('Tabelas vivas no engine');
       expect(result.stdout).toMatch(/bater EXATAMENTE/);
     });
 
@@ -448,7 +448,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Nenhuma tabela viva no LocalStack');
+      expect(result.stdout).toContain('Nenhuma tabela viva no engine');
       expect(result.stdout).toContain('npx lss start');
       expect(result.stdout).toContain('serverless deploy');
     });

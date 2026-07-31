@@ -3,7 +3,7 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   TButton, TBadge, TStack, TTabs, TTabList, TTab, TTabPanel, TSpinner, TAlert,
-  TCard, TTag, TEmptyState, TGrid, TStat, TProgress, TDivider,
+  TCard, TTag, TEmptyState, TGrid, TStat, TProgress,
   TText, TIcon, TDescriptionList, TDescriptionItem, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';

@@ -1,6 +1,5 @@
 {
   "serverPort": 3140,
-  "engine": "self",
   "selfEngine": {
     "port": 14566
   },
@@ -17,7 +16,7 @@
   },
   "branding": {
     "title": "Self-Hosted Services",
-    "subtitle": "Every AWS service emulated in-process by LSS — no Docker, no tokens",
+    "subtitle": "Every AWS service emulated in-process by LSS \u2014 no Docker, no tokens",
     "logo": "./assets/logo.svg",
     "favicon": "./assets/logo.svg",
     "defaultTheme": "dark",

@@ -1,7 +1,7 @@
 // Programmatic orchestrator lifecycle. start/stop/status/logs are process-spawn
 // + PID/stateDir file work — NOT HTTP — so instead of duplicating the CLI's
 // battle-tested logic we shell out to `bin/cli.js`. `waitUntilReady` then polls
-// GET /api/health, because `lss start` returns before LocalStack is actually up.
+// GET /api/health, because `lss start` returns before the engine is serving.
 
 import { spawn } from 'child_process';
 import path from 'path';
@@ -11,9 +11,6 @@ export interface StartOptions {
   /** Overrides the client's configPath for this invocation (threaded as --config). */
   configPath?: string;
   enableDynamoProxy?: boolean;
-  external?: boolean;
-  pro?: boolean;
-  localstackToken?: string;
 }
 export interface StartResult {
   alreadyRunning: boolean;
@@ -40,7 +37,7 @@ export interface LifecycleApi {
   stop(): Promise<StopResult>;
   status(): Promise<StatusResult>;
   logs(): Promise<LogsResult>;
-  /** Poll GET /api/health until LocalStack reports ready, or reject after timeoutMs. */
+  /** Poll GET /api/health until the engine reports ready, or reject after timeoutMs. */
   waitUntilReady(opts?: WaitUntilReadyOptions): Promise<void>;
 }
 
@@ -94,9 +91,6 @@ export class Lifecycle implements LifecycleApi {
   async start(opts: StartOptions = {}): Promise<StartResult> {
     const args = ['start', ...this.configArgs(opts.configPath)];
     if (opts.enableDynamoProxy) args.push('--enable-dynamo-proxy');
-    if (opts.external) args.push('--external');
-    if (opts.pro) args.push('--pro');
-    if (opts.localstackToken) args.push('--localstack-token', opts.localstackToken);
 
     const r = await runCli(args, this.deps.cwd);
     if (r.code !== 0) throw cliError('start', r);
@@ -127,7 +121,7 @@ export class Lifecycle implements LifecycleApi {
     for (;;) {
       try {
         const health = await this.deps.health.get();
-        if (health.localstack === true) return;
+        if (health.engineRunning === true) return;
       } catch {
         // Orchestrator not accepting connections yet — keep polling.
       }
