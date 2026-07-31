@@ -11,6 +11,7 @@ module.exports = {
     'src/server/routes/**/*.ts',
     'src/server/dev/**/*.ts',
     'src/client/**/*.ts',
+    'src/mcp/**/*.ts',
     'packages/serverless-plugin/src/**/*.ts',
     'bin/cli.js',
     // Integration-only by nature — excluded from the coverage denominator:

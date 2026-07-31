@@ -28,6 +28,7 @@ Published as the npm package `local-serverless-stack` (CLI: `lss`), plus the wor
 | `src/server/` | The orchestrator: `index.ts` (boot), `routes/` (HTTP API), `services/` (registrar, CFN parser, provisioner, seeds, gateway/lambda managers), `runtime/` (Lambda workers), `dev/` |
 | `src/server/engine/` | **The self engine.** `emulators/` (dynamodb, sqs, sns, s3, events, secretsmanager, opensearch, lambda-ctl, sts), `dispatch/` (stream-tailer, sqs-poller, scheduler, dispatcher), `store/` (JSONL snapshot + WAL), `http/` (router, sigv4, protocols), `bus.ts` |
 | `src/client/` | `LssClient` — the programmatic API |
+| `src/mcp/` | MCP server (`lss mcp`) — the stack as tools for an AI coding agent |
 | `src/ui/` | Vue 3 dashboard (own workspace) |
 | `packages/serverless-plugin/` | The `serverless-lss` plugin (separately versioned & published) |
 | `examples/` | `self-hosted` (self engine, no Docker), `localstack-free`, `localstack-ultimate` |
@@ -63,6 +64,7 @@ it mirrors CI. Shell equivalent:
 npm run lint \
   && npx tsc --noEmit -p src/server/tsconfig.json \
   && npx tsc --noEmit -p src/client/tsconfig.json \
+  && npx tsc --noEmit -p src/mcp/tsconfig.json \
   && npx tsc --noEmit -p packages/serverless-plugin/tsconfig.json \
   && (cd src/ui && npx vue-tsc --noEmit) \
   && npm run test:coverage \

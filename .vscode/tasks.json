@@ -117,9 +117,9 @@
     },
     {
       "label": "typecheck: all projects",
-      "detail": "tsc --noEmit em server/client/plugin + vue-tsc na UI",
+      "detail": "tsc --noEmit em server/client/mcp/plugin + vue-tsc na UI",
       "type": "shell",
-      "command": "npx tsc --noEmit -p src/server/tsconfig.json && npx tsc --noEmit -p src/client/tsconfig.json && npx tsc --noEmit -p packages/serverless-plugin/tsconfig.json && cd src/ui && npx vue-tsc --noEmit",
+      "command": "npx tsc --noEmit -p src/server/tsconfig.json && npx tsc --noEmit -p src/client/tsconfig.json && npx tsc --noEmit -p src/mcp/tsconfig.json && npx tsc --noEmit -p packages/serverless-plugin/tsconfig.json && cd src/ui && npx vue-tsc --noEmit",
       "group": "test",
       "icon": { "id": "verified", "color": "terminal.ansiBlue" },
       "problemMatcher": ["$tsc"]

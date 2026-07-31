@@ -1418,4 +1418,37 @@ describe('bin/cli.js helpers', () => {
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Local Serverless Stack (LSS) CLI'));
     });
   });
+
+  // `lss mcp` launcher. The dynamic import of the ESM build is the process entry
+  // point (it binds this process's stdio), so only the resolution and the
+  // missing-build guard are unit-testable — the rest is covered by starting the
+  // server for real in the MCP suite.
+  describe('mcp command', () => {
+    it('resolves the built MCP server next to the CLI', () => {
+      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('dist/mcp/server.js'));
+      const cli = loadCli(['node', 'cli.js', 'mcp']);
+      expect(cli.getMcpServerPath()).toMatch(/dist\/mcp\/server\.js$/);
+    });
+
+    it('returns null when nothing is built', () => {
+      mockFs.existsSync.mockReturnValue(false);
+      expect(loadCli().getMcpServerPath()).toBeNull();
+    });
+
+    it('reads the package version, falling back when package.json is unreadable', () => {
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ version: '9.9.9' }));
+      expect(loadCli().getPackageVersion()).toBe('9.9.9');
+      mockFs.readFileSync.mockReturnValue('{ not json');
+      expect(loadCli().getPackageVersion()).toBe('0.0.0');
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({}));
+      expect(loadCli().getPackageVersion()).toBe('0.0.0');
+    });
+
+    it('tells the user to build before it can serve MCP', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+      const cli = loadCli(['node', 'cli.js', 'mcp']);
+      expect(await expectExit(() => cli.runMcpServer())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('MCP server build not found'));
+    });
+  });
 });

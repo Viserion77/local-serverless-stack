@@ -23,6 +23,7 @@ by the live integration suite (`npm run test:integration`).
 | `lss stop` | Gracefully stops the orchestrator addressed by the active config. | integration (`features.test.ts` teardown) + unit (`cli`) |
 | `lss status` | Reports RUNNING/NOT RUNNING + ports for the addressed instance. | unit (`cli`) |
 | `lss logs` | Prints the tail of the instance log. | unit (`cli`) |
+| `lss mcp` | Runs the MCP server on stdio for an AI coding agent. Requires a running orchestrator. | unit (`cli`, `mcp/*`) |
 | `lss seed [table]` | Applies `{table}.json` seed files from `seedsDir` into DynamoDB (all matching tables, or one). | unit (`cli-seed`) + integration |
 | `lss seed:clear [table]` | Deletes seeded items after an interactive `confirmar` prompt (or `--yes`); refuses any non-local endpoint. | unit (`cli-seed`, `seed-manager-guard`) |
 | `--config <path>` | Loads config from an explicit file, taking precedence over the cwd/home search; also via `LSS_CONFIG`. | unit (`cli`) + integration |
@@ -195,6 +196,23 @@ serverless-offline process running. See `docs/PRD_API_LAMBDA_EMULATION.md` for t
 | Lambdas/APIs HTTP API | `GET /api/lambdas`, `GET /api/lambdas/:name`, `POST /api/lambdas/:name/invoke`, `GET /api/lambdas/:name/logs`, `GET /api/apis`, `GET/POST /api/services/:name/runtime{,/start,/stop}`. | unit (`routes/lambdas`, `routes/apis`) + integration |
 | `LssClient` namespaces | `lambdas.list/get/invoke/logs`, `apis.list/clearAuthorizerCache`, `services.runtime/startRuntime/stopRuntime`. | unit (`client/*`) |
 | Dashboard menus | Lambdas (list/detail with invoke + logs) and APIs (routes per service with listener status) sections in the Vue UI. | manual (like the rest of the UI) |
+
+## 12b. MCP server (`npx lss mcp`)
+
+Exposes the running orchestrator to any [Model Context Protocol](https://modelcontextprotocol.io) client
+(Claude Code included) as **23 tools**, so an AI agent drives the stack directly instead of being handed
+`curl` output: health/config/ports, services, resources and owners, lambdas + per-invocation logs, invoke,
+HTTP routes, DynamoDB tables/scan/query/put, queues + send + **await-idle**, buckets + object listings,
+secrets (names only, never values), OpenSearch search, and seeds.
+
+JSON-RPC 2.0 over stdio, protocol revision `2024-11-05`, `tools` capability only — implemented in
+`src/mcp/` with **no new runtime dependency**. It is a wrapper over this same REST API, so there is no
+second source of truth. It never boots an orchestrator: a stack must already be running, and when none
+answers, every tool returns one actionable error naming `npx lss start`. Mutating tools say `MUTATES` in
+their description so a client can surface that before a human approves. Failures come back as error
+*results* carrying the orchestrator's own message, not as transport errors. Off until a client is
+configured; `.mcp.json` (project-scoped) plus the client's own toggle are the on/off switch.
+Full guide: [MCP.md](MCP.md). Asserted by: unit (`mcp/protocol`, `mcp/tools`, `mcp/http`, `mcp/server`, `cli`).
 
 ## 13. Self engine (in-process AWS emulator — LocalStack replacement)
 

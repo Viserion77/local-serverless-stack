@@ -4,6 +4,7 @@ const { spawn } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
+const { pathToFileURL } = require('url');
 
 // Default paths used when no config is present. The actual paths are derived
 // per-invocation by runtimePaths() below, scoped to the configured serverPort
@@ -640,6 +641,49 @@ async function clearSeed(tableName) {
   }
 }
 
+/**
+ * `lss mcp` — run the Model Context Protocol server on stdio.
+ *
+ * Started by an MCP client (Claude Code reads .mcp.json), never by a human at a
+ * prompt: stdout is the JSON-RPC frame stream, so nothing else may be written
+ * there. This process only talks HTTP to an already-running orchestrator — it
+ * never boots one — so `lss start` has to have happened first.
+ */
+function getMcpServerPath() {
+  const candidates = [
+    path.join(__dirname, '../dist/mcp/server.js'),
+    path.join(__dirname, '..', 'dist', 'mcp', 'server.js'),
+  ];
+  return candidates.find(candidate => fs.existsSync(candidate)) || null;
+}
+
+function getPackageVersion() {
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, '../package.json'), 'utf-8')).version || '0.0.0';
+  } catch {
+    return '0.0.0';
+  }
+}
+
+function runMcpServer() {
+  const serverPath = getMcpServerPath();
+  const version = getPackageVersion();
+  /* istanbul ignore else: the "found" path falls through to the dynamic import below, which is the process entry point (it binds this process's stdio) and so is not unit-testable */
+  if (!serverPath) {
+    console.error('❌ MCP server build not found. Run `npm run build` first.');
+    process.exit(1); // never returns
+  }
+  // Dynamic import: the MCP build is ESM, and loading it only for this command
+  // keeps every other CLI invocation free of it.
+  /* istanbul ignore next: process entry point — loads the ESM build and binds this process's stdio */
+  import(pathToFileURL(serverPath).href)
+    .then(mod => mod.main(version))
+    .catch(error => {
+      console.error('❌ Failed to start the MCP server:', error && error.message ? error.message : error);
+      process.exit(1);
+    });
+}
+
 function showHelp() {
   console.log(`
 Local Serverless Stack (LSS) CLI
@@ -657,6 +701,9 @@ Commands:
                      tables with a seed file when no arg is given).
                      Pede confirmação interativa (digitar "confirmar")
                      antes de qualquer escrita.
+  mcp                Run the Model Context Protocol server on stdio, so an MCP
+                     client (Claude Code) can drive this stack with tools.
+                     Requires a running orchestrator; see docs/MCP.md.
   help               Show this help message
 
 Options:
@@ -752,6 +799,9 @@ function firstPositional() {
 module.exports = {
   loadConfig,
   getConfig,
+  getMcpServerPath,
+  getPackageVersion,
+  runMcpServer,
   getArgValue,
   runtimePaths,
   getOrchestratorPath,
@@ -797,6 +847,9 @@ if (require.main === module) {
       break;
     case 'seed:clear':
       clearSeed(firstPositional());
+      break;
+    case 'mcp':
+      runMcpServer();
       break;
     case 'help':
     case '--help':

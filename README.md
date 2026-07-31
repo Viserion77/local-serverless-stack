@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="assets/logo.svg" alt="LSS Self Engine" width="300" height="64">
+</p>
+
 # Local Serverless Stack (LSS)
 
 [![npm version](https://img.shields.io/npm/v/local-serverless-stack.svg)](https://www.npmjs.com/package/local-serverless-stack)
@@ -57,6 +61,9 @@ LSS features come in two layers:
   - Lambda authorizers: REST `token`/`request`, HTTP API `request` (simple responses), identity-source extraction, TTL cache + cache-clear, cross-service resolution by ARN
   - Raw `AWS::ApiGatewayV2::*` routes from CFN `resources:` — on their own `::Api` or the framework's `HttpApi`; `Target`/`IntegrationUri`/`AuthorizerUri`/`SourceArn` reduced through `Fn::Sub` (incl. `${Id.Arn}`), `Fn::Join`, `Fn::GetAtt`, `Fn::ImportValue` and the apigateway invocation-URI wrapper; de-duplicated against `httpApi:` events
   - Hot reload: source changes restart the worker; `serverless.yml` changes re-package + re-register
+- **MCP server** (`npx lss mcp`) — exposes the running stack to an AI coding agent (Claude Code and any
+  other MCP client) as 23 tools: inspect resources, invoke Lambdas, scan tables, send messages and
+  block on `await-idle`. Zero new dependencies, off until a client is configured. See [docs/MCP.md](docs/MCP.md)
 - **Explorers & testing primitives** (HTTP API + dashboard)
   - **Queues** (`/api/queues`): list + metrics (available/inFlight/processed/delayed), send/receive/delete/purge (FIFO group/dedup), `reset-processed`, `await-idle` (block until drained), `hold`/`captured`/`release` (capture-and-replay)
   - **DynamoDB** (`/api/dynamo`): list/describe (keys, GSI/LSI, stream, TTL), scan/query with filters, item CRUD, get/set TTL

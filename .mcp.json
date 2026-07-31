@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "lss": {
+      "command": "node",
+      "args": ["./bin/cli.js", "mcp"]
+    }
+  }
+}

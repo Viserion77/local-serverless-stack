@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 64" width="300" height="64" role="img" aria-label="LSS Self Engine">
+  <title>LSS Self Engine</title>
+  <!--
+    Horizontal lockup: the chip mark (see icon.svg) plus the wordmark. Text is
+    drawn as paths-free <text> on the system stack on purpose — the file stays
+    editable and tiny, and the dashboard renders it inline where the font is
+    already the UI's own.
+  -->
+  <defs>
+    <linearGradient id="lssLogoBody" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#0d9488"/>
+    </linearGradient>
+  </defs>
+
+  <g fill="#0f766e">
+    <rect x="3" y="22" width="7" height="4" rx="2"/>
+    <rect x="3" y="30" width="7" height="4" rx="2"/>
+    <rect x="3" y="38" width="7" height="4" rx="2"/>
+    <rect x="54" y="22" width="7" height="4" rx="2"/>
+    <rect x="54" y="30" width="7" height="4" rx="2"/>
+    <rect x="54" y="38" width="7" height="4" rx="2"/>
+    <rect x="22" y="3" width="4" height="7" rx="2"/>
+    <rect x="30" y="3" width="4" height="7" rx="2"/>
+    <rect x="38" y="3" width="4" height="7" rx="2"/>
+    <rect x="22" y="54" width="4" height="7" rx="2"/>
+    <rect x="30" y="54" width="4" height="7" rx="2"/>
+    <rect x="38" y="54" width="4" height="7" rx="2"/>
+  </g>
+  <rect x="8" y="8" width="48" height="48" rx="12" fill="url(#lssLogoBody)"/>
+  <path d="M34.5 17 L21 34.5 H29.5 L28.5 47 L42 29.5 H33.5 Z" fill="#ffffff"/>
+
+  <!-- currentColor so the wordmark inverts with the dashboard theme. -->
+  <g fill="currentColor" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+    <text x="80" y="34" font-size="27" font-weight="700" letter-spacing="1.5">LSS</text>
+    <text x="81" y="50" font-size="11.5" font-weight="600" letter-spacing="3.1" opacity="0.72">SELF ENGINE</text>
+  </g>
+</svg>

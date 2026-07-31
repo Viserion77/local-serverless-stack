@@ -1,6 +1,6 @@
 {
   "name": "local-serverless-stack",
-  "version": "0.17.2",
+  "version": "0.18.0",
   "description": "Local control plane for serverless development with LocalStack orchestration",
   "author": "LSS Contributors",
   "license": "MIT",
@@ -33,19 +33,20 @@
     "local"
   ],
   "files": [
+    "CHANGELOG.md",
+    "LICENSE",
+    "README.md",
+    "assets/",
     "bin/",
     "dist/",
-    "packages/serverless-plugin/dist/",
-    "README.md",
-    "LICENSE",
-    "CHANGELOG.md"
+    "packages/serverless-plugin/dist/"
   ],
   "workspaces": [
     "packages/*",
     "src/ui"
   ],
   "scripts": {
-    "build": "npm run ui:build && npm run server:build && npm run client:build && npm run plugin:build",
+    "build": "npm run ui:build && npm run server:build && npm run client:build && npm run mcp:build && npm run plugin:build",
     "server:dev": "tsx watch src/server/index.ts",
     "server:build": "tsc --project src/server/tsconfig.json",
     "client:build": "tsc --project src/client/tsconfig.json",
@@ -61,7 +62,8 @@
     "test:coverage": "jest -c jest.config.js --coverage",
     "test:integration": "jest -c jest.integration.config.js",
     "lint": "eslint .",
-    "lint:fix": "eslint . --fix"
+    "lint:fix": "eslint . --fix",
+    "mcp:build": "tsc --project src/mcp/tsconfig.json"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.709.0",

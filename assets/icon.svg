@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="LSS Self Engine">
+  <title>LSS Self Engine</title>
+  <!--
+    The mark says what the product is: a chip, not a cloud. The die is the
+    orchestrator process; the twelve pins are the AWS services it serves on the
+    wire; the bolt is the in-process event delivery (no container in between).
+    Reads at 16px as a bolt-in-a-chip and at 512px as a die with pinout.
+  -->
+  <defs>
+    <linearGradient id="lssBody" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2dd4bf"/>
+      <stop offset="1" stop-color="#0d9488"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Pinout: three per edge, tucked inside the die's corner radius. -->
+  <g fill="#0f766e">
+    <rect x="3" y="22" width="7" height="4" rx="2"/>
+    <rect x="3" y="30" width="7" height="4" rx="2"/>
+    <rect x="3" y="38" width="7" height="4" rx="2"/>
+    <rect x="54" y="22" width="7" height="4" rx="2"/>
+    <rect x="54" y="30" width="7" height="4" rx="2"/>
+    <rect x="54" y="38" width="7" height="4" rx="2"/>
+    <rect x="22" y="3" width="4" height="7" rx="2"/>
+    <rect x="30" y="3" width="4" height="7" rx="2"/>
+    <rect x="38" y="3" width="4" height="7" rx="2"/>
+    <rect x="22" y="54" width="4" height="7" rx="2"/>
+    <rect x="30" y="54" width="4" height="7" rx="2"/>
+    <rect x="38" y="54" width="4" height="7" rx="2"/>
+  </g>
+
+  <!-- The die. -->
+  <rect x="8" y="8" width="48" height="48" rx="12" fill="url(#lssBody)"/>
+
+  <!-- In-process delivery. -->
+  <path d="M34.5 17 L21 34.5 H29.5 L28.5 47 L42 29.5 H33.5 Z" fill="#ffffff"/>
+</svg>
