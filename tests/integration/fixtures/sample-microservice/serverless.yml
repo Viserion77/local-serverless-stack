@@ -15,17 +15,10 @@ provider:
     UPLOADS_BUCKET: sample-microservice-uploads
     AWS_ENDPOINT: http://localhost:14599
 
-plugins:
-  - serverless-lss
-  - serverless-offline
-
 custom:
-  orchestrator:
-    enabled: true
-    orchestratorUrl: http://localhost:3110
-  serverless-offline:
-    httpPort: 3000
-    lambdaPort: 3001
+  lss:
+    apiPort: 3000
+    invokePort: 3001
 
 functions:
   health:

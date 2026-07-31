@@ -12,7 +12,6 @@ module.exports = {
     'src/server/dev/**/*.ts',
     'src/client/**/*.ts',
     'src/mcp/**/*.ts',
-    'packages/serverless-plugin/src/**/*.ts',
     'bin/cli.js',
     // Integration-only by nature — excluded from the coverage denominator:
     '!src/server/index.ts', // calls start()/listens at import

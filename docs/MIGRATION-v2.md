@@ -101,7 +101,7 @@ visibly instead of quietly starting the wrong thing.
 ### 4. Service endpoints
 
 Point your handlers' AWS endpoint at the stack's port (default `14566`) instead
-of `4566` — the same port the dashboard and the plugin use:
+of `4566` — the same port the dashboard uses:
 
 ```yaml
 provider:
@@ -124,7 +124,33 @@ have one.
 | `LssClient` `HealthStatus.localstack` | removed — use `engineRunning` |
 | `LssClient` `lifecycle.start({ external, pro, localstackToken })` | removed |
 
-### 6. Examples
+### 6. The `serverless-lss` plugin is retired
+
+v2 removes the Serverless Framework plugin entirely — services no longer
+announce themselves from inside `sls package`. Migration:
+
+1. Delete `serverless-lss` from each service's `devDependencies`.
+2. Remove the `plugins: - serverless-lss` entry and the whole
+   `custom.orchestrator` block from each `serverless.yml`.
+   **Keep `custom.lss`** — it is now read by the orchestrator itself, from the
+   packaged `serverless-state.json`.
+3. Register through the orchestrator instead:
+   - `npx lss scan` — lists every Serverless/osls service under the project
+     root, with packaged/registered flags;
+   - `npx lss register [path...]` — registers them (with `autoPackage` the
+     orchestrator runs the package command when the template is missing);
+   - or open the dashboard: the first visit with no services starts a guided
+     onboarding (ports → branding → project scan with tick-to-register),
+     reopenable later from Settings;
+   - or `POST /api/services/register { servicePath }` /
+     `LssClient.services.register` from automation.
+
+`serverless-offline` compatibility went with it: `custom.serverless-offline`
+ports are no longer read (declare `custom.lss.apiPort`/`invokePort` instead),
+and registration no longer fires on `sls offline` — v1's plugin was the only
+piece that ever did.
+
+### 7. Examples
 
 `examples/localstack-free` and `examples/localstack-ultimate` are gone.
 [`examples/self-hosted`](../examples/self-hosted/) is the example: four
@@ -140,8 +166,8 @@ The raw `AWS::ApiGatewayV2::*` cross-stack topology that lived in
 ## What did *not* change
 
 Everything else. The wire API is the seam, so the provisioner, explorers, seeds,
-the `serverless-lss` plugin, the Lambda runtime, the gateway emulation, the
-dashboard, the `LssClient` and the MCP server all behave exactly as they did.
+the Lambda runtime, the gateway emulation, the dashboard, the `LssClient` and
+the MCP server all behave exactly as they did.
 A project that already ran on `engine: "self"` needs only the config keys
 trimmed.
 

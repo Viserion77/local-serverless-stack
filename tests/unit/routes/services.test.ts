@@ -35,7 +35,12 @@ jest.mock('../../../src/server/services/source-watcher', () => {
   return { SourceWatcher: { getInstance: () => instance } };
 });
 
+jest.mock('../../../src/server/services/service-scanner', () => ({
+  scanForServices: jest.fn(),
+}));
+
 import { servicesRouter, processManager } from '../../../src/server/routes/services';
+import { scanForServices } from '../../../src/server/services/service-scanner';
 import { CacheManager } from '../../../src/server/services/cache-manager';
 import { ResourceProvisioner } from '../../../src/server/services/resource-provisioner';
 import { ConfigManager } from '../../../src/server/services/config-manager';
@@ -305,6 +310,34 @@ describe('GET /api/services', () => {
     const res = await request(appWith()).get('/api/services');
     expect(res.status).toBe(500);
     expect(res.body.error).toBe('Failed to list services');
+  });
+});
+
+// The discovery endpoint behind onboarding and `lss scan`. Its route must sit
+// BEFORE /:name — "scan" would otherwise match as a service name.
+describe('GET /api/services/scan', () => {
+  it('scans the project root against the registered roots', async () => {
+    jest.spyOn(CacheManager.prototype, 'listServices').mockResolvedValue([
+      { ...META, root: '/abs/registered-svc' } as never,
+    ]);
+    jest.spyOn(ConfigManager.getInstance(), 'getProjectRoot').mockReturnValue('/abs');
+    (scanForServices as jest.Mock).mockReturnValue([
+      { name: 'orders', root: '/abs/orders', relPath: 'orders', registered: false },
+    ]);
+    const res = await request(appWith()).get('/api/services/scan');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      projectRoot: '/abs',
+      services: [{ name: 'orders', root: '/abs/orders', relPath: 'orders', registered: false }],
+    });
+    expect(scanForServices).toHaveBeenCalledWith('/abs', ['/abs/registered-svc']);
+  });
+
+  it('500 when the scan fails', async () => {
+    jest.spyOn(CacheManager.prototype, 'listServices').mockRejectedValue(new Error('disk'));
+    const res = await request(appWith()).get('/api/services/scan');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('Failed to scan for services');
   });
 });
 

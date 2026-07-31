@@ -14,7 +14,7 @@ LSS provides a unified local development environment for serverless microservice
 flowchart LR
     DEV[Developer] -->|npx lss start| CLI[CLI<br/>bin/cli.js]
     CLI --> ORCH["Orchestrator :14566<br/>REST API + dashboard + AWS wire"]
-    SVC[Your services<br/>serverless.yml + serverless-lss] -->|sls package → register| ORCH
+    SVC[Your services<br/>serverless.yml] -->|lss register / onboarding| ORCH
     ORCH -->|provision + events| SELF[Self engine<br/>in-process, same listener]
     ORCH --> RT[Lambda runtime + API Gateway emulation<br/>your handlers, ports 30xx/130xx]
 ```
@@ -29,8 +29,8 @@ flowchart LR
 
 LSS features come in two layers:
 
-- **Platform** — the orchestrator, CLI, dashboard, plugin, programmatic client, Lambda/API runtime
-  and seeds. **Engine-agnostic:** they behave the same whichever backend you choose.
+- **Platform** — the orchestrator, CLI, dashboard, onboarding, programmatic client, Lambda/API
+  runtime and seeds. **Engine-agnostic:** they behave the same whichever backend you choose.
 - **AWS engine** — the backend that actually serves the AWS wire protocols. You pick **one per
   instance**, served by the in-process self engine.
 
@@ -39,11 +39,14 @@ LSS features come in two layers:
 - **CLI (`npx lss …`)**
   - `start` — runs the orchestrator detached (PID + log files), flags `--enable-dynamo-proxy`, `--config`
   - `status` · `logs` · `stop`
+  - `scan` — list every Serverless/osls service found under the project root
+  - `register [path...]` — register services with the running orchestrator (replaces the retired `serverless-lss` plugin)
   - `mcp` — serves the stack to an AI coding agent over MCP ([docs/MCP.md](docs/MCP.md))
   - `seed [table]` / `seed:clear [table] -y` — apply / wipe DynamoDB fixtures (hard local-endpoint guard on clear)
   - `help` — every command, flag and a config template
 - **Orchestration & provisioning**
-  - Service registration API (`POST /api/services/register`) — the plugin reports only *where* the service lives
+  - Service registration API (`POST /api/services/register`) — a bare `{ servicePath }` is a complete registration: the orchestrator packages when needed and reads name/region/`custom.lss` ports from the packaged state
+  - Service discovery (`GET /api/services/scan`, `lss scan`) — finds every Serverless/osls service under the project root, with packaged/registered flags and port/region hints
   - CloudFormation parsing from `sls package` → auto-provisions tables, queues (incl. `RedrivePolicy`), topics, buckets (incl. `CorsConfiguration`), secrets, EventBridge buses/rules, raw ApiGatewayV2 routes and OpenSearch collections
   - `autoPackage` — runs `sls package` on demand when the template is missing
   - Automatic event source mappings: SQS / DynamoDB streams / S3 notifications / EventBridge rules → Lambda — with AWS-faithful failure semantics (`FilterCriteria` enforced, `ReportBatchItemFailures` partial batches, `maximumRetryAttempts` incl. the `-1` "until the record ages out" default)
@@ -61,8 +64,8 @@ LSS features come in two layers:
   - Raw `AWS::ApiGatewayV2::*` routes from CFN `resources:` — on their own `::Api` or the framework's `HttpApi`; `Target`/`IntegrationUri`/`AuthorizerUri`/`SourceArn` reduced through `Fn::Sub` (incl. `${Id.Arn}`), `Fn::Join`, `Fn::GetAtt`, `Fn::ImportValue` and the apigateway invocation-URI wrapper; de-duplicated against `httpApi:` events
   - Hot reload: source changes restart the worker; `serverless.yml` changes re-package + re-register
 - **MCP server** (`npx lss mcp`) — exposes the running stack to an AI coding agent (Claude Code and any
-  other MCP client) as 23 tools: inspect resources, invoke Lambdas, scan tables, send messages and
-  block on `await-idle`. Zero new dependencies, off until a client is configured. See [docs/MCP.md](docs/MCP.md)
+  other MCP client) as 25 tools: inspect resources, scan for and register services, invoke Lambdas,
+  scan tables, send messages and block on `await-idle`. Zero new dependencies, off until a client is configured. See [docs/MCP.md](docs/MCP.md)
 - **Explorers & testing primitives** (HTTP API + dashboard)
   - **Queues** (`/api/queues`): list + metrics (available/inFlight/processed/delayed), send/receive/delete/purge (FIFO group/dedup), `reset-processed`, `await-idle` (block until drained), `hold`/`captured`/`release` (capture-and-replay)
   - **DynamoDB** (`/api/dynamo`): list/describe (keys, GSI/LSI, stream, TTL), scan/query with filters, item CRUD, get/set TTL
@@ -75,7 +78,7 @@ LSS features come in two layers:
 - **Dashboard (Vue 3 SPA)** — ten tabs: **Overview** (health, config, exposed-ports map), **Services** (status/start/stop/logs + per-service resource breakdown incl. EventBridge buses & rules and OpenSearch collections), **Lambdas** (registry + invoke + logs), **APIs**, **Queues**, **S3**, **DynamoDB**, **OpenSearch**, **Secrets**, **Settings** — plus a region selector and theme toggle
   - **Settings**: edit `lss.config.json` from the dashboard — only changed fields are written (you review and commit the diff), hot-reload for lazy keys, explicit restart-required and env-var-masked flags, plus a reload-from-disk button
   - **Branding**: navbar title/subtitle, logo, favicon, default theme and any TreeUI color token per theme, via the `branding` config key
-- **serverless-lss plugin** — auto-registers each service on `sls package`/`offline`; orchestrator URL precedence (`ORCHESTRATOR_URL` > `LSS_DASHBOARD_PORT` > `custom.orchestrator` > 14566)
+- **Guided onboarding** — first dashboard visit with no services walks through ports → branding → a project scan where you tick the services to register; reopen it anytime from Settings
 - **Programmatic client (`LssClient`)** — the CLI/dashboard surface from code: HTTP namespaces `seeds`, `queues`, `dynamo`, `buckets`, `resources`, `services`, `lambdas`, `apis`, `config`, `health` + `lifecycle` (`start`/`stop`/`status`/`logs`/`waitUntilReady`, shells out to the CLI)
 - **DynamoDB dev proxy** — optional reverse proxy on `:8000` (`enableDynamoProxy`) forwarding to the active engine, for tooling that expects DynamoDB on the standard port
 - **DynamoDB seeds** — `seeds/{tableName}.json` fixtures auto-applied on table creation, re-applied via `lss seed` or the dashboard
@@ -184,30 +187,25 @@ npm install -g local-serverless-stack
 # 2. Start the orchestrator (engine runs in-process — no Docker needed)
 npx lss start
 
-# 3. In each microservice: install the plugin and add it to serverless.yml
-npm install --save-dev serverless-lss
+# 3. Register your services — no plugin, no per-service setup:
+npx lss scan            # list every Serverless/osls service under the project root
+npx lss register ./orders-service ./billing-service
+#    …or open http://localhost:14566 and let the guided onboarding
+#    scan the project and register the services you tick.
 ```
 
-```yaml
-# serverless.yml
-plugins:
-  - serverless-lss
+Per-service ports live under `custom.lss` in each `serverless.yml` (optional —
+without them the service gets no HTTP listener, but stays invocable via the API):
 
+```yaml
 custom:
-  orchestrator:
-    enabled: true
-    orchestratorUrl: http://localhost:14566  # must match serverPort
   lss:
     apiPort: 3000        # HTTP API (API Gateway emulation)
     invokePort: 3001     # direct Lambda invocations
 ```
 
 ```bash
-# 4. Package the service — the plugin auto-registers it with LSS
-#    (registration also fires on `sls offline` startup)
-npx sls package
-
-# 5. Watch everything in the dashboard
+# 4. Watch everything in the dashboard
 open http://localhost:14566
 ```
 
@@ -231,6 +229,8 @@ npx lss start --enable-dynamo-proxy            #   …with the DynamoDB proxy on
 npx lss start --config ./e2e/lss.config.json   # explicit config file (any command)
 npx lss status                 # is it running? which ports?
 npx lss logs                   # tail the orchestrator log
+npx lss scan                   # list Serverless/osls services under the project root
+npx lss register [path...]     # register services (defaults to the current directory)
 npx lss seed [table]           # apply DynamoDB seed files (all tables or one)
 npx lss seed:clear [table] -y  # empty seeded tables (prompts unless --yes)
 npx lss stop                   # stop the orchestrator
@@ -320,25 +320,24 @@ logo and favicon (URL or a file next to `lss.config.json`), default theme, and a
 
 ```mermaid
 sequenceDiagram
-    participant Dev as Developer
-    participant Plugin as serverless-lss<br/>(plugin)
+    participant Dev as Developer<br/>(lss register · onboarding · API)
     participant Orch as Orchestrator
     participant Eng as Self engine<br/>(in-process)
 
-    Dev->>Plugin: sls package
-    Plugin->>Orch: POST /api/services/register
-    Note right of Plugin: Sends: servicePath,<br/>apiPort, invokePort, region
-    Orch->>Orch: Read + parse CloudFormation template<br/>from servicePath/.serverless/
+    Dev->>Orch: POST /api/services/register { servicePath }
+    Orch->>Orch: sls package if the template is missing (autoPackage)
+    Orch->>Orch: Read name/region/custom.lss ports<br/>from .serverless/serverless-state.json
+    Orch->>Orch: Parse the CloudFormation template
     Orch->>Eng: Create tables, queues, topics,<br/>buckets, buses, rules
     Orch->>Eng: Wire event source mappings<br/>(SQS/streams/S3/EventBridge → Lambda)
     Orch->>Orch: Start Lambda runtime worker<br/>+ API listener (30xx) + invoke listener (130xx)
-    Orch-->>Plugin: ✅ registered (N resources)
+    Orch-->>Dev: ✅ registered (N resources)
 ```
 
-The plugin itself only reports *where* the service lives — the orchestrator reads
-`.serverless/cloudformation-template-update-stack.json` from that path (running
-`sls package` generates it; `autoPackage: true` lets the orchestrator regenerate it
-on demand).
+A bare `{ servicePath }` is a complete registration: the orchestrator packages the
+service when the template is missing (`autoPackage`), then resolves everything else
+from the packaged output. `lss scan` (or the dashboard onboarding) finds the
+services to feed it.
 
 ### Event flow
 
@@ -365,8 +364,8 @@ sequenceDiagram
 The same flow applies to DynamoDB streams, S3 notifications and EventBridge targets:
 the dispatcher calls the runtime directly — no proxy Lambda, no polling.
 
-If you still want serverless-offline to own the ports for a service, disable the
-LSS runtime globally or per service with `lambdaRuntime.enabled`/`serviceRuntime`.
+The LSS runtime owns the service ports; `lambdaRuntime.enabled`/`serviceRuntime`
+can disable it globally or per service when a service should not be served at all.
 
 ## Architecture
 
@@ -381,8 +380,8 @@ local-serverless-stack/
 │   │   ├── runtime/          # Lambda runtime + API Gateway emulation
 │   │   └── dev/              # dev utilities (DynamoDB proxy)
 │   ├── client/               # programmatic client (LssClient) — package entry point
+│   ├── mcp/                  # MCP server (`lss mcp`)
 │   └── ui/                   # Vue 3 dashboard (npm workspace, @treeui/vue)
-├── packages/serverless-plugin/  # serverless-lss (published separately)
 ├── docs/                     # reference docs
 ├── examples/                 # runnable sample projects
 └── tests/                    # unit + integration suites
@@ -392,7 +391,7 @@ local-serverless-stack/
 - **Server** (`src/server/`): Express API + engine orchestration; serves the built UI
 - **Engine** (`src/server/engine/`): the AWS provider behind everything — the in-process **self engine**, sharing the orchestrator's listener (no Docker)
 - **Client** (`src/client/`): `LssClient` — the same API surface as the dashboard, from code
-- **Plugin** (`packages/serverless-plugin/`): auto-registration on `sls package`
+- **MCP** (`src/mcp/`): the stack as tools for AI coding agents
 
 ## Development
 
@@ -401,10 +400,10 @@ git clone https://github.com/viserion77/local-serverless-stack.git
 cd local-serverless-stack
 npm run setup          # install root + UI workspace deps
 npm run dev            # server (tsx watch) + UI (vite) concurrently
-npm run build          # ui + server + client + plugin
+npm run build          # ui + server + client + mcp
 ```
 
-Granular builds: `server:build`, `ui:build`, `client:build`, `plugin:build`.
+Granular builds: `server:build`, `ui:build`, `client:build`, `mcp:build`.
 
 ### Testing
 

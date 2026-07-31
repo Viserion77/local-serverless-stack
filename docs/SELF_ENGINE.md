@@ -55,9 +55,9 @@ boot-materialized, so it is flagged `restartRequired`).
 
 The wire API is the seam: the provisioner, the dashboards/explorers, seeds,
 `LssClient` and the QueueInspector primitives (`hold`/`release`/`await-idle`)
-all speak AWS SDK against the engine endpoint, unchanged. The `serverless-lss`
-plugin is unaffected too — it only POSTs JSON to the orchestrator REST API and
-never talks to the engine directly. Event delivery to your handlers happens **in-process** through the
+all speak AWS SDK against the engine endpoint, unchanged. Service registration
+(`lss register`, onboarding, `POST /api/services/register`) is unaffected too —
+it only speaks the orchestrator REST API and never talks to the engine directly. Event delivery to your handlers happens **in-process** through the
 LSS Lambda runtime — proxy Lambdas are absorbed as metadata
 (their `INVOKE_URL` doubles as an HTTP fallback for services still running
 serverless-offline).

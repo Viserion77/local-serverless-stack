@@ -15,9 +15,10 @@ emulator — no Docker, no container, no auth token — and since v2 the only en
 replaces `serverless-offline` with its own Lambda runtime
 and API Gateway emulation.
 
-Published as the npm package `local-serverless-stack` (CLI: `lss`), plus the workspace package
-`serverless-lss` (the Serverless Framework plugin). Node **>= 20**, CommonJS, npm workspaces
-(`packages/*`, `src/ui`).
+Published as the single npm package `local-serverless-stack` (CLI: `lss`). Services join the stack
+through the orchestrator itself — `lss scan` / `lss register`, the dashboard onboarding or
+`POST /api/services/register` — there is no Serverless Framework plugin anymore (the `serverless-lss`
+package was retired in v2). Node **>= 20**, CommonJS, npm workspaces (`src/ui`).
 
 ---
 
@@ -30,7 +31,6 @@ Published as the npm package `local-serverless-stack` (CLI: `lss`), plus the wor
 | `src/client/` | `LssClient` — the programmatic API |
 | `src/mcp/` | MCP server (`lss mcp`) — the stack as tools for an AI coding agent |
 | `src/ui/` | Vue 3 dashboard (own workspace) |
-| `packages/serverless-plugin/` | The `serverless-lss` plugin (separately versioned & published) |
 | `examples/` | `self-hosted` — four microservices on the engine (DynamoDB, SQS, S3, EventBridge, OpenSearch, Secrets) |
 | `tests/` | `unit/`, `integration/` (Docker + token gated), `fixtures/` |
 | `docs/` | `FEATURES.md`, `SELF_ENGINE.md`, `CONFIGURATION.md`, `RELEASE.md`, PRDs |
@@ -65,14 +65,13 @@ npm run lint \
   && npx tsc --noEmit -p src/server/tsconfig.json \
   && npx tsc --noEmit -p src/client/tsconfig.json \
   && npx tsc --noEmit -p src/mcp/tsconfig.json \
-  && npx tsc --noEmit -p packages/serverless-plugin/tsconfig.json \
   && (cd src/ui && npx vue-tsc --noEmit) \
   && npm run test:coverage \
   && npm run build
 ```
 
 Running only `jest` + `server:build` is **not** sufficient — it misses lint, `vue-tsc`, and the
-UI/client/plugin builds.
+UI/client/MCP builds.
 
 ### 3. 100% coverage, globally
 
@@ -107,7 +106,7 @@ instead — that's the established pattern.
 ## Commands
 
 ```bash
-npm run build          # ui + server + client + plugin
+npm run build          # ui + server + client + mcp
 npm run server:build   # tsc for orchestrator + engine only
 npm run dev            # tsx watch (server) + vite (UI)
 npm test               # jest, unit suite

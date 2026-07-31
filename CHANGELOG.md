@@ -40,6 +40,46 @@ resolved by ARN. Nothing the project supported on LocalStack needed LocalStack.
 - **Examples**: `examples/localstack-free` and `examples/localstack-ultimate` (760 MB). Their raw
   `AWS::ApiGatewayV2::*` cross-stack topology was preserved at
   `tests/integration/fixtures/apigw-raw/`, where its end-to-end test still runs.
+- **The `serverless-lss` plugin package** (`packages/serverless-plugin/`, published separately as
+  `serverless-lss`): services no longer announce themselves from inside `sls package` — a bare
+  `POST /api/services/register { servicePath }` is a complete registration, because the orchestrator
+  packages on demand (`autoPackage`) and reads the service name, `provider.region` and `custom.lss`
+  ports from the packaged `serverless-state.json` itself. Every `plugins: - serverless-lss` entry
+  and `custom.orchestrator` block is dead config; `custom.lss` stays, now read server-side. The npm
+  workspace, the publish lane, the CI typecheck and the example/fixture wiring all went with it.
+- **`serverless-offline` compatibility**: `custom.serverless-offline.httpPort/lambdaPort` are no
+  longer read as port fallbacks (declare `custom.lss.apiPort`/`invokePort`), and nothing registers
+  on `sls offline` anymore — the retired plugin was the only piece that ever did. The LSS runtime
+  replaced offline's execution model back in 0.7.x; this removes the last vestige.
+
+### Added
+- **One port for everything.** The dashboard, the REST API **and the AWS wire protocols** share one
+  listener on `14566` by default: requests carrying positive AWS evidence (SigV4 `Authorization`,
+  `X-Amz-Target`, any `x-amz-*` header, engine paths like `/_aoss` or `/2015-03-31/`) are demuxed to
+  the engine, everything else to the dashboard/API. Setting `selfEngine.port` different from
+  `serverPort` splits them back into two listeners. `AWS_ENDPOINT`, the dashboard URL and the
+  registration URL are now the same string.
+- **Guided onboarding.** First dashboard visit with no services registered opens a 3-step flow —
+  ports, branding (applied live), then a project scan where you tick the services to register —
+  reopenable anytime from Settings. This is the plugin's replacement for humans.
+- **Service discovery**: `GET /api/services/scan` + `lss scan` walk the project root (depth ≤ 6,
+  dependency/build/VCS trees skipped, a service root is a leaf) and report every Serverless/osls
+  service with `packaged`/`registered` flags and best-effort name/region/port hints — hints only,
+  the packaged state stays the authority at register time. `lss register [path...]` (defaults to
+  `.`) is the CLI replacement for automation; `LssClient.services.scan()` and the MCP tools
+  `lss_scan_services`/`lss_register_service` expose the same pair to code and to agents.
+- **MCP server** (`lss mcp`, `src/mcp/`): the running stack as **25 tools** for any Model Context
+  Protocol client (Claude Code included) — inspect resources/queues/tables/buckets/secrets, scan
+  and register services, invoke Lambdas, send messages, block on `await-idle`. Hand-rolled JSON-RPC
+  2.0 over stdio, zero new dependencies, off until a client is configured ([docs/MCP.md](docs/MCP.md)).
+- **Lambdas are lazy by default**: `lambdaRuntime.lazy` forks a worker on first invocation instead
+  of at registration, `idleTimeoutMs` (60 s) unloads it when quiet, `maxWarmWorkers` (one per GB of
+  RAM, clamped 2–12) caps residency. Measured on 40 services / 400 lambdas / 400 tables:
+  **2.0 GB → 128 MB** at rest, ~20 ms cold start. The host never chokes on a monorepo again; slow
+  is acceptable, swapping is not.
+- **`LSS_ENGINE_DATA_DIR`**: the engine data directory as an env var, so each LSS instance gets its
+  own store with no config file. A second instance needs only
+  `LSS_DASHBOARD_PORT` + `LSS_ENGINE_PORT` + `LSS_ENGINE_DATA_DIR`.
 
 ### Changed
 - **The integration suite runs everywhere.** It boots an isolated orchestrator on the self engine

@@ -15,13 +15,7 @@ provider:
     ORDERS_QUEUE_URL: http://localhost:14566/000000000000/orders-to-process
     AWS_ENDPOINT: http://localhost:14566
 
-plugins:
-  - serverless-lss
-
 custom:
-  orchestrator:
-    enabled: true
-    orchestratorUrl: http://localhost:14566
   lss:
     apiPort: 3631
     invokePort: 13631

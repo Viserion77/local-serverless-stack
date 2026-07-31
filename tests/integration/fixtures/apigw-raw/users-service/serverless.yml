@@ -24,13 +24,7 @@ provider:
         enableSimpleResponses: true
         payloadVersion: '2.0'
 
-plugins:
-  - serverless-lss
-
 custom:
-  orchestrator:
-    enabled: true
-    orchestratorUrl: http://localhost:3397
   lss:
     apiPort: 3610
     invokePort: 13610

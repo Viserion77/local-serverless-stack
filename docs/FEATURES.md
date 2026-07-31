@@ -63,12 +63,14 @@ the engine. `autoPackage` can run the packaging command on demand when the templ
 | Lambda proxies | Generated proxy functions forward events to the service's Lambda Invoke API endpoint (the LSS invoke listener, contract-compatible with serverless-offline's `lambdaPort`). | unit (`resource-provisioner`) |
 | `GET /api/resources` / `…/owners` | List provisioned resources (tables/queues/topics/buckets/collections) and map them to owning services. | unit (`routes/resources`) + integration |
 
-## 4. Service registration (the `serverless-lss` plugin)
+## 4. Service registration & discovery (plugin-free)
 
 | Feature | Promise | Asserted by |
 |---|---|---|
-| Auto-registration | On `sls package`/`offline`, the plugin POSTs the service to `POST /api/services/register`. | unit (`plugin`, `routes/services`) + integration |
-| `LSS_DASHBOARD_PORT` | The plugin registers against the orchestrator on that port (precedence: `ORCHESTRATOR_URL` > `LSS_DASHBOARD_PORT` > `custom.orchestrator` > 3100). | unit (`plugin`) |
+| Registration API | `POST /api/services/register` with a bare `{ servicePath }` is complete: the orchestrator packages when the template is missing (`autoPackage`) and reads name/region/`custom.lss` ports from the packaged `serverless-state.json`. Explicit `apiPort`/`invokePort`/`region` in the payload win over the state hints; `serviceRuntime` (config) wins over both. | unit (`routes/services`, `serverless-state-parser`) + integration |
+| Service discovery | `GET /api/services/scan` / `lss scan` walk the project root (depth ≤ 6, dependency/build/VCS trees skipped, a service root is a leaf) and report every Serverless/osls service with `packaged`/`registered` flags plus best-effort name/region/port hints — hints only; the packaged state stays the authority. | unit (`service-scanner`, `routes/services`, `cli`) |
+| CLI registration | `lss register [path...]` (defaults to `.`) POSTs each path and exits non-zero if any fails; `lss scan` prints the checklist. | unit (`cli`) + integration (live proof) |
+| Guided onboarding | First dashboard visit with no services opens a 3-step flow — ports, branding, project scan with tick-to-register — reopenable from Settings. | vue-tsc + manual |
 | Service lifecycle API | `GET/DELETE /api/services`, `PATCH /:name/status`, `POST /:name/start|stop`, `GET /:name/logs`. | unit (`routes/services`) |
 
 ## 5. SQS inspection & testing primitives (`/api/queues`)
@@ -198,7 +200,7 @@ serverless-offline process running. See `docs/PRD_API_LAMBDA_EMULATION.md` for t
 ## 12b. MCP server (`npx lss mcp`)
 
 Exposes the running orchestrator to any [Model Context Protocol](https://modelcontextprotocol.io) client
-(Claude Code included) as **23 tools**, so an AI agent drives the stack directly instead of being handed
+(Claude Code included) as **25 tools**, so an AI agent drives the stack directly instead of being handed
 `curl` output: health/config/ports, services, resources and owners, lambdas + per-invocation logs, invoke,
 HTTP routes, DynamoDB tables/scan/query/put, queues + send + **await-idle**, buckets + object listings,
 secrets (names only, never values), OpenSearch search, and seeds.

@@ -82,9 +82,6 @@ jobs:
       - name: Check TypeScript (server)
         run: npx tsc --project src/server/tsconfig.json --noEmit
 
-      - name: Check TypeScript (plugin)
-        run: npx tsc --project packages/serverless-plugin/tsconfig.json --noEmit
-
   build:
     name: Build Check
     runs-on: ubuntu-latest
@@ -111,5 +108,4 @@ jobs:
           test -d dist/ui
           test -d dist/client
           test -f dist/client/index.js
-          test -d packages/serverless-plugin/dist
           test -f bin/cli.js

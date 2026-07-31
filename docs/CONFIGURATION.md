@@ -256,7 +256,8 @@ Both files should contain valid JSON with the following optional properties:
   - Per-service runtime overrides, keyed like `servicePackaging` (directory basename or
     config-relative path; the relative-path key wins).
   - Each value may set `enabled`, `apiPort`, `invokePort`, `execution`, `watch`.
-    Ports set here win over what the plugin sends in the register payload.
+    Ports set here win over the register payload and over the service's
+    `custom.lss` hints.
   - Example:
     ```jsonc
     "serviceRuntime": {
@@ -296,82 +297,44 @@ Both files should contain valid JSON with the following optional properties:
 > Note: configuration is read once when the orchestrator starts. After editing
 > `lss.config.json`, restart the orchestrator for changes to take effect.
 
-## Configuring the Serverless Plugin
+## Registering services (no plugin)
 
-The Serverless Plugin needs to know where to find the LSS server. Configure it in `serverless.yml`:
+Since v2 there is no Serverless Framework plugin: services never announce
+themselves. You bring them in through the orchestrator —
 
-```yaml
-plugins:
-  - serverless-lss
-
-custom:
-  orchestrator:
-    enabled: true
-    orchestratorUrl: http://localhost:3100
+```bash
+npx lss scan                 # list every Serverless/osls service under the project root
+npx lss register ./orders    # register one or many (defaults to the current directory)
 ```
 
-The plugin never reads `lss.config.json` — its default is the hardcoded
-`http://localhost:3100`. If you change `serverPort`, also point the plugin at the
-new port via `custom.orchestrator.orchestratorUrl`, `ORCHESTRATOR_URL`, or
-`LSS_DASHBOARD_PORT`. A copy-paste template lives at
-[serverless.yml.example](serverless.yml.example).
-
-Registration fires on `sls package` (`after:package:finalize`) **and** on
-`sls offline` startup (`before:offline:start`), so offline-based workflows
-register without an extra step.
-
-### Plugin Configuration Options
-
-- **enabled** (boolean, default: true)
-  - Whether to enable the plugin
-  - Example: `true`
-
-- **orchestratorUrl** (string, default: "http://localhost:3100")
-  - URL where the LSS server is running
-  - Should match the serverPort from lss.config.json
-  - Can be overridden via `ORCHESTRATOR_URL` environment variable
-  - Example: `"http://localhost:3100"`
+— or the dashboard's guided onboarding (first visit with no services; reopen it
+from Settings), or `POST /api/services/register` / `LssClient.services.register`
+from code. A bare `{ servicePath }` is a complete registration: with
+`autoPackage` the orchestrator runs the package command when the template is
+missing, then reads the service name, region and ports from the packaged
+`.serverless/serverless-state.json`.
 
 ### Service Ports (API emulation)
 
-The plugin also reports the service's HTTP and invoke ports so LSS can bind its
-gateway (30xx) and Lambda invoke (130xx) listeners. Discovery order:
+Each service declares its HTTP and invoke ports under `custom.lss` in its
+`serverless.yml`, so LSS can bind the gateway (30xx) and Lambda invoke (130xx)
+listeners:
 
 ```yaml
 custom:
-  lss:                    # preferred — explicit LSS ports
+  lss:
     apiPort: 3010
     invokePort: 13010
-  serverless-offline:     # fallback — drop-in for services already using offline
-    httpPort: 3010
-    lambdaPort: 13010
 ```
 
-When only `apiPort` is known, the orchestrator derives the invoke port via
+When only `apiPort` is set, the orchestrator derives the invoke port via
 `lambdaRuntime.invokePortOffset` (default: `apiPort + 10000`). Ports set in
-`serviceRuntime` (lss.config.json) win over both.
-
-### Environment Variables for Plugin
-
-- `ORCHESTRATOR_URL` - Override orchestratorUrl (wins over everything)
-- `LSS_DASHBOARD_PORT` - Build the orchestrator URL as `http://localhost:<port>` (loses to `ORCHESTRATOR_URL`)
-- `ORCHESTRATOR_ENABLED` - Override enabled setting (true/false)
+`serviceRuntime` (lss.config.json) win over `custom.lss`; without either the
+service gets no HTTP listener but stays invocable through `POST
+/api/lambdas/:name/invoke`. A copy-paste template lives at
+[serverless.yml.example](serverless.yml.example).
 
 ## Examples
-
-Custom ports — remember to point the plugin at the new server port too:
-
-```jsonc
-// lss.config.json
-{ "serverPort": 14766 }
-```
-
-```yaml
-# serverless.yml (each service)
-custom:
-  orchestrator:
-    orchestratorUrl: http://localhost:3200
-```
 
 `.lssrc` accepts exactly the same JSON as `lss.config.json`. A full annotated
 template ships as [lss.config.json.example](../lss.config.json.example) in the
@@ -517,23 +480,15 @@ If a port is already in use, change it in the configuration file:
 }
 ```
 
-Then update `serverless.yml`:
-```yaml
-custom:
-  orchestrator:
-    orchestratorUrl: http://localhost:3200
-```
+The CLI honours the same override as an env var (`LSS_DASHBOARD_PORT`/`PORT`),
+so `lss status`/`stop` keep finding the instance.
 
-### Plugin can't find the server
+### Registration can't find the server
 
 1. Verify the server is running: `npx lss status`
-2. Check the `orchestratorUrl` in `serverless.yml` matches the `serverPort` in `lss.config.json`
+2. If you changed `serverPort`, run the CLI with the same config (`--config`)
+   or export `LSS_DASHBOARD_PORT` so `lss register` targets the right port
 3. Check the logs: `npx lss logs`
-4. Try using the `ORCHESTRATOR_URL` environment variable:
-   ```bash
-   export ORCHESTRATOR_URL=http://localhost:3200
-   npx serverless package
-   ```
 
 ### Can't find configuration file
 

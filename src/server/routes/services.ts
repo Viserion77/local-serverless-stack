@@ -4,8 +4,9 @@ import { CloudFormationParser } from '../services/cloudformation-parser.js';
 import { CacheManager } from '../services/cache-manager.js';
 import { ResourceProvisioner } from '../services/resource-provisioner.js';
 import { ProcessManager } from '../services/process-manager.js';
-import { ConfigManager } from '../services/config-manager.js';
 import { ServiceRegistrar, RegistrationError } from '../services/service-registrar.js';
+import { ConfigManager } from '../services/config-manager.js';
+import { scanForServices } from '../services/service-scanner.js';
 import { LambdaRuntimeManager } from '../services/lambda-runtime-manager.js';
 import { GatewayManager } from '../services/gateway-manager.js';
 import { SourceWatcher } from '../services/source-watcher.js';
@@ -15,7 +16,6 @@ const parser = new CloudFormationParser();
 const cache = new CacheManager();
 const provisioner = ResourceProvisioner.getInstance();
 const processManager = new ProcessManager();
-const configManager = ConfigManager.getInstance();
 
 // Initialize cache on first request (lazy init)
 let cacheInitialized = false;
@@ -37,20 +37,10 @@ router.post('/register', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'servicePath is required' });
     }
 
-    // Region priority: Serverless Framework > lss.config.json > default
-    const effectiveRegion = region || configManager.getConfig().region || 'us-east-1';
-
+    // Ports and region resolve inside the registrar (request > packaged
+    // serverless-state hints > lss.config.json > defaults) — a bare
+    // { servicePath } is a complete registration.
     console.log(`📝 Registering service from ${servicePath}`);
-    console.log(`   Invoke port: ${invokePort || 'not specified'}`);
-    console.log(`   API port: ${apiPort || 'not specified'}`);
-    console.log(`   Region: ${effectiveRegion}`);
-    if (region) {
-      console.log(`   Region source: Serverless Framework configuration`);
-    } else if (configManager.getConfig().region) {
-      console.log(`   Region source: lss.config.json`);
-    } else {
-      console.log(`   Region source: default`);
-    }
 
     // Validate servicePath to prevent path traversal
     const resolvedPath = path.resolve(servicePath);
@@ -132,6 +122,21 @@ router.get('/', async (_req: Request, res: Response) => {
   } catch (error) {
     console.error('Error listing services:', error);
     return res.status(500).json({ error: 'Failed to list services' });
+  }
+});
+
+// Discover Serverless/osls services under the project root, so onboarding and
+// `lss scan` can offer them for registration. Registered BEFORE /:name — the
+// path would otherwise match as a service called "scan".
+router.get('/scan', async (_req: Request, res: Response) => {
+  try {
+    await ensureCacheInit();
+    const registeredRoots = (await cache.listServices()).map(s => s.root);
+    const projectRoot = ConfigManager.getInstance().getProjectRoot();
+    return res.json({ projectRoot, services: scanForServices(projectRoot, registeredRoots) });
+  } catch (error) {
+    console.error('Error scanning for services:', error);
+    return res.status(500).json({ error: 'Failed to scan for services' });
   }
 });
 

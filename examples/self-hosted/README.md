@@ -89,7 +89,7 @@ npm run setup
 # 1. Start LSS with the self engine (boots in milliseconds)
 npm run lss:start
 
-# 2. Register the four services (plain `sls package` — never `deploy`)
+# 2. Register the four services (`lss register` — packages on demand, no plugin)
 npm run register:all
 
 # 3. Drive the pipeline

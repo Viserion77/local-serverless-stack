@@ -3,7 +3,7 @@
 //   1. FunctionRegistry → LambdaRuntimeManager.invoke() in-process (the LSS
 //      native runtime — no HTTP hop);
 //   2. engine-absorbed function metadata with an INVOKE_URL env → HTTP POST in
-//      the AWS Invoke shape (serverless-offline holdouts keep working);
+//      the AWS Invoke shape (any HTTP invoke endpoint works);
 //   3. a failed EngineInvokeResult (never a throw) + one warn per function.
 // Also owns the bus consumers: S3 notification fan-out and EventBridge
 // rule-matched target delivery, plus the SQS/stream delivery loop sets.
@@ -327,7 +327,7 @@ function buildS3NotificationPayload(config: S3LambdaNotificationConfig, event: S
 }
 
 // ---------------------------------------------------------------------------
-// INVOKE_URL HTTP fallback (absorbed LocalStack proxies / serverless-offline)
+// INVOKE_URL HTTP fallback (functions registered with an HTTP invoke endpoint)
 // ---------------------------------------------------------------------------
 
 function httpInvoke(invokeUrl: string, functionName: string, event: unknown): Promise<EngineInvokeResult> {

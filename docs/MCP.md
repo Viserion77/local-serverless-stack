@@ -78,6 +78,8 @@ that text before asking a human to approve the call.
 | `lss_config` | Effective configuration (no secret values), including the lambda residency policy |
 | `lss_ports` | Every local port: the stack's own (dashboard + API + AWS wire) plus each service's API and invoke listeners |
 | `lss_services` | Registered services: resources, routes, runtime status, `runtimeWarm` |
+| `lss_scan_services` | Serverless/osls services found under the project root, with packaged/registered flags |
+| `lss_register_service` | **MUTATES.** Register a service by path — the orchestrator packages and resolves the rest |
 | `lss_resources` / `lss_resource_owners` | Provisioned resources, and which service declared each |
 | `lss_lambdas` / `lss_lambda_logs` | Functions with triggers and counters; per-invocation logs |
 | `lss_invoke` | **MUTATES.** Run a handler with a JSON event, sync or `Event` |

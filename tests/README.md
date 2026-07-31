@@ -14,7 +14,7 @@ tests/
 ├── unit/                     # Unit suites (mirror src/), run in CI, 100% gate
 │   ├── services/             # one *.test.ts per src/server/services module
 │   ├── routes/               # one *.test.ts per src/server/routes module
-│   ├── dev/ · plugin/ · cli/ # dynamo-proxy, serverless-lss plugin, bin/cli.js
+│   ├── dev/ · cli/       # dynamo-proxy, bin/cli.js
 │   ├── cli-seed.test.ts      # CLI seed/seed:clear (spawns the built CLI)
 │   ├── seed-manager-guard.test.ts · serverless-packager.test.ts · smoke.test.ts
 ├── integration/
@@ -38,7 +38,7 @@ npm run test:watch
 
 Coverage scope (`jest.config.js` → `collectCoverageFrom`): `src/server/services/**` (except the
 Docker-driven `localstack-manager.ts`), `src/server/routes/**`, `src/server/dev/**`,
-`packages/serverless-plugin/src/**`, and `bin/cli.js`. `src/server/index.ts` is excluded because it
+and `bin/cli.js`. `src/server/index.ts` is excluded because it
 bootstraps the server at import. Genuinely-unreachable defensive lines are marked with a justified
 `/* istanbul ignore next */`.
 
@@ -47,7 +47,6 @@ bootstraps the server at import. Genuinely-unreachable defensive lines are marke
   `mockClient(SQSClient)` patches the client prototype, so it intercepts the clients the singletons cache.
   Reset singleton state and use `jest.useFakeTimers()` for sleep/poll loops. See `services/queue-inspector.test.ts`.
 - Express routes → `supertest` + `jest.spyOn(Singleton.getInstance(), method)`. See `routes/config.test.ts`.
-- The plugin → mock global `fetch`. See `plugin/index.test.ts`.
 
 ## Integration tests
 

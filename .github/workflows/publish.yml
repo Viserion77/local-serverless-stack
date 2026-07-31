@@ -6,7 +6,6 @@ on:
       - main
     paths:
       - 'package.json'
-      - 'packages/*/package.json'
 
 jobs:
   check-version:
@@ -14,9 +13,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       root-changed: ${{ steps.check-root.outputs.changed }}
-      plugin-changed: ${{ steps.check-plugin.outputs.changed }}
       root-version: ${{ steps.get-root-version.outputs.version }}
-      plugin-version: ${{ steps.get-plugin-version.outputs.version }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -36,53 +33,12 @@ jobs:
             echo "⏭️  Root package version unchanged: $CURRENT"
           fi
 
-      - name: Check plugin package version change
-        id: check-plugin
-        run: |
-          CURRENT=$(git show HEAD:packages/serverless-plugin/package.json | jq -r '.version')
-          PREVIOUS=$(git show HEAD~1:packages/serverless-plugin/package.json | jq -r '.version' || echo "0.0.0")
-          if [ "$CURRENT" != "$PREVIOUS" ]; then
-            echo "changed=true" >> $GITHUB_OUTPUT
-            echo "✅ Plugin package version changed: $PREVIOUS -> $CURRENT"
-          else
-            echo "changed=false" >> $GITHUB_OUTPUT
-            echo "⏭️  Plugin package version unchanged: $CURRENT"
-          fi
-
       - name: Get root package version
         id: get-root-version
         run: |
           VERSION=$(jq -r '.version' package.json)
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Root version: $VERSION"
-
-      - name: Get plugin package version
-        id: get-plugin-version
-        run: |
-          VERSION=$(jq -r '.version' packages/serverless-plugin/package.json)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Plugin version: $VERSION"
-
-  # Skip integration tests - require Docker/LocalStack (not available in GitHub Actions)
-  # Tests are run locally with: npm run test:coverage
-  # test:
-  #   name: Run Tests
-  #   needs: check-version
-  #   if: needs.check-version.outputs.root-changed == 'true' || needs.check-version.outputs.plugin-changed == 'true'
-  #   runs-on: ubuntu-latest
-  #   steps:
-  #     - name: Checkout code
-  #       uses: actions/checkout@v4
-  #     - name: Setup Node.js
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: '18'
-  #     - name: Install dependencies
-  #       run: npm ci
-  #     - name: Build project
-  #       run: npm run build
-  #     - name: Run tests
-  #       run: npm test
 
   publish-root:
     name: Publish Root Package
@@ -107,31 +63,5 @@ jobs:
 
       - name: Publish to NPM
         run: npm publish --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-
-  publish-plugin:
-    name: Publish Plugin Package
-    needs: check-version
-    if: needs.check-version.outputs.plugin-changed == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          registry-url: 'https://registry.npmjs.org'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Build plugin
-        run: npm run build -w packages/serverless-plugin
-
-      - name: Publish plugin to NPM
-        run: npm publish -w packages/serverless-plugin --access public
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

@@ -80,6 +80,41 @@ export const TOOLS: ToolDefinition[] = [
     run: (_a, http) => http('GET', '/api/services'),
   },
   {
+    name: 'lss_scan_services',
+    description:
+      'Discover Serverless Framework / osls services under the project root that could be registered: '
+      + 'name, path, packaged/registered flags and port hints. Use before lss_register_service.',
+    inputSchema: { type: 'object', properties: {} },
+    run: (_a, http) => http('GET', '/api/services/scan'),
+  },
+  {
+    name: 'lss_register_service',
+    description:
+      'MUTATES. Register a service with the orchestrator by its directory path. Packaging runs on demand '
+      + '(autoPackage) and name/region/ports resolve from the packaged serverless-state.json — a bare path is enough. '
+      + 'This provisions the service\'s AWS resources on the engine.',
+    mutates: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        servicePath: str('Absolute path of the service directory (from lss_scan_services `root`).'),
+        apiPort: num('Override the HTTP API port. Optional.'),
+        invokePort: num('Override the Lambda invoke port. Optional.'),
+        region: str('Override the AWS region. Optional.'),
+      },
+      required: ['servicePath'],
+    },
+    run: (a, http) => {
+      if (typeof a.servicePath !== 'string' || !a.servicePath) throw new Error('"servicePath" is required');
+      return http('POST', '/api/services/register', {
+        servicePath: a.servicePath,
+        apiPort: a.apiPort,
+        invokePort: a.invokePort,
+        region: a.region,
+      });
+    },
+  },
+  {
     name: 'lss_resources',
     description: 'Provisioned AWS resources (DynamoDB tables, SQS queues, SNS topics, S3 buckets, OpenSearch collections).',
     inputSchema: { type: 'object', properties: { ...REGION_PROP } },

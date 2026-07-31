@@ -1397,6 +1397,122 @@ describe('bin/cli.js helpers', () => {
     });
   });
 
+  // `lss register` / `lss scan` — the plugin-free registration path. The
+  // orchestrator resolves packaging/name/region/ports itself, so the CLI's only
+  // duties are addressing, existence checks and honest exit codes.
+  describe('registerServices', () => {
+    it('POSTs each path and prints the result summary with warnings', async () => {
+      mockFs.existsSync.mockReturnValue(true); // pid file + service dirs
+      installHttp({
+        POST: {
+          status: 200,
+          body: JSON.stringify({
+            serviceName: 'orders', resourcesCount: 12, functionsCount: 2, routesCount: 2,
+            warnings: ['not packaged yet'],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'register', 'svc-a', 'svc-b']);
+      await cli.registerServices(['svc-a', 'svc-b']);
+      expect(mockHttpRequest).toHaveBeenCalledTimes(2);
+      const opts = mockHttpRequest.mock.calls[0][0] as { path: string; method: string };
+      expect(opts.method).toBe('POST');
+      expect(opts.path).toBe('/api/services/register');
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('orders: 12 resource(s), 2 function(s), 2 route(s)'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('not packaged yet'));
+    });
+
+    it('defaults to the current directory and tolerates a response without warnings', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        POST: {
+          status: 200,
+          body: JSON.stringify({ serviceName: 'here', resourcesCount: 1, functionsCount: 1, routesCount: 0 }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'register']);
+      await cli.registerServices([]);
+      expect(mockHttpRequest).toHaveBeenCalledTimes(1);
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('here: 1 resource(s)'));
+    });
+
+    it('exits 1 when a directory does not exist, without calling the API', async () => {
+      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('.pid'));
+      const cli = loadCli(['node', 'cli.js', 'register', 'ghost-dir']);
+      expect(await expectExit(() => cli.registerServices(['ghost-dir']))).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('directory not found'));
+      expect(mockHttpRequest).not.toHaveBeenCalled();
+    });
+
+    it('exits 1 when the orchestrator rejects a registration', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({ POST: { status: 500, body: JSON.stringify({ error: 'boom' }) } });
+      const cli = loadCli(['node', 'cli.js', 'register']);
+      expect(await expectExit(() => cli.registerServices(['.']))).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('boom'));
+    });
+
+    it('requires a running orchestrator', async () => {
+      mockFs.existsSync.mockReturnValue(false); // no pid file
+      const cli = loadCli(['node', 'cli.js', 'register']);
+      expect(await expectExit(() => cli.registerServices([]))).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('not running'));
+    });
+  });
+
+  describe('scanServices', () => {
+    it('prints each found service with flags, hints and warnings', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        GET: {
+          status: 200,
+          body: JSON.stringify({
+            projectRoot: '/abs',
+            services: [
+              { name: 'orders', relPath: 'services/orders', registered: true, packaged: true, apiPort: 3631, invokePort: 13631, warnings: [] },
+              { name: 'fresh', relPath: 'services/fresh', registered: false, packaged: false, warnings: ['not packaged yet'] },
+              // api hint without invoke hint, and no warnings key at all
+              { name: 'bare', relPath: 'services/bare', registered: false, packaged: true, apiPort: 3640 },
+            ],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      await cli.scanServices();
+      const out = logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
+      expect(out).toContain('3 serviço(s) sob /abs');
+      expect(out).toContain('✓ orders  (services/orders) — registrado, empacotado api:3631 invoke:13631');
+      expect(out).toContain('· fresh  (services/fresh) — não registrado, não empacotado');
+      expect(out).toContain('· bare  (services/bare) — não registrado, empacotado api:3640');
+      expect(out).toContain('⚠ not packaged yet');
+      expect(out).toContain('npx lss register');
+    });
+
+    it('says so when nothing is found', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      // no `services` key at all — the CLI treats it as an empty list
+      installHttp({ GET: { status: 200, body: JSON.stringify({ projectRoot: '/abs' }) } });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      await cli.scanServices();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Nenhum serviço'));
+    });
+
+    it('exits 1 when the scan endpoint fails', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({ GET: { status: 500, body: JSON.stringify({ error: 'disk' }) } });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      expect(await expectExit(() => cli.scanServices())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith('❌ Scan falhou:', expect.stringContaining('disk'));
+    });
+  });
+
+  describe('allPositionals', () => {
+    it('collects non-flag args, skipping flag values', () => {
+      const cli = loadCli(['node', 'cli.js', 'register', 'a', '--config', 'x.json', 'b', '-y']);
+      expect(cli.allPositionals()).toEqual(['a', 'b']);
+    });
+  });
+
   // `lss mcp` launcher. The dynamic import of the ESM build is the process entry
   // point (it binds this process's stdio), so only the resolution and the
   // missing-build guard are unit-testable — the rest is covered by starting the

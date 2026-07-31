@@ -2,9 +2,8 @@
   "name": "sample-microservice",
   "version": "0.0.0",
   "private": true,
-  "description": "End-to-end test microservice for Local Serverless Stack — exercises DynamoDB (PK/SK, GSI, streams), SQS, SNS, S3, and Lambda event sources.",
+  "description": "End-to-end test microservice for Local Serverless Stack \u2014 exercises DynamoDB (PK/SK, GSI, streams), SQS, SNS, S3, and Lambda event sources.",
   "scripts": {
-    "offline": "dotenv -- serverless package && dotenv -- serverless offline start",
     "package": "dotenv -- serverless package",
     "deploy": "dotenv -- serverless deploy",
     "lss:start": "dotenv -- node ../../../../bin/cli.js start",
@@ -23,9 +22,7 @@
   },
   "devDependencies": {
     "dotenv-cli": "^7.4.4",
-    "serverless-lss": "file:../../../../packages/serverless-plugin",
-    "osls": "4.0.0",
-    "serverless-offline": "^13.6.0"
+    "osls": "4.0.0"
   },
   "overrides": {
     "serverless": "npm:osls@4.0.0"

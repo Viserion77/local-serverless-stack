@@ -143,12 +143,12 @@ export class GatewayManager {
       let hadConflict = false;
       server.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
-          // Port conflicts are first-class during migration (serverless-offline
-          // may still own the port) — flag it, never fail the registration.
+          // Port conflicts are first-class: another process (or another LSS instance)
+          // may own the port — flag it, never fail the registration.
           setStatus('port-conflict');
           if (!hadConflict) {
             hadConflict = true;
-            console.warn(`⚠️  ${label}: port ${port} already in use — retrying every ${this.rebindIntervalMs}ms (is serverless-offline still running?)`);
+            console.warn(`⚠️  ${label}: port ${port} already in use — retrying every ${this.rebindIntervalMs}ms (another process owns it)`);
           }
           this.scheduleRebind(server, port, rebindTimers);
         } else {

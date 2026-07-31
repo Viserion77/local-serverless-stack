@@ -22,8 +22,8 @@ describe('Quick Smoke Tests', () => {
       expect(fs.existsSync(path.join(ROOT, 'dist/server'))).toBe(true);
     });
 
-    it('should have built plugin', () => {
-      expect(fs.existsSync(path.join(ROOT, 'packages/serverless-plugin/dist'))).toBe(true);
+    it('should have built MCP server', () => {
+      expect(fs.existsSync(path.join(ROOT, 'dist/mcp/server.js'))).toBe(true);
     });
 
     it('should have built programmatic client', () => {

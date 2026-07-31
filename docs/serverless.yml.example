@@ -1,7 +1,10 @@
 # Minimal serverless.yml template for a service running under LSS.
-# Complete, runnable versions live under examples/ — e.g.
-# examples/localstack-ultimate/serverless.yml (single service) or any
-# examples/localstack-free/*-service/serverless.yml (multi-service).
+# Complete, runnable versions live under examples/self-hosted/*-service/.
+#
+# No plugin needed: register the service with `npx lss register <path>`, the
+# dashboard onboarding, or POST /api/services/register — the orchestrator
+# packages it when needed (autoPackage) and reads everything else from the
+# packaged .serverless/serverless-state.json.
 
 service: example-service
 
@@ -20,20 +23,10 @@ functions:
           path: hello
           method: get
 
-plugins:
-  - serverless-lss      # auto-registers this service with the LSS orchestrator
-  - serverless-offline  # optional: only if you also run functions via offline
-
 custom:
-  # serverless-lss plugin — where the orchestrator is listening.
-  # Must match `serverPort` in lss.config.json (default 3100).
-  orchestrator:
-    enabled: true
-    orchestratorUrl: http://localhost:3100
-
-  # Ports LSS uses for this service. `custom.lss` wins; if you already have a
-  # serverless-offline block, its httpPort/lambdaPort are picked up as a
-  # drop-in fallback (httpPort → apiPort, lambdaPort → invokePort).
+  # Ports LSS binds for this service. Optional: without them the service gets
+  # no HTTP listener but stays invocable via POST /api/lambdas/:name/invoke.
+  # invokePort defaults to apiPort + lambdaRuntime.invokePortOffset (10000).
   lss:
     apiPort: 3000     # HTTP API (API Gateway emulation)
     invokePort: 3001  # direct Lambda invocations

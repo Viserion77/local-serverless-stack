@@ -4,7 +4,7 @@ This document describes the release and publishing process for Local Serverless 
 
 ## Overview
 
-LSS uses GitHub Actions to automatically publish packages to NPM when a version number changes in a `package.json` on `main`. Current versions live in `package.json` (root and `packages/serverless-plugin`) and on npm — this document does not track them.
+LSS uses GitHub Actions to automatically publish to NPM when the version number changes in `package.json` on `main`. The current version lives in `package.json` and on npm — this document does not track it. (The `serverless-lss` plugin package was retired in v2 and is no longer published.)
 
 ## Quick Release
 
@@ -23,33 +23,19 @@ git commit -m "chore: release v0.8.1"
 git push origin main
 ```
 
-### Plugin Package (`serverless-lss`)
-
-```bash
-# Navigate and bump (no commit, no tag)
-cd packages/serverless-plugin
-npm version patch --no-git-tag-version
-cd ../..
-
-# Stage, review, commit, push
-git add packages/serverless-plugin/package.json package-lock.json
-git commit -m "chore(plugin): release v0.2.1"
-git push origin main
-```
-
 > Note: plain `npm version patch` would create a commit and a git tag by itself. Always use `--no-git-tag-version` so the bump can be reviewed before committing.
 
 ## What Happens Automatically
 
 When a version change lands on `main`, `.github/workflows/publish.yml` runs:
 
-1. **Version Detection**: the `check-version` job compares each `package.json` version against the previous commit (`HEAD~1`)
-2. **Build**: the changed package is built (`npm run build`, or `npm run build -w packages/serverless-plugin` for the plugin)
-3. **Publish**: the changed package is published to NPM with `--access public`
+1. **Version Detection**: the `check-version` job compares the `package.json` version against the previous commit (`HEAD~1`)
+2. **Build**: the package is built (`npm run build`)
+3. **Publish**: the package is published to NPM with `--access public`
 
 Important:
 
-- The publish workflow runs **no tests**. Testing happens in the separate CI workflow (`.github/workflows/tests.yml`): unit tests with a coverage gate run on every push/PR, and LocalStack integration tests run when the `LOCALSTACK_AUTH_TOKEN` secret is available.
+- The publish workflow runs **no tests**. Testing happens in the separate CI workflow (`.github/workflows/tests.yml`): unit tests with a coverage gate, lint/typecheck, build verification and the self-engine integration suite run on every push/PR.
 - The publish workflow creates **no git tags**. Tagging is manual and optional (e.g. `git tag v0.8.1 && git push origin v0.8.1`).
 
 ## Workflow File
@@ -57,8 +43,8 @@ Important:
 Location: `.github/workflows/publish.yml`
 
 Key features:
-- Detects version changes in both root and plugin packages
-- Publishes only changed packages
+- Detects the version change against the previous commit
+- Publishes only when the version changed
 - Uses `NPM_TOKEN` secret for authentication
 
 ## NPM Token Setup
@@ -121,8 +107,7 @@ Check:
 If automation fails:
 ```bash
 npm run build
-npm publish --access public                                # root package
-npm publish -w packages/serverless-plugin --access public  # plugin
+npm publish --access public
 ```
 
 ## GitHub Actions Logs
@@ -132,12 +117,9 @@ Monitor releases at:
 - "Publish to NPM" workflow for publishing; "CI" workflow for tests
 - Check individual job logs for errors
 
-## Package Scopes
+## Package Scope
 
-- **Root package**: `local-serverless-stack` (unscoped)
-- **Plugin**: `serverless-lss` (unscoped)
-
-Both use `--access public` flag for publishing.
+- `local-serverless-stack` (unscoped), published with `--access public`.
 
 ## Release Cadence
 

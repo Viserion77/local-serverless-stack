@@ -26,8 +26,25 @@ export interface ServiceRuntimeStatus {
   };
 }
 
+// One row of GET /api/services/scan — a discovered (not necessarily
+// registered) Serverless/osls service under the project root.
+export interface ScannedService {
+  name: string;
+  root: string;
+  relPath: string;
+  configFile: string;
+  packaged: boolean;
+  registered: boolean;
+  region?: string;
+  apiPort?: number;
+  invokePort?: number;
+  warnings: string[];
+}
+
 export interface ServicesApi {
   register(input: RegisterServiceInput): Promise<unknown>;
+  /** GET /api/services/scan — discover Serverless/osls services under the project root. */
+  scan(): Promise<{ projectRoot: string; services: ScannedService[] }>;
   list(): Promise<unknown[]>;
   get(name: string): Promise<unknown>;
   remove(name: string): Promise<{ success: true }>;
@@ -47,6 +64,7 @@ export function createServicesApi(http: Http): ServicesApi {
   const base = (name: string) => `/api/services/${encodeURIComponent(name)}`;
   return {
     register: (input) => http.json('POST', '/api/services/register', { body: input }),
+    scan: () => http.json('GET', '/api/services/scan'),
     list: () => http.json('GET', '/api/services'),
     get: (name) => http.json('GET', base(name)),
     remove: (name) => http.json('DELETE', base(name)),

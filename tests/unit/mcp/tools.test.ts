@@ -80,6 +80,29 @@ describe('read-only tools', () => {
   });
 });
 
+describe('service discovery and registration', () => {
+  it('scan maps to the discovery endpoint', async () => {
+    await expectCall('lss_scan_services', {}, ['GET', '/api/services/scan']);
+  });
+
+  it('register posts the path with optional overrides', async () => {
+    await expectCall('lss_register_service', { servicePath: '/abs/orders' }, [
+      'POST', '/api/services/register',
+      { servicePath: '/abs/orders', apiPort: undefined, invokePort: undefined, region: undefined },
+    ]);
+    await expectCall(
+      'lss_register_service',
+      { servicePath: '/abs/orders', apiPort: 3631, invokePort: 13631, region: 'us-west-2' },
+      ['POST', '/api/services/register', { servicePath: '/abs/orders', apiPort: 3631, invokePort: 13631, region: 'us-west-2' }],
+    );
+  });
+
+  it('register rejects a missing or non-string path', async () => {
+    await expect(call('lss_register_service', {}).promise).rejects.toThrow('"servicePath" is required');
+    await expect(call('lss_register_service', { servicePath: 7 }).promise).rejects.toThrow('"servicePath" is required');
+  });
+});
+
 describe('dynamo tools', () => {
   it('scan and query post the input through, defaulting scan input to {}', async () => {
     await expectCall('lss_dynamo_scan', { table: 'Users' }, ['POST', '/api/dynamo/tables/Users/scan', {}]);

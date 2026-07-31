@@ -25,14 +25,8 @@ provider:
   region: sa-east-1
   stage: dev
 
-plugins:
-  - serverless-lss
-
 custom:
   accountId: '000000000000'
-  orchestrator:
-    enabled: true
-    orchestratorUrl: http://localhost:3397
   lss:
     apiPort: 3613
     invokePort: 13613

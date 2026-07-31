@@ -83,12 +83,9 @@ src/
 ├── client/                # Programmatic client (LssClient)
 └── ui/                    # Vue 3 dashboard (@treeui/vue), separate workspace
 
-packages/
-└── serverless-plugin/     # Serverless Framework plugin (serverless-lss)
-
 tests/
 ├── unit/                  # Unit tests
-└── integration/           # LocalStack integration tests
+└── integration/           # Self-engine integration tests (no Docker)
 ```
 
 ## Code Style
@@ -160,7 +157,7 @@ Closes #42
 
 ## Release Process
 
-1. Bump the version with `npm version <patch|minor|major> --no-git-tag-version` (root and/or `packages/serverless-plugin`)
+1. Bump the version with `npm version <patch|minor|major> --no-git-tag-version`
 2. Update CHANGELOG.md
 3. Once the version bump lands on `main`, GitHub Actions detects the change and publishes to npm — no git tags involved
 

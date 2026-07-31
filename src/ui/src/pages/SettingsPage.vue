@@ -270,6 +270,9 @@ onMounted(load);
             <TBadge v-if="dirtyCount" tone="warning" variant="soft">
               {{ dirtyCount }} unsaved change{{ dirtyCount > 1 ? 's' : '' }}
             </TBadge>
+            <TButton size="sm" variant="ghost" @click="$router.push('/onboarding')">
+              Reopen onboarding
+            </TButton>
             <TButton size="sm" variant="outline" :loading="reloading" @click="reloadFromDisk">
               <template #icon><TIcon name="refresh-cw" /></template>
               Reload from disk

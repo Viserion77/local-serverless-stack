@@ -4,18 +4,18 @@ LSS (Local Serverless Stack) is a local control plane for serverless development
 one orchestrator provisions every AWS resource your services declare and emulates
 the Lambda runtime + API Gateway — backed either by the in-process **self engine**
 (no Docker, no container). A CLI (`npx lss`), a
-Vue 3 dashboard, a Serverless Framework plugin (`serverless-lss`) and a
+Vue 3 dashboard with guided onboarding, an MCP server (`lss mcp`) and a
 programmatic client (`LssClient`) sit on top.
 
 Start with the [project README](../README.md) for the quick start, then:
 
 | Doc | What it covers |
 | --- | --- |
-| [CONFIGURATION.md](CONFIGURATION.md) | Every `lss.config.json` key, env var, plugin setup, branding, troubleshooting |
+| [CONFIGURATION.md](CONFIGURATION.md) | Every `lss.config.json` key, env var, service registration, branding, troubleshooting |
 | [FEATURES.md](FEATURES.md) | Feature inventory: each promise and the test that asserts it |
 | [SELF_ENGINE.md](SELF_ENGINE.md) | Self engine user guide: coverage matrix, storage model, fallback |
 | [RELEASE.md](RELEASE.md) | How releases and npm publishing work (maintainers) |
-| [serverless.yml.example](serverless.yml.example) | Minimal service template for the `serverless-lss` plugin |
+| [serverless.yml.example](serverless.yml.example) | Minimal service template for a service running under LSS |
 
 Design documents (PRDs — rationale and decisions, not reference):
 

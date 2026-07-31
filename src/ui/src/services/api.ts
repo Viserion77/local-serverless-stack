@@ -188,6 +188,35 @@ export interface SeedClearResult {
   reason?: string;
 }
 
+// One row of GET /api/services/scan — a discovered (not necessarily
+// registered) Serverless/osls service under the project root.
+export interface ScannedService {
+  name: string;
+  root: string;
+  relPath: string;
+  configFile: string;
+  packaged: boolean;
+  registered: boolean;
+  region?: string;
+  apiPort?: number;
+  invokePort?: number;
+  warnings: string[];
+}
+
+export interface ScanResponse {
+  projectRoot: string;
+  services: ScannedService[];
+}
+
+export interface RegisterServiceResult {
+  success: boolean;
+  serviceName: string;
+  resourcesCount: number;
+  functionsCount: number;
+  routesCount: number;
+  warnings: string[];
+}
+
 export interface HealthInfo {
   status: string;
   engineRunning: boolean;
@@ -583,6 +612,7 @@ export interface ServiceApiInfo {
 export const api = {
   // Health & config
   checkHealth: () => request<HealthInfo>('/api/health'),
+  scanServices: () => request<ScanResponse>('/api/services/scan'),
   getConfig: () => request<LssConfigSnapshot>('/api/config'),
   updateConfig: (patch: LssConfigUpdate) =>
     request<ConfigUpdateResponse>('/api/config', {
@@ -598,7 +628,7 @@ export const api = {
   listServices: () => request<ServiceSummary[]>('/api/services'),
   getService: (name: string) => request<ServiceDetail>(`/api/services/${encodeURIComponent(name)}`),
   registerService: (servicePath: string) =>
-    request<any>('/api/services/register', {
+    request<RegisterServiceResult>('/api/services/register', {
       method: 'POST',
       body: JSON.stringify({ servicePath }),
     }),

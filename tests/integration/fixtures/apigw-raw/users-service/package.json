@@ -2,10 +2,9 @@
   "name": "users-service-example",
   "version": "0.0.0",
   "private": true,
-  "description": "TypeScript HTTP API (payload v2) with a local simple-response authorizer; createUser publishes UserSignedUp to the shared domain-events bus. LSS runs the .ts handlers straight from source via esbuild-register — no build step. Port 3610 (invoke 13610).",
+  "description": "TypeScript HTTP API (payload v2) with a local simple-response authorizer; createUser publishes UserSignedUp to the shared domain-events bus. LSS runs the .ts handlers straight from source via esbuild-register \u2014 no build step. Port 3610 (invoke 13610).",
   "scripts": {
-    "package": "serverless package",
-    "register": "serverless package"
+    "package": "serverless package"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.0.0",
@@ -19,7 +18,6 @@
     "esbuild": "^0.28.1",
     "esbuild-register": "^3.6.0",
     "osls": "4.0.0",
-    "serverless-lss": "file:../../../packages/serverless-plugin",
     "typescript": "^5.0.0"
   }
 }

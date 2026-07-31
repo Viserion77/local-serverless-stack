@@ -1,15 +1,18 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { useRouter } from 'vue-router';
 import {
   TCard, TStack, TBadge, TGrid, TStat, TTag, TDivider, TButton, TSpinner, TText, TIcon,
   TDescriptionList, TDescriptionItem,
 } from '@treeui/vue';
 import { RouterLink } from 'vue-router';
 import { api } from '../services/api';
+import { isOnboardingDone } from '../services/onboarding';
 import type {
   HealthInfo, LambdaSummary, LssConfigSnapshot, PortEntry, ServiceApiInfo, ServiceSummary,
 } from '../services/api';
 
+const router = useRouter();
 const health = ref<HealthInfo | null>(null);
 const config = ref<LssConfigSnapshot | null>(null);
 const ports = ref<PortEntry[]>([]);
@@ -108,8 +111,14 @@ const coveredResources = [
   },
 ];
 
-onMounted(() => {
-  loadAll();
+onMounted(async () => {
+  await loadAll();
+  // A stack with nothing registered and no dismissed flag is a first run —
+  // hand the user to the guided setup instead of an empty dashboard.
+  if (services.value.length === 0 && !isOnboardingDone()) {
+    void router.push('/onboarding');
+    return;
+  }
   timer = window.setInterval(loadAll, 15000);
 });
 

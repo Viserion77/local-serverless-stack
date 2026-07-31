@@ -629,6 +629,73 @@ async function clearSeed(tableName) {
  * there. This process only talks HTTP to an already-running orchestrator — it
  * never boots one — so `lss start` has to have happened first.
  */
+/**
+ * `lss register [path...]` — register services with the running orchestrator.
+ *
+ * This replaces the retired serverless-lss plugin: registration is a plain
+ * POST of { servicePath }, and the orchestrator resolves everything else
+ * (packaging via autoPackage when needed, then name/region/custom.lss ports
+ * from the packaged serverless-state.json).
+ */
+async function registerServices(paths) {
+  ensureRunningOrExit();
+  const targets = paths.length > 0 ? paths : ['.'];
+  let failed = 0;
+  for (const target of targets) {
+    const servicePath = path.resolve(target);
+    if (!fs.existsSync(servicePath)) {
+      console.error(`✗ ${target}: directory not found`);
+      failed++;
+      continue;
+    }
+    try {
+      const result = await postJson('/api/services/register', { servicePath });
+      console.log(`✓ ${result.serviceName}: ${result.resourcesCount} resource(s), ${result.functionsCount} function(s), ${result.routesCount} route(s)`);
+      for (const warning of result.warnings || []) {
+        console.log(`  ⚠ ${warning}`);
+      }
+    } catch (e) {
+      console.error(`✗ ${target}: ${formatError(e)}`);
+      failed++;
+    }
+  }
+  if (failed > 0) {
+    process.exit(1);
+  }
+}
+
+/**
+ * `lss scan` — list every Serverless/osls service found under the project
+ * root, with the flags onboarding shows (packaged/registered + hints).
+ */
+async function scanServices() {
+  ensureRunningOrExit();
+  try {
+    const result = await getJson('/api/services/scan');
+    const services = result.services || [];
+    if (services.length === 0) {
+      console.log(`Nenhum serviço Serverless/osls encontrado sob ${result.projectRoot}`);
+      return;
+    }
+    console.log(`${services.length} serviço(s) sob ${result.projectRoot}:\n`);
+    for (const svc of services) {
+      const flags = [
+        svc.registered ? 'registrado' : 'não registrado',
+        svc.packaged ? 'empacotado' : 'não empacotado',
+      ].join(', ');
+      const ports = svc.apiPort ? ` api:${svc.apiPort}${svc.invokePort ? ` invoke:${svc.invokePort}` : ''}` : '';
+      console.log(`  ${svc.registered ? '✓' : '·'} ${svc.name}  (${svc.relPath}) — ${flags}${ports}`);
+      for (const warning of svc.warnings || []) {
+        console.log(`      ⚠ ${warning}`);
+      }
+    }
+    console.log('\nRegistre com: npx lss register <path...>  (ou pelo onboarding do dashboard)');
+  } catch (e) {
+    console.error('❌ Scan falhou:', formatError(e));
+    process.exit(1);
+  }
+}
+
 function getMcpServerPath() {
   const candidates = [
     path.join(__dirname, '../dist/mcp/server.js'),
@@ -677,6 +744,11 @@ Commands:
   logs               Show the logs
   seed [table]       Apply seed file(s) from seedsDir into DynamoDB
                      (no args = all matching tables)
+  scan               List every Serverless/osls service found under the
+                     project root (registered/packaged flags + port hints)
+  register [path...] Register services with the running orchestrator (defaults
+                     to the current directory; packaging runs on demand via
+                     autoPackage). Replaces the retired serverless-lss plugin.
   seed:clear [table] Delete all items from the given table (or all
                      tables with a seed file when no arg is given).
                      Pede confirmação interativa (digitar "confirmar")
@@ -757,11 +829,23 @@ function showLogs() {
 // Skip anything that looks like a flag so `seed:clear --yes` doesn't pass
 // "--yes" as the table name.
 function firstPositional() {
+  return allPositionals()[0];
+}
+
+// Every non-flag argument after the command, skipping flag VALUES too
+// (`--config <path>` consumes the next token).
+function allPositionals() {
+  const flagsWithValue = new Set(['--config', '--localstack-token']);
+  const out = [];
   for (let i = 3; i < process.argv.length; i++) {
     const arg = process.argv[i];
-    if (!arg.startsWith('-')) return arg;
+    if (arg.startsWith('-')) {
+      if (flagsWithValue.has(arg)) i++;
+      continue;
+    }
+    out.push(arg);
   }
-  return undefined;
+  return out;
 }
 
 // Exported so the pure/in-process helpers can be unit-tested by requiring this
@@ -771,6 +855,9 @@ function firstPositional() {
 module.exports = {
   loadConfig,
   getConfig,
+  allPositionals,
+  registerServices,
+  scanServices,
   getMcpServerPath,
   getPackageVersion,
   runMcpServer,
@@ -819,6 +906,12 @@ if (require.main === module) {
       break;
     case 'seed:clear':
       clearSeed(firstPositional());
+      break;
+    case 'register':
+      registerServices(allPositionals());
+      break;
+    case 'scan':
+      scanServices();
       break;
     case 'mcp':
       runMcpServer();

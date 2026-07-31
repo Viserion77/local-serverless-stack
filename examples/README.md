@@ -16,7 +16,7 @@ Every example follows the same workflow:
 cd examples/<example>
 npm run setup          # npm install in each service
 npm run lss:start      # start the orchestrator + engine (no Docker)
-npm run register:all   # sls package each service → auto-register + provision
+npm run register:all   # lss register each service (packages on demand) + provision
 npm run lss:stop       # tear everything down
 ```
 
