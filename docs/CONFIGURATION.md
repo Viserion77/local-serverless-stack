@@ -348,6 +348,18 @@ service gets no HTTP listener but stays invocable through `POST
 template ships as [lss.config.json.example](../lss.config.json.example) in the
 repo (and `lss help` prints one).
 
+## Language
+
+The dashboard and the CLI speak English, Brazilian Portuguese and Spanish.
+
+- **Dashboard**: the ⋮ menu in the header switches language; the choice is stored per browser
+  (`lss-locale` in localStorage). With no stored choice the browser's languages decide
+  (`pt` → `pt-BR`, `es-AR` → `es`, anything else → English).
+- **CLI**: `LSS_LANG=pt-BR npx lss scan`, or the shell's own `LC_ALL` / `LC_MESSAGES` / `LANG`
+  (in that order of precedence). Unrecognised values fall back to English.
+
+Commands, flags, config keys and AWS service names are never translated — only prose is.
+
 ## Environment Variables
 
 Environment variables can be used instead of — or to override — a configuration file:
@@ -367,6 +379,7 @@ Environment variables can be used instead of — or to override — a configurat
 - `LSS_LAMBDA_EXECUTION` - `auto`, `artifact`, or `source`
 - `LSS_LAMBDA_WATCH` - Enable/disable runtime source watching (true/false or 1/0)
 - `LSS_INVOKE_HOST` - Override `lambdaRuntime.invokeHost`
+- `LSS_LANG` - CLI language (`en`, `pt-BR`, `es`); wins over `LC_ALL`/`LC_MESSAGES`/`LANG`
 - `LSS_SEEDS_DIR` - Directory with DynamoDB seed files
 - `LSS_ENGINE_PORT` - Self engine port (default: 14566)
 - `LSS_ENGINE_DATA_DIR` - Self engine state directory (overrides `selfEngine.dataDir`)

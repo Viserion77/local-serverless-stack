@@ -10,6 +10,9 @@ import type { DynamoTableDetail, SeedFileEntry } from '../../services/api';
 import DynamoItemsExplorer from './DynamoItemsExplorer.vue';
 import DynamoTableSettings from './DynamoTableSettings.vue';
 import DynamoSeedPanel from './DynamoSeedPanel.vue';
+import { useI18n } from '../../i18n';
+
+const { t } = useI18n();
 
 const props = defineProps<{ tableName: string }>();
 const emit = defineEmits<{ (e: 'back'): void }>();
@@ -46,11 +49,18 @@ async function load() {
     seedEntry.value = seedsRes.entries.find(e => e.tableName === props.tableName) || null;
     error.value = null;
   } catch (err: any) {
-    error.value = err.message || 'Failed to load table';
+    error.value = err.message || t('dynamo.loadTableFailed');
     table.value = null;
   } finally {
     loading.value = false;
   }
+}
+
+// Singular/plural picked at render time so the badge follows a language switch.
+function seedBadgeLabel(count: number): string {
+  return count === 1
+    ? t('dynamo.seedBadgeOne', { count })
+    : t('dynamo.seedBadgeOther', { count });
 }
 
 onMounted(load);
@@ -61,7 +71,7 @@ watch(() => props.tableName, load);
   <TStack direction="vertical" gap="1rem">
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
-        <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> Tables</TButton>
+        <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> {{ t('dynamo.backTables') }}</TButton>
         <TText size="lg" weight="semibold">{{ tableName }}</TText>
         <TBadge
           v-if="table?.status"
@@ -75,10 +85,10 @@ watch(() => props.tableName, load);
           tone="info"
           variant="soft"
         >
-          Seed: {{ seedEntry.itemCount }} item{{ seedEntry.itemCount === 1 ? '' : 's' }}
+          {{ seedBadgeLabel(seedEntry.itemCount) }}
         </TBadge>
       </TStack>
-      <TButton size="sm" variant="ghost" :loading="loading" @click="load">Refresh</TButton>
+      <TButton size="sm" variant="ghost" :loading="loading" @click="load">{{ t('common.refresh') }}</TButton>
     </TStack>
 
     <TStack
@@ -95,15 +105,15 @@ watch(() => props.tableName, load);
     </TAlert>
 
     <TStack v-if="loading && !table" direction="horizontal" justify="center" align="center">
-      <TSpinner label="Loading table..." />
+      <TSpinner :label="t('dynamo.loadingTable')" />
     </TStack>
 
     <TTabs v-else-if="table" v-model="activeTab">
       <TTabList>
-        <TTab value="items">Items</TTab>
-        <TTab value="indexes">Indexes</TTab>
-        <TTab value="settings">Settings</TTab>
-        <TTab v-if="seedEntry" value="seed">Seed</TTab>
+        <TTab value="items">{{ t('dynamo.items') }}</TTab>
+        <TTab value="indexes">{{ t('dynamo.indexes') }}</TTab>
+        <TTab value="settings">{{ t('dynamo.settings') }}</TTab>
+        <TTab v-if="seedEntry" value="seed">{{ t('dynamo.seed') }}</TTab>
       </TTabList>
 
       <TTabPanel value="items">
@@ -116,8 +126,8 @@ watch(() => props.tableName, load);
         <div style="padding-top: 1rem;">
           <TEmptyState
             v-if="!table.gsis.length && !table.lsis.length"
-            title="No secondary indexes"
-            description="This table has only the primary key."
+            :title="t('dynamo.noIndexesTitle')"
+            :description="t('dynamo.noIndexesDesc')"
           />
           <TStack v-else direction="vertical" gap="1rem">
             <TGrid v-if="table.gsis.length" :columns="2" gap="0.75rem">
@@ -140,9 +150,9 @@ watch(() => props.tableName, load);
                     </TTag>
                   </TStack>
                   <TText tone="muted" size="xs">
-                    Projection: {{ idx.Projection?.ProjectionType || '—' }}
-                    · Items: {{ idx.ItemCount ?? '—' }}
-                    · Status: {{ idx.IndexStatus || '—' }}
+                    {{ t('dynamo.projection') }}: {{ idx.Projection?.ProjectionType || '—' }}
+                    · {{ t('dynamo.items') }}: {{ idx.ItemCount ?? '—' }}
+                    · {{ t('common.status') }}: {{ idx.IndexStatus || '—' }}
                   </TText>
                 </TStack>
               </TCard>
@@ -168,7 +178,7 @@ watch(() => props.tableName, load);
                     </TTag>
                   </TStack>
                   <TText tone="muted" size="xs">
-                    Projection: {{ idx.Projection?.ProjectionType || '—' }}
+                    {{ t('dynamo.projection') }}: {{ idx.Projection?.ProjectionType || '—' }}
                   </TText>
                 </TStack>
               </TCard>

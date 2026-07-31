@@ -7,8 +7,11 @@ import {
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { OpenSearchCollectionSummary, ResourceOwnersResponse } from '../../services/api';
+import { useI18n } from '../../i18n';
 
 const emit = defineEmits<{ (e: 'open', name: string): void }>();
+
+const { t } = useI18n();
 
 const collections = ref<OpenSearchCollectionSummary[]>([]);
 const ownersByCollection = ref<Record<string, string>>({});
@@ -17,12 +20,14 @@ const error = ref<string | null>(null);
 const search = ref('');
 let timer: number | null = null;
 
-const columns = [
-  { key: 'name', label: 'Collection' },
-  { key: 'service', label: 'Service' },
-  { key: 'endpoint', label: 'Data-plane endpoint' },
+// Computed rather than a module const: the header labels have to re-render
+// when the user switches language.
+const columns = computed(() => [
+  { key: 'name', label: t('opensearch.collection') },
+  { key: 'service', label: t('common.service') },
+  { key: 'endpoint', label: t('opensearch.endpoint') },
   { key: 'actions', label: '', align: 'right' as const },
-];
+]);
 
 const rows = computed(() =>
   collections.value
@@ -61,7 +66,7 @@ async function load() {
     ownersByCollection.value = map;
     error.value = null;
   } catch (err: any) {
-    error.value = err.message || 'Failed to load OpenSearch collections';
+    error.value = err.message || t('opensearch.loadCollectionsError');
   } finally {
     loading.value = false;
   }
@@ -80,8 +85,8 @@ onBeforeUnmount(() => {
 <template>
   <TStack direction="vertical" gap="1.25rem">
     <TGrid :columns="2" gap="1rem">
-      <TStat label="Collections" :value="totals.collections" tone="info" :loading="loading" />
-      <TStat label="Owning services" :value="totals.services" tone="success" :loading="loading" />
+      <TStat :label="t('opensearch.collections')" :value="totals.collections" tone="info" :loading="loading" />
+      <TStat :label="t('opensearch.owningServices')" :value="totals.services" tone="success" :loading="loading" />
     </TGrid>
 
     <TAlert v-if="error" variant="danger" dismissible @dismiss="error = null">
@@ -91,35 +96,35 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
-          <TText weight="semibold">OpenSearch collections</TText>
+          <TText weight="semibold">{{ t('opensearch.listTitle') }}</TText>
           <TStack direction="horizontal" align="center" gap="1rem">
             <TInput
               v-model="search"
-              placeholder="Filter collections..."
+              :placeholder="t('opensearch.filterPlaceholder')"
               style="min-width: 16rem;"
             />
-            <TText tone="muted" size="xs">Refreshes every 15s</TText>
+            <TText tone="muted" size="xs">{{ t('opensearch.refreshHint') }}</TText>
           </TStack>
         </TStack>
       </template>
 
       <TStack v-if="loading" direction="horizontal" justify="center" align="center">
-        <TSpinner label="Loading collections..." />
+        <TSpinner :label="t('opensearch.loadingCollections')" />
       </TStack>
 
       <TEmptyState
         v-else-if="!rows.length"
-        title="No OpenSearch collections"
-        description="Collections come from AWS::OpenSearchServerless::Collection resources — register a microservice that declares one."
+        :title="t('opensearch.emptyTitle')"
+        :description="t('opensearch.emptyDescription')"
       />
 
       <TEmptyState
         v-else-if="!filteredRows.length"
-        title="No matching collections"
-        :description="`No collections match &quot;${search}&quot;.`"
+        :title="t('opensearch.noMatchTitle')"
+        :description="t('opensearch.noMatchDescription', { query: search })"
       />
 
-      <TTable v-else :columns="columns" :rows="filteredRows" aria-label="OpenSearch collections">
+      <TTable v-else :columns="columns" :rows="filteredRows" :aria-label="t('opensearch.listTitle')">
         <template #cell-name="{ row }">
           <TText
             weight="semibold"
@@ -138,7 +143,7 @@ onBeforeUnmount(() => {
           >
             <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
           </RouterLink>
-          <TText v-else tone="muted" size="xs">unmanaged</TText>
+          <TText v-else tone="muted" size="xs">{{ t('opensearch.unmanaged') }}</TText>
         </template>
 
         <template #cell-endpoint="{ row }">
@@ -147,7 +152,7 @@ onBeforeUnmount(() => {
 
         <template #cell-actions="{ row }">
           <TButton size="sm" variant="soft" @click="emit('open', String(row.name))">
-            Browse
+            {{ t('opensearch.browse') }}
           </TButton>
         </template>
       </TTable>

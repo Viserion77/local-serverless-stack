@@ -6,8 +6,10 @@ import {
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { SecretSummary, SecretDetail, SecretValue } from '../../services/api';
+import { useI18n } from '../../i18n';
 
 const toast = useToast();
+const { t } = useI18n();
 
 const secrets = ref<SecretSummary[]>([]);
 const loading = ref(true);
@@ -23,13 +25,15 @@ const detailLoading = ref(false);
 const revealed = ref<SecretValue | null>(null);
 const revealing = ref(false);
 
-const columns = [
-  { key: 'name', label: 'Secret' },
-  { key: 'description', label: 'Description' },
-  { key: 'versions', label: 'Versions', align: 'right' as const },
-  { key: 'lastChanged', label: 'Last changed' },
+// Computed rather than a module const: the labels must go through t() on every
+// render so a language switch relabels the table without a reload.
+const columns = computed(() => [
+  { key: 'name', label: t('secrets.columnSecret') },
+  { key: 'description', label: t('secrets.columnDescription') },
+  { key: 'versions', label: t('secrets.columnVersions'), align: 'right' as const },
+  { key: 'lastChanged', label: t('secrets.columnLastChanged') },
   { key: 'actions', label: '', align: 'right' as const },
-];
+]);
 
 const rows = computed(() =>
   secrets.value
@@ -71,7 +75,7 @@ async function load() {
     secrets.value = res.secrets;
     error.value = null;
   } catch (err: any) {
-    error.value = err.message || 'Failed to load secrets';
+    error.value = err.message || t('secrets.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -86,7 +90,7 @@ async function openDetail(name: string) {
   try {
     detail.value = await api.describeSecret(name);
   } catch (err: any) {
-    toast.add({ title: 'Failed to load secret', description: err.message, variant: 'danger' });
+    toast.add({ title: t('secrets.detailFailed'), description: err.message, variant: 'danger' });
   } finally {
     detailLoading.value = false;
   }
@@ -98,7 +102,7 @@ async function reveal() {
   try {
     revealed.value = await api.getSecretValue(activeName.value);
   } catch (err: any) {
-    toast.add({ title: 'Failed to reveal value', description: err.message, variant: 'danger' });
+    toast.add({ title: t('secrets.revealFailed'), description: err.message, variant: 'danger' });
   } finally {
     revealing.value = false;
   }
@@ -109,9 +113,9 @@ async function copyValue() {
   if (!value) return;
   try {
     await navigator.clipboard.writeText(value);
-    toast.add({ title: 'Copied to clipboard', variant: 'success' });
+    toast.add({ title: t('secrets.copiedToClipboard'), variant: 'success' });
   } catch {
-    toast.add({ title: 'Copy failed', variant: 'danger' });
+    toast.add({ title: t('secrets.copyFailed'), variant: 'danger' });
   }
 }
 
@@ -128,8 +132,8 @@ onBeforeUnmount(() => {
 <template>
   <TStack direction="vertical" gap="1.25rem">
     <TGrid :columns="2" gap="1rem">
-      <TStat label="Secrets" :value="totals.secrets" tone="info" :loading="loading" />
-      <TStat label="Versions" :value="totals.versions" tone="success" :loading="loading" />
+      <TStat :label="t('secrets.statSecrets')" :value="totals.secrets" tone="info" :loading="loading" />
+      <TStat :label="t('secrets.statVersions')" :value="totals.versions" tone="success" :loading="loading" />
     </TGrid>
 
     <TAlert v-if="error" variant="danger" dismissible @dismiss="error = null">
@@ -141,29 +145,29 @@ onBeforeUnmount(() => {
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
           <TText weight="semibold">Secrets Manager</TText>
           <TStack direction="horizontal" align="center" gap="1rem">
-            <TInput v-model="search" placeholder="Filter secrets..." style="min-width: 16rem;" />
-            <TText tone="muted" size="xs">Refreshes every 15s</TText>
+            <TInput v-model="search" :placeholder="t('secrets.filterPlaceholder')" style="min-width: 16rem;" />
+            <TText tone="muted" size="xs">{{ t('secrets.autoRefresh') }}</TText>
           </TStack>
         </TStack>
       </template>
 
       <TStack v-if="loading" direction="horizontal" justify="center" align="center">
-        <TSpinner label="Loading secrets..." />
+        <TSpinner :label="t('secrets.loadingList')" />
       </TStack>
 
       <TEmptyState
         v-else-if="!rows.length"
-        title="No secrets"
-        description="Create one with the AWS SDK (CreateSecret) against the engine endpoint — e.g. a signing key an identity service reads at boot."
+        :title="t('secrets.emptyTitle')"
+        :description="t('secrets.emptyBody')"
       />
 
       <TEmptyState
         v-else-if="!filteredRows.length"
-        title="No matching secrets"
-        :description="`No secrets match &quot;${search}&quot;.`"
+        :title="t('secrets.noMatchTitle')"
+        :description="t('secrets.noMatchBody', { query: search })"
       />
 
-      <TTable v-else :columns="columns" :rows="filteredRows" aria-label="Secrets">
+      <TTable v-else :columns="columns" :rows="filteredRows" :aria-label="t('secrets.tableLabel')">
         <template #cell-name="{ row }">
           <TStack direction="horizontal" align="center" gap="0.5rem">
             <TText
@@ -173,7 +177,7 @@ onBeforeUnmount(() => {
             >
               {{ row.name }}
             </TText>
-            <TBadge v-if="row.scheduledDeletion" tone="warning" variant="soft">deletion scheduled</TBadge>
+            <TBadge v-if="row.scheduledDeletion" tone="warning" variant="soft">{{ t('secrets.deletionScheduled') }}</TBadge>
           </TStack>
         </template>
 
@@ -190,18 +194,18 @@ onBeforeUnmount(() => {
         </template>
 
         <template #cell-actions="{ row }">
-          <TButton size="sm" variant="soft" @click="openDetail(String(row.name))">Inspect</TButton>
+          <TButton size="sm" variant="soft" @click="openDetail(String(row.name))">{{ t('secrets.inspect') }}</TButton>
         </template>
       </TTable>
     </TCard>
 
     <TModal
       v-model:open="modalOpen"
-      :title="activeName ? `Secret — ${activeName}` : 'Secret'"
+      :title="activeName ? t('secrets.detailTitle', { name: activeName }) : t('secrets.detailTitleFallback')"
       size="lg"
     >
       <TStack v-if="detailLoading" direction="horizontal" justify="center" align="center">
-        <TSpinner label="Loading secret..." />
+        <TSpinner :label="t('secrets.loadingDetail')" />
       </TStack>
 
       <TStack v-else-if="detail" direction="vertical" gap="1rem">
@@ -211,14 +215,14 @@ onBeforeUnmount(() => {
         </TStack>
 
         <div>
-          <TText weight="semibold" size="sm">Versions &amp; staging labels</TText>
+          <TText weight="semibold" size="sm">{{ t('secrets.versionsHeading') }}</TText>
           <TTable
             :columns="[
-              { key: 'versionId', label: 'Version' },
-              { key: 'stages', label: 'Staging labels' },
+              { key: 'versionId', label: t('secrets.columnVersion') },
+              { key: 'stages', label: t('secrets.columnStagingLabels') },
             ]"
             :rows="versionRows"
-            aria-label="Secret versions and staging labels"
+            :aria-label="t('secrets.versionsTableLabel')"
           >
             <template #cell-versionId="{ row }">
               <TText family="mono" size="xs">{{ row.versionId }}</TText>
@@ -230,17 +234,17 @@ onBeforeUnmount(() => {
         </div>
 
         <TStack v-if="detail.tags.length" direction="horizontal" gap="0.5rem" wrap>
-          <TTag v-for="t in detail.tags" :key="t.key" size="sm" variant="soft">{{ t.key }}={{ t.value }}</TTag>
+          <TTag v-for="tag in detail.tags" :key="tag.key" size="sm" variant="soft">{{ tag.key }}={{ tag.value }}</TTag>
         </TStack>
 
         <div>
           <TStack direction="horizontal" gap="0.5rem" align="center">
             <TButton size="sm" variant="solid" :loading="revealing" @click="reveal">
-              {{ revealed ? 'Refresh value' : 'Reveal current value' }}
+              {{ revealed ? t('secrets.refreshValue') : t('secrets.revealValue') }}
             </TButton>
-            <TButton v-if="revealed" size="sm" variant="ghost" @click="copyValue">Copy</TButton>
+            <TButton v-if="revealed" size="sm" variant="ghost" @click="copyValue">{{ t('common.copy') }}</TButton>
           </TStack>
-          <TCodeBlock v-if="revealed" :code="revealed.secretString ?? `(binary, base64) ${revealed.secretBinary}`" label="Secret value" max-block-size="24rem" wrap copyable />
+          <TCodeBlock v-if="revealed" :code="revealed.secretString ?? t('secrets.binaryValue', { value: revealed.secretBinary ?? '' })" :label="t('secrets.valueLabel')" max-block-size="24rem" wrap copyable />
         </div>
       </TStack>
     </TModal>

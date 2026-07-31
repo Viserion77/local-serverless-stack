@@ -10,6 +10,9 @@ import { currentRegion, regionOptions, applyConfiguredRegion } from './services/
 import { api } from './services/api';
 import type { HealthInfo } from './services/api';
 import { branding, loadBranding, applyTheme } from './services/branding';
+import { useI18n } from './i18n';
+
+const { t, locale, setLocale, locales, localeLabels } = useI18n();
 
 const route = useRoute();
 const router = useRouter();
@@ -32,21 +35,27 @@ const activeTopLevel = computed(() => {
 });
 
 const menuItems = computed(() => [
-  { label: theme.value === 'dark' ? 'Switch to light' : 'Switch to dark', value: 'theme' },
+  { label: theme.value === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark'), value: 'theme' },
+  ...locales.map(code => ({
+    label: `${localeLabels[code]}${code === locale.value ? ' ✓' : ''}`,
+    value: `locale:${code}`,
+  })),
 ]);
 
-const navItems: TNavMenuItem[] = [
-  { label: 'Overview', value: '/' },
-  { label: 'Services', value: '/services' },
-  { label: 'Lambdas', value: '/lambdas' },
-  { label: 'APIs', value: '/apis' },
-  { label: 'Queues', value: '/queues' },
+// Recomputed on a language switch; the AWS service names stay untranslated
+// because that is what they are called in every console and SDK.
+const navItems = computed<TNavMenuItem[]>(() => [
+  { label: t('nav.overview'), value: '/' },
+  { label: t('nav.services'), value: '/services' },
+  { label: t('nav.lambdas'), value: '/lambdas' },
+  { label: t('nav.apis'), value: '/apis' },
+  { label: t('nav.queues'), value: '/queues' },
   { label: 'S3', value: '/buckets' },
   { label: 'DynamoDB', value: '/dynamo' },
   { label: 'OpenSearch', value: '/opensearch' },
-  { label: 'Secrets', value: '/secrets' },
-  { label: 'Settings', value: '/settings' },
-];
+  { label: t('nav.secrets'), value: '/secrets' },
+  { label: t('nav.settings'), value: '/settings' },
+]);
 
 function onNavSelect(value: string) {
   if (value && value !== activeTopLevel.value) router.push(value);
@@ -56,6 +65,10 @@ function onMenuSelect(value: string) {
   if (value === 'theme') {
     theme.value = theme.value === 'dark' ? 'light' : 'dark';
     applyTheme(theme.value, true);
+    return;
+  }
+  if (value.startsWith('locale:')) {
+    setLocale(value.slice('locale:'.length) as typeof locale.value);
   }
 }
 
@@ -117,31 +130,31 @@ onBeforeUnmount(() => {
             :tone="engineRunning ? 'success' : 'danger'"
             variant="soft"
           >
-            Engine: {{ engineRunning ? 'Running' : 'Offline' }}
+            {{ t('nav.engine') }}: {{ engineRunning ? t('nav.engineRunning') : t('nav.engineOffline') }}
           </TBadge>
           <TBadge
             v-if="health.dynamoProxy?.enabled"
             :tone="health.dynamoProxy.running ? 'success' : 'warning'"
             variant="soft"
           >
-            Dynamo Proxy: {{ health.dynamoProxy.running ? 'On' : 'Off' }}
+            {{ t('nav.dynamoProxy') }}: {{ health.dynamoProxy.running ? t('nav.on') : t('nav.off') }}
           </TBadge>
           <TStackItem min-width="14rem">
             <TSelect
               v-model="currentRegion"
               :options="regionOptions"
               size="sm"
-              aria-label="AWS Region"
+              :aria-label="t('nav.awsRegion')"
             />
           </TStackItem>
           <TDropdown
             :items="menuItems"
             size="sm"
-            label="Open menu"
+            :label="t('nav.openMenu')"
             @select="onMenuSelect"
           >
             <template #trigger>
-              <TButton icon-only size="sm" variant="ghost" label="Open menu">
+              <TButton icon-only size="sm" variant="ghost" :label="t('nav.openMenu')">
                 <template #icon>
                   <TIcon name="ellipsis-vertical" />
                 </template>
@@ -155,7 +168,7 @@ onBeforeUnmount(() => {
         <TNavMenu
           :items="navItems"
           :model-value="activeTopLevel"
-          aria-label="Primary"
+          :aria-label="t('nav.primary')"
           @select="onNavSelect"
         />
       </template>

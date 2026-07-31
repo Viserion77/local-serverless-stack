@@ -8,22 +8,27 @@ import {
 import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { LambdaSummary } from '../../services/api';
+import { useI18n } from '../../i18n';
+
+const { t } = useI18n();
 
 const lambdas = ref<LambdaSummary[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
 let refreshTimer: number | null = null;
 
-const columns = [
-  { key: 'name', label: 'Function' },
-  { key: 'service', label: 'Service' },
-  { key: 'runtime', label: 'Runtime' },
-  { key: 'handler', label: 'Handler' },
-  { key: 'triggers', label: 'Triggers' },
-  { key: 'status', label: 'Status' },
-  { key: 'invocations', label: 'Invocations', align: 'right' as const },
-  { key: 'last', label: 'Last' },
-];
+// Computed rather than a module const: the headers have to be re-translated
+// when the user switches language, without a reload.
+const columns = computed(() => [
+  { key: 'name', label: t('lambdas.function') },
+  { key: 'service', label: t('common.service') },
+  { key: 'runtime', label: t('lambdas.runtime') },
+  { key: 'handler', label: t('lambdas.handler') },
+  { key: 'triggers', label: t('lambdas.triggers') },
+  { key: 'status', label: t('common.status') },
+  { key: 'invocations', label: t('lambdas.invocations'), align: 'right' as const },
+  { key: 'last', label: t('lambdas.last') },
+]);
 
 const rows = computed(() => lambdas.value.map(l => ({ ...l })));
 
@@ -39,7 +44,7 @@ async function loadLambdas() {
     lambdas.value = await api.listLambdas();
     error.value = null;
   } catch (err: any) {
-    error.value = err.message || 'Failed to load lambdas';
+    error.value = err.message || t('lambdas.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -51,6 +56,18 @@ function statusTone(status: string): TBadgeTone {
     case 'starting': return 'info';
     case 'stopped': return 'neutral';
     default: return 'danger';
+  }
+}
+
+// The API returns the state as a lowercase enum; the badge shows it in the
+// user's language, keeping the same lowercase register as the other screens.
+function statusLabel(status: string): string {
+  switch (status) {
+    case 'online': return t('common.online');
+    case 'starting': return t('lambdas.statusStarting');
+    case 'stopped': return t('common.stopped');
+    case 'error': return t('lambdas.statusError');
+    default: return status;
   }
 }
 
@@ -73,25 +90,25 @@ onBeforeUnmount(() => {
   <TStack direction="vertical" gap="1.25rem">
     <TGrid :columns="4" gap="1rem">
       <TStat
-        label="Functions"
+        :label="t('lambdas.statFunctions')"
         :value="totals.total"
         tone="info"
         :loading="loading"
       />
       <TStat
-        label="Online"
+        :label="t('lambdas.statOnline')"
         :value="totals.online"
         tone="success"
         :loading="loading"
       />
       <TStat
-        label="Invocations (session)"
+        :label="t('lambdas.statInvocations')"
         :value="totals.invocations"
         tone="info"
         :loading="loading"
       />
       <TStat
-        label="Errors"
+        :label="t('lambdas.statErrors')"
         :value="totals.errors"
         :tone="totals.errors > 0 ? 'warning' : 'neutral'"
         :loading="loading"
@@ -105,22 +122,22 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <TText weight="semibold">Lambda functions</TText>
-          <TText tone="muted">Live · refreshes every 10s</TText>
+          <TText weight="semibold">{{ t('lambdas.listTitle') }}</TText>
+          <TText tone="muted">{{ t('lambdas.listLive') }}</TText>
         </TStack>
       </template>
 
       <TStack v-if="loading" direction="horizontal" justify="center" align="center">
-        <TSpinner label="Loading lambdas..." />
+        <TSpinner :label="t('lambdas.loadingList')" />
       </TStack>
 
       <TEmptyState
         v-else-if="!lambdas.length"
-        title="No functions registered"
-        description="Register a microservice that defines Lambda functions to see them here."
+        :title="t('lambdas.emptyTitle')"
+        :description="t('lambdas.emptyDescription')"
       />
 
-      <TTable v-else :columns="columns" :rows="rows" aria-label="Lambda functions">
+      <TTable v-else :columns="columns" :rows="rows" :aria-label="t('lambdas.listTitle')">
         <template #cell-name="{ row }">
           <TStack direction="vertical" gap="0.125rem">
             <TLink
@@ -170,7 +187,7 @@ onBeforeUnmount(() => {
 
         <template #cell-status="{ row }">
           <TBadge :tone="statusTone(String(row.status))" variant="soft">
-            {{ row.status }}
+            {{ statusLabel(String(row.status)) }}
           </TBadge>
         </template>
 
@@ -183,7 +200,7 @@ onBeforeUnmount(() => {
               {{ row.invocations }}
             </TBadge>
             <TBadge v-if="Number(row.errors) > 0" tone="danger" variant="soft">
-              {{ row.errors }} err
+              {{ t('lambdas.errShort', { count: Number(row.errors) }) }}
             </TBadge>
           </TStack>
         </template>

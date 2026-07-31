@@ -68,6 +68,15 @@ resolved by ARN. Nothing the project supported on LocalStack needed LocalStack.
   `lss.config.json` as `serviceRuntime`/`servicePackaging` entries — `updateConfig` now merges
   map blocks **per entry**, so saving one field never drops that entry's or another service's
   siblings. Reopenable anytime from Settings. This is the plugin's replacement for humans.
+- **Three languages, dashboard and CLI**: English, Brazilian Portuguese and Spanish. The dashboard
+  follows a stored choice, else the browser (`pt` → `pt-BR`, `es-AR` → `es`), switchable from the ⋮
+  menu and remembered per browser; the CLI follows `LSS_LANG`, else `LC_ALL`/`LC_MESSAGES`/`LANG`.
+  Both layers are hand-rolled and dependency-free (`src/ui/src/i18n/`, `bin/i18n.js`) — LSS ships as
+  one npm package and a translation runtime is not a cost to put on every install. A missing key
+  falls back to English and then to the key itself, so an untranslated screen still renders. AWS
+  proper nouns, config keys, commands and flags are deliberately never translated. This also fixes a
+  smaller wart: parts of the CLI (the seed diagnostic, `lss scan`) printed Brazilian Portuguese
+  regardless of environment; the CLI is now English by default and Portuguese on request.
 - **Service discovery**: `GET /api/services/scan` + `lss scan` walk the project root (depth ≤ 6,
   dependency/build/VCS trees skipped, a service root is a leaf) and report every Serverless/osls
   service with `installed`/`packaged`/`registered` flags, the effective ports and package command
@@ -100,6 +109,24 @@ resolved by ARN. Nothing the project supported on LocalStack needed LocalStack.
 - The dashboard, the CLI and every log line name the engine instead of LocalStack.
 
 ### Fixed
+- **The preparation endpoints could not become a general command runner.** Found in review before
+  release: `POST /api/services/install` accepted any absolute directory and any command whose first
+  whitespace token was whitelisted — but `node -e "<js>"` and `npm exec -- <anything>` pass such a
+  check, and the endpoint answers with the command's output, which would have made it an execution
+  *and* exfiltration primitive for anything able to reach the port (the server binds all interfaces
+  with permissive CORS). Both endpoints now confine `servicePath` to the project root, and the
+  install command is validated by **shape** — package manager + install verb + flags only, no
+  positionals — so those forms are unrepresentable rather than merely discouraged.
+- **Per-service overrides were unreachable when the config file was not in the project root.** The
+  key the dashboard writes is project-root relative (from the scan), while `getRuntimeConfigForService`
+  / `getPackageConfigForService` matched a raw `dirname(configPath)`-relative one. With a checkout
+  reached through a symlink, or a config loaded from `~`, the two spellings differed and a saved
+  override was silently ignored at registration. Both spellings (plus the basename) now resolve
+  through one helper.
+- **`installed` in the scan no longer lies in a workspaces monorepo.** It checked the service's own
+  `node_modules`, which a hoisted npm/yarn/pnpm workspace package legitimately lacks — every service
+  read as uninstalled forever, steering the operator into per-package installs that shadow the
+  hoisted tree. The check now walks up to the scanned root.
 - **The UI was never type-checked.** `src/ui/tsconfig.json` extends the root config, which excludes
   `src/ui` — and `exclude` is inherited with paths resolved against the *root* file, so the
   dashboard excluded itself from its own project and `vue-tsc --noEmit` silently checked nothing.

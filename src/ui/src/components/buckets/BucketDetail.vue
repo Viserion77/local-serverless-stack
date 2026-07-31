@@ -6,10 +6,12 @@ import {
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { BucketSnapshot, BucketObject } from '../../services/api';
+import { useI18n } from '../../i18n';
 
 const props = defineProps<{ bucketName: string }>();
 const emit = defineEmits<{ (e: 'back'): void }>();
 
+const { t } = useI18n();
 const toast = useToast();
 
 const bucket = ref<BucketSnapshot | null>(null);
@@ -25,12 +27,14 @@ const uploadBody = ref('');
 const uploadContentType = ref('text/plain');
 const uploading = ref(false);
 
-const objectColumns = [
-  { key: 'key', label: 'Key' },
-  { key: 'size', label: 'Size', align: 'right' as const },
-  { key: 'lastModified', label: 'Modified' },
+// Computed rather than a module const: the headers have to go through t() at
+// render time so switching language re-labels the table without a reload.
+const objectColumns = computed(() => [
+  { key: 'key', label: t('buckets.colKey') },
+  { key: 'size', label: t('common.size'), align: 'right' as const },
+  { key: 'lastModified', label: t('buckets.colModified') },
   { key: 'actions', label: '', align: 'right' as const },
-];
+]);
 
 const totalSize = computed(() =>
   objects.value.reduce((s, o) => s + (o.size || 0), 0),
@@ -54,7 +58,7 @@ async function loadBucket() {
     bucket.value = await api.getBucket(props.bucketName);
     error.value = null;
   } catch (err: any) {
-    error.value = err.message || 'Failed to load bucket';
+    error.value = err.message || t('buckets.detailLoadFailed');
     bucket.value = null;
   } finally {
     loading.value = false;
@@ -71,7 +75,7 @@ async function loadObjects() {
     objects.value = result.objects;
   } catch (err: any) {
     toast.add({
-      title: 'Failed to load objects',
+      title: t('buckets.objectsLoadFailed'),
       description: err.message,
       variant: 'danger',
     });
@@ -89,14 +93,14 @@ function downloadUrl(key: string): string {
 }
 
 async function deleteObject(key: string) {
-  if (!confirm(`Delete object "${key}"?`)) return;
+  if (!confirm(t('buckets.deleteConfirm', { key }))) return;
   try {
     await api.deleteBucketObject(props.bucketName, key);
-    toast.add({ title: 'Object deleted', variant: 'info' });
+    toast.add({ title: t('buckets.deleteSuccess'), variant: 'info' });
     await loadObjects();
   } catch (err: any) {
     toast.add({
-      title: 'Failed to delete object',
+      title: t('buckets.deleteFailed'),
       description: err.message,
       variant: 'danger',
     });
@@ -105,7 +109,7 @@ async function deleteObject(key: string) {
 
 async function uploadObject() {
   if (!uploadKey.value || !uploadBody.value) {
-    toast.add({ title: 'Key and body are required', variant: 'warning' });
+    toast.add({ title: t('buckets.uploadMissingFields'), variant: 'warning' });
     return;
   }
   uploading.value = true;
@@ -115,14 +119,14 @@ async function uploadObject() {
       body: uploadBody.value,
       contentType: uploadContentType.value || undefined,
     });
-    toast.add({ title: 'Object uploaded', variant: 'info' });
+    toast.add({ title: t('buckets.uploadSuccess'), variant: 'info' });
     uploadKey.value = '';
     uploadBody.value = '';
     await loadObjects();
     await loadBucket();
   } catch (err: any) {
     toast.add({
-      title: 'Failed to upload object',
+      title: t('buckets.uploadFailed'),
       description: err.message,
       variant: 'danger',
     });
@@ -146,11 +150,15 @@ watch(() => props.bucketName, () => {
   <TStack direction="vertical" gap="1rem">
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
-        <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> Buckets</TButton>
+        <TButton size="sm" variant="ghost" @click="emit('back')">
+          <TIcon name="arrow-left" /> {{ t('buckets.backToBuckets') }}
+        </TButton>
         <TText size="lg" weight="semibold">{{ bucketName }}</TText>
-        <TBadge v-if="bucket?.versioning" tone="info" variant="soft">Versioning</TBadge>
+        <TBadge v-if="bucket?.versioning" tone="info" variant="soft">{{ t('buckets.versioning') }}</TBadge>
       </TStack>
-      <TButton size="sm" variant="ghost" :loading="loadingObjects" @click="loadObjects()">Refresh</TButton>
+      <TButton size="sm" variant="ghost" :loading="loadingObjects" @click="loadObjects()">
+        {{ t('common.refresh') }}
+      </TButton>
     </TStack>
 
     <TAlert v-if="error" variant="danger" dismissible @dismiss="error = null">
@@ -158,20 +166,20 @@ watch(() => props.bucketName, () => {
     </TAlert>
 
     <TStack v-if="loading && !bucket" direction="horizontal" justify="center" align="center">
-      <TSpinner label="Loading bucket..." />
+      <TSpinner :label="t('buckets.detailLoading')" />
     </TStack>
 
     <template v-else-if="bucket">
       <TGrid :columns="4" gap="0.75rem">
-        <TStat label="Objects" :value="bucket.objectCount ?? 0" tone="info" />
-        <TStat label="Size" :value="formatBytes(bucket.totalSize)" tone="neutral" />
+        <TStat :label="t('buckets.statObjects')" :value="bucket.objectCount ?? 0" tone="info" />
+        <TStat :label="t('common.size')" :value="formatBytes(bucket.totalSize)" tone="neutral" />
         <TStat
-          label="Versioning"
-          :value="bucket.versioning ? 'Enabled' : 'Disabled'"
+          :label="t('buckets.versioning')"
+          :value="bucket.versioning ? t('buckets.enabled') : t('buckets.disabled')"
           :tone="bucket.versioning ? 'success' : 'neutral'"
         />
         <TStat
-          label="Notifications"
+          :label="t('buckets.statNotifications')"
           :value="bucket.notifications ?? 0"
           :tone="(bucket.notifications ?? 0) > 0 ? 'info' : 'neutral'"
         />
@@ -179,20 +187,26 @@ watch(() => props.bucketName, () => {
 
       <TCard variant="outline">
         <template #header>
-          <TText weight="semibold">Upload object</TText>
+          <TText weight="semibold">{{ t('buckets.uploadTitle') }}</TText>
         </template>
         <TStack direction="vertical" gap="0.5rem">
-          <TInput v-model="uploadKey" placeholder="object/key.txt" label="Key" />
-          <TInput v-model="uploadContentType" placeholder="text/plain" label="Content-Type" />
-          <TText as="label" tone="muted" size="sm">Body</TText>
+          <TInput v-model="uploadKey" placeholder="object/key.txt" :label="t('buckets.keyLabel')" />
+          <TInput
+            v-model="uploadContentType"
+            placeholder="text/plain"
+            :label="t('buckets.contentTypeLabel')"
+          />
+          <TText as="label" tone="muted" size="sm">{{ t('buckets.bodyLabel') }}</TText>
           <textarea
             v-model="uploadBody"
             rows="4"
             style="width: 100%; font-family: var(--tree-font-mono, monospace); padding: 0.5rem;"
-            placeholder="Hello, world!"
+            :placeholder="t('buckets.bodyPlaceholder')"
           ></textarea>
           <TStack direction="horizontal" justify="flex-end">
-            <TButton size="sm" :loading="uploading" @click="uploadObject">Upload</TButton>
+            <TButton size="sm" :loading="uploading" @click="uploadObject">
+              {{ t('buckets.upload') }}
+            </TButton>
           </TStack>
         </TStack>
       </TCard>
@@ -200,30 +214,38 @@ watch(() => props.bucketName, () => {
       <TCard variant="outline">
         <template #header>
           <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-            <TText weight="semibold">Objects ({{ objects.length }} · {{ formatBytes(totalSize) }})</TText>
+            <TText weight="semibold">
+              {{ t('buckets.objectsHeader', { count: objects.length, size: formatBytes(totalSize) }) }}
+            </TText>
             <TStack direction="horizontal" gap="0.5rem" align="center">
               <TInput
                 v-model="prefix"
-                placeholder="prefix filter"
+                :placeholder="t('buckets.prefixPlaceholder')"
+                :aria-label="t('buckets.prefixLabel')"
                 size="sm"
                 @keyup.enter="loadObjects()"
               />
-              <TButton size="sm" variant="ghost" @click="loadObjects()">Apply</TButton>
+              <TButton size="sm" variant="ghost" @click="loadObjects()">{{ t('buckets.apply') }}</TButton>
             </TStack>
           </TStack>
         </template>
 
         <TStack v-if="loadingObjects" direction="horizontal" justify="center" align="center">
-          <TSpinner label="Loading objects..." />
+          <TSpinner :label="t('buckets.objectsLoading')" />
         </TStack>
 
         <TEmptyState
           v-else-if="!objects.length"
-          title="No objects"
-          description="This bucket is empty (or the prefix filter excluded everything)."
+          :title="t('buckets.objectsEmptyTitle')"
+          :description="t('buckets.objectsEmptyDescription')"
         />
 
-        <TTable v-else :columns="objectColumns" :rows="objects" aria-label="Bucket objects">
+        <TTable
+          v-else
+          :columns="objectColumns"
+          :rows="objects"
+          :aria-label="t('buckets.objectsTableLabel')"
+        >
           <template #cell-key="{ row }">
             <TLink :href="previewUrl(String(row.key))" external style="font-weight: 500;">
               {{ row.key }}
@@ -243,7 +265,7 @@ watch(() => props.bucketName, () => {
                 rel="noopener noreferrer"
                 style="text-decoration: none;"
               >
-                <TButton size="sm" variant="ghost">Download</TButton>
+                <TButton size="sm" variant="ghost">{{ t('buckets.download') }}</TButton>
               </a>
               <TButton
                 size="sm"
@@ -251,7 +273,7 @@ watch(() => props.bucketName, () => {
                 tone="danger"
                 @click="deleteObject(String(row.key))"
               >
-                Delete
+                {{ t('common.delete') }}
               </TButton>
             </TStack>
           </template>

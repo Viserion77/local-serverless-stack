@@ -83,7 +83,8 @@ export const TOOLS: ToolDefinition[] = [
     name: 'lss_scan_services',
     description:
       'Discover Serverless Framework / osls services under the project root that could be registered: '
-      + 'name, path, packaged/registered flags and port hints. Use before lss_register_service.',
+      + 'name, path, installed/packaged/registered flags, effective ports and package command. '
+      + 'Use before lss_register_service.',
     inputSchema: { type: 'object', properties: {} },
     run: (_a, http) => http('GET', '/api/services/scan'),
   },

@@ -10,9 +10,11 @@ import type {
   DynamoTableDetail, DynamoScanQueryInput, DynamoScanQueryOutput,
 } from '../../services/api';
 import DynamoItemEditor from './DynamoItemEditor.vue';
+import { useI18n } from '../../i18n';
 
 const props = defineProps<{ table: DynamoTableDetail }>();
 
+const { t } = useI18n();
 const toast = useToast();
 
 type Mode = 'scan' | 'query';
@@ -55,34 +57,40 @@ const editorOriginalKey = ref<Record<string, unknown> | null>(null);
 const confirmDeleteOpen = ref(false);
 const pendingDelete = ref<Record<string, unknown> | null>(null);
 
+// `Scan` and `Query` are the DynamoDB API operations — left in English so the
+// toggle names the SDK call the dashboard is about to make.
 const modeOptions = [
   { value: 'scan', label: 'Scan' },
   { value: 'query', label: 'Query' },
 ];
 
-const skOperators: { value: string; label: string }[] = [
-  { value: '=', label: 'Equal to' },
-  { value: '<=', label: 'Less than or equal to' },
-  { value: '<', label: 'Less than' },
-  { value: '>=', label: 'Greater than or equal to' },
-  { value: '>', label: 'Greater than' },
-  { value: 'between', label: 'Between' },
-  { value: 'begins_with', label: 'Begins with' },
-];
+// Operator labels are prose, so they are computed: t() has to run again when the
+// locale changes for the selects to relabel themselves.
+const skOperators = computed<{ value: string; label: string }[]>(() => [
+  { value: '=', label: t('dynamo.opEq') },
+  { value: '<=', label: t('dynamo.opLte') },
+  { value: '<', label: t('dynamo.opLt') },
+  { value: '>=', label: t('dynamo.opGte') },
+  { value: '>', label: t('dynamo.opGt') },
+  { value: 'between', label: t('dynamo.opBetween') },
+  { value: 'begins_with', label: t('dynamo.opBeginsWith') },
+]);
 
-const filterOps: { value: string; label: string }[] = [
-  { value: '=', label: 'Equal to' },
-  { value: '<>', label: 'Not equal to' },
-  { value: '<', label: 'Less than' },
-  { value: '<=', label: 'Less than or equal to' },
-  { value: '>', label: 'Greater than' },
-  { value: '>=', label: 'Greater than or equal to' },
-  { value: 'begins_with', label: 'Begins with' },
-  { value: 'contains', label: 'Contains' },
-  { value: 'attribute_exists', label: 'Exists' },
-  { value: 'attribute_not_exists', label: 'Does not exist' },
-];
+const filterOps = computed<{ value: string; label: string }[]>(() => [
+  { value: '=', label: t('dynamo.opEq') },
+  { value: '<>', label: t('dynamo.opNeq') },
+  { value: '<', label: t('dynamo.opLt') },
+  { value: '<=', label: t('dynamo.opLte') },
+  { value: '>', label: t('dynamo.opGt') },
+  { value: '>=', label: t('dynamo.opGte') },
+  { value: 'begins_with', label: t('dynamo.opBeginsWith') },
+  { value: 'contains', label: t('dynamo.opContains') },
+  { value: 'attribute_exists', label: t('dynamo.opExists') },
+  { value: 'attribute_not_exists', label: t('dynamo.opNotExists') },
+]);
 
+// Attribute types keep their DynamoDB names (String/Number/Boolean/Null) —
+// they are API values, not vocabulary.
 const filterTypeOptions: { value: FilterType; label: string }[] = [
   { value: 'String', label: 'String' },
   { value: 'Number', label: 'Number' },
@@ -92,13 +100,17 @@ const filterTypeOptions: { value: FilterType; label: string }[] = [
 
 const indexOptions = computed(() => {
   const opts: { value: string; label: string }[] = [
-    { value: '', label: `Table - ${props.table.name}` },
+    { value: '', label: t('dynamo.optionTable', { name: props.table.name }) },
   ];
   for (const gsi of props.table.gsis || []) {
-    if (gsi.IndexName) opts.push({ value: gsi.IndexName, label: `Index - ${gsi.IndexName}` });
+    if (gsi.IndexName) {
+      opts.push({ value: gsi.IndexName, label: t('dynamo.optionIndex', { name: gsi.IndexName }) });
+    }
   }
   for (const lsi of props.table.lsis || []) {
-    if (lsi.IndexName) opts.push({ value: lsi.IndexName, label: `Index - ${lsi.IndexName}` });
+    if (lsi.IndexName) {
+      opts.push({ value: lsi.IndexName, label: t('dynamo.optionIndex', { name: lsi.IndexName }) });
+    }
   }
   return opts;
 });
@@ -181,7 +193,7 @@ function coerceByType(raw: string, type: FilterType): unknown {
   switch (type) {
     case 'Number': {
       const n = Number(raw);
-      if (Number.isNaN(n)) throw new Error(`"${raw}" is not a number`);
+      if (Number.isNaN(n)) throw new Error(t('dynamo.errNotNumber', { value: raw }));
       return n;
     }
     case 'Boolean':
@@ -198,7 +210,7 @@ function coerceByAttrType(raw: string, name: string): unknown {
   const def = props.table.attributeDefinitions.find(a => a.AttributeName === name);
   if (def?.AttributeType === 'N') {
     const n = Number(raw);
-    if (Number.isNaN(n)) throw new Error(`"${raw}" is not a number for ${name}`);
+    if (Number.isNaN(n)) throw new Error(t('dynamo.errNotNumberFor', { value: raw, attr: name }));
     return n;
   }
   return raw;
@@ -207,8 +219,8 @@ function coerceByAttrType(raw: string, name: string): unknown {
 function buildQuery(): { keyExpr: string; names: Record<string, string>; values: Record<string, unknown> } {
   const names: Record<string, string> = {};
   const values: Record<string, unknown> = {};
-  if (!pkAttr.value) throw new Error('No partition key on the selected table or index');
-  if (!pkValue.value) throw new Error(`Partition key value (${pkAttr.value}) is required`);
+  if (!pkAttr.value) throw new Error(t('dynamo.errNoPartitionKey'));
+  if (!pkValue.value) throw new Error(t('dynamo.errPkRequired', { attr: pkAttr.value }));
 
   names['#pk'] = pkAttr.value;
   values[':pkv'] = coerceByAttrType(pkValue.value, pkAttr.value);
@@ -217,7 +229,7 @@ function buildQuery(): { keyExpr: string; names: Record<string, string>; values:
   if (skAttr.value && skValue.value) {
     names['#sk'] = skAttr.value;
     if (skOperator.value === 'between') {
-      if (!skValue2.value) throw new Error('BETWEEN requires two values');
+      if (!skValue2.value) throw new Error(t('dynamo.errBetweenTwoValues'));
       values[':skv1'] = coerceByAttrType(skValue.value, skAttr.value);
       values[':skv2'] = coerceByAttrType(skValue2.value, skAttr.value);
       keyExpr += ' AND #sk BETWEEN :skv1 AND :skv2';
@@ -294,7 +306,7 @@ async function run(continueFrom?: Record<string, unknown>) {
     scannedCount.value = res.scannedCount;
     statusVisible.value = true;
   } catch (err: any) {
-    error.value = err.message || 'Request failed';
+    error.value = err.message || t('dynamo.requestFailed');
   } finally {
     running.value = false;
   }
@@ -388,11 +400,11 @@ async function doDelete() {
   if (!pendingDelete.value) return;
   try {
     await api.deleteDynamoItem(props.table.name, pendingDelete.value);
-    toast.add({ title: 'Item deleted', variant: 'info' });
+    toast.add({ title: t('dynamo.itemDeleted'), variant: 'info' });
     editorOpen.value = false;
     await run();
   } catch (err: any) {
-    toast.add({ title: 'Delete failed', description: err.message, variant: 'danger' });
+    toast.add({ title: t('dynamo.deleteFailed'), description: err.message, variant: 'danger' });
   } finally {
     confirmDeleteOpen.value = false;
     pendingDelete.value = null;
@@ -423,7 +435,7 @@ watch(() => [mode.value, indexName.value], () => {
   <TStack direction="vertical" gap="1rem">
     <TCard variant="outline">
       <template #header>
-        <TText weight="semibold">Scan or query items</TText>
+        <TText weight="semibold">{{ t('dynamo.explorerTitle') }}</TText>
       </template>
 
       <TStack direction="vertical" gap="1rem">
@@ -436,13 +448,13 @@ watch(() => [mode.value, indexName.value], () => {
         </div>
 
         <TStack direction="horizontal" gap="1rem">
-          <TFormField label="Select a table or index" style="flex: 1;">
+          <TFormField :label="t('dynamo.selectTableOrIndex')" style="flex: 1;">
             <TSelect v-model="indexName" :options="indexOptions" />
           </TFormField>
-          <TFormField label="Select attribute projection" style="flex: 1;">
+          <TFormField :label="t('dynamo.selectProjection')" style="flex: 1;">
             <TSelect
               :model-value="'All attributes'"
-              :options="[{ value: 'All attributes', label: 'All attributes' }]"
+              :options="[{ value: 'All attributes', label: t('dynamo.allAttributes') }]"
               disabled
             />
           </TFormField>
@@ -451,38 +463,38 @@ watch(() => [mode.value, indexName.value], () => {
         <template v-if="mode === 'query'">
           <TDivider />
           <TStack direction="vertical" gap="0.5rem">
-            <TText weight="semibold" style="font-size: 0.9rem;">Partition key</TText>
+            <TText weight="semibold" style="font-size: 0.9rem;">{{ t('dynamo.partitionKey') }}</TText>
             <TStack direction="horizontal" gap="1rem">
-              <TFormField label="Attribute" style="flex: 1;">
+              <TFormField :label="t('dynamo.attribute')" style="flex: 1;">
                 <TInput :model-value="pkAttr || '—'" disabled />
               </TFormField>
-              <TFormField label="Value" style="flex: 2;">
-                <TInput v-model="pkValue" placeholder="Enter attribute value" />
+              <TFormField :label="t('dynamo.value')" style="flex: 2;">
+                <TInput v-model="pkValue" :placeholder="t('dynamo.enterAttributeValue')" />
               </TFormField>
             </TStack>
           </TStack>
 
           <TStack v-if="skAttr" direction="vertical" gap="0.5rem">
-            <TText weight="semibold" style="font-size: 0.9rem;">Sort key – optional</TText>
+            <TText weight="semibold" style="font-size: 0.9rem;">{{ t('dynamo.sortKeyOptional') }}</TText>
             <TStack direction="horizontal" gap="0.75rem" align="end">
-              <TFormField label="Attribute" style="flex: 1.4;">
+              <TFormField :label="t('dynamo.attribute')" style="flex: 1.4;">
                 <TInput :model-value="skAttr" disabled />
               </TFormField>
-              <TFormField label="Value" style="flex: 1.2; min-width: 11rem;">
+              <TFormField :label="t('dynamo.value')" style="flex: 1.2; min-width: 11rem;">
                 <TSelect v-model="skOperator" :options="skOperators" />
               </TFormField>
               <TInput
                 v-model="skValue"
-                placeholder="Enter attribute value"
+                :placeholder="t('dynamo.enterAttributeValue')"
                 style="flex: 2;"
               />
               <TInput
                 v-if="skOperator === 'between'"
                 v-model="skValue2"
-                placeholder="and value"
+                :placeholder="t('dynamo.andValue')"
                 style="flex: 2;"
               />
-              <TCheckbox v-model="sortDescending" label="Sort descending" />
+              <TCheckbox v-model="sortDescending" :label="t('dynamo.sortDescending')" />
             </TStack>
           </TStack>
         </template>
@@ -495,7 +507,7 @@ watch(() => [mode.value, indexName.value], () => {
             style="font-weight: 600; font-size: 0.9rem;"
             @click.prevent="filtersExpanded = !filtersExpanded"
           >
-            <TIcon :name="filtersExpanded ? 'chevron-down' : 'chevron-right'" /> Filters – optional
+            <TIcon :name="filtersExpanded ? 'chevron-down' : 'chevron-right'" /> {{ t('dynamo.filtersOptional') }}
           </TLink>
 
           <TStack v-if="filtersExpanded" direction="vertical" gap="0.5rem">

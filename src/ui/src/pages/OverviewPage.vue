@@ -8,10 +8,12 @@ import {
 import { RouterLink } from 'vue-router';
 import { api } from '../services/api';
 import { isOnboardingDone } from '../services/onboarding';
+import { useI18n } from '../i18n';
 import type {
   HealthInfo, LambdaSummary, LssConfigSnapshot, PortEntry, ServiceApiInfo, ServiceSummary,
 } from '../services/api';
 
+const { t } = useI18n();
 const router = useRouter();
 const health = ref<HealthInfo | null>(null);
 const config = ref<LssConfigSnapshot | null>(null);
@@ -76,40 +78,47 @@ const portKindTone: Record<PortEntry['kind'], 'info' | 'success' | 'warning' | '
   'service-api': 'info',
   'service-invoke': 'neutral',
 };
-const portKindLabel: Record<PortEntry['kind'], string> = {
-  orchestrator: 'orchestrator',
-  engine: 'engine',
-  proxy: 'proxy',
-  'service-api': 'HTTP API',
-  'service-invoke': 'invoke',
+// Only the message *keys* live at module level: the label itself has to be
+// resolved on every render, otherwise a language switch would leave the badges
+// in the old locale.
+const portKindKeys: Record<PortEntry['kind'], string> = {
+  orchestrator: 'overview.portKindOrchestrator',
+  engine: 'overview.portKindEngine',
+  proxy: 'overview.portKindProxy',
+  'service-api': 'overview.portKindServiceApi',
+  'service-invoke': 'overview.portKindServiceInvoke',
 };
+function portKindLabel(kind: PortEntry['kind']): string {
+  return t(portKindKeys[kind]);
+}
 
-const coveredResources = [
+// Computed (not a plain const) for the same reason: t() must run per render.
+const coveredResources = computed(() => [
   {
-    type: 'SNS Topics',
-    description: 'Pub/sub fan-out for cross-service events',
+    type: t('overview.coveredSnsTitle'),
+    description: t('overview.coveredSnsDescription'),
     status: 'covered' as const,
     to: null,
   },
   {
-    type: 'SQS Queues',
-    description: 'Async message queues with consumer monitoring',
+    type: t('overview.coveredSqsTitle'),
+    description: t('overview.coveredSqsDescription'),
     status: 'covered' as const,
     to: '/queues',
   },
   {
-    type: 'DynamoDB Tables',
-    description: 'Tables, indexes, items explorer and seeds',
+    type: t('overview.coveredDynamoTitle'),
+    description: t('overview.coveredDynamoDescription'),
     status: 'covered' as const,
     to: '/dynamo',
   },
   {
-    type: 'S3 Buckets',
-    description: 'Buckets, objects browser, upload/download, Lambda notifications',
+    type: t('overview.coveredS3Title'),
+    description: t('overview.coveredS3Description'),
     status: 'covered' as const,
     to: '/buckets',
   },
-];
+]);
 
 onMounted(async () => {
   await loadAll();
@@ -136,39 +145,36 @@ onBeforeUnmount(() => {
           <TIcon name="zap" />
           <TStack direction="vertical" gap="0.125rem">
             <TText size="xl" weight="semibold">Local Serverless Stack</TText>
-            <TText tone="muted">Every AWS service in one process. No Docker, no token.</TText>
+            <TText tone="muted">{{ t('overview.heroTagline') }}</TText>
           </TStack>
         </TStack>
         <p style="max-width: 70ch; line-height: 1.55;">
-          A single control plane for your local serverless workflow. Register a Serverless Framework project
-          and LSS parses its CloudFormation template, provisions the resources on the in-process
-          engine, wires up event-source mappings, and gives you live visibility into every queue,
-          table, and topic — without one emulator per service.
+          {{ t('overview.heroParagraph') }}
         </p>
         <TStack direction="horizontal" gap="0.5rem" wrap>
           <TBadge :tone="engineTone" variant="soft">
-            Engine {{ engineRunning ? 'running' : 'offline' }}
+            {{ engineRunning ? t('overview.engineBadgeRunning') : t('overview.engineBadgeOffline') }}
           </TBadge>
           <TBadge
             v-if="proxyEnabled"
             :tone="proxyRunning ? 'success' : 'warning'"
             variant="soft"
           >
-            Dynamo Proxy {{ proxyRunning ? 'on' : 'enabled (not listening)' }}
+            {{ proxyRunning ? t('overview.proxyBadgeOn') : t('overview.proxyBadgeNotListening') }}
           </TBadge>
-          <TBadge v-else tone="neutral" variant="soft">Dynamo Proxy off</TBadge>
+          <TBadge v-else tone="neutral" variant="soft">{{ t('overview.proxyBadgeOff') }}</TBadge>
           <TBadge :tone="autoPackage ? 'info' : 'neutral'" variant="soft">
-            Auto-package {{ autoPackage ? 'on' : 'off' }}
+            {{ t('overview.autoPackage') }} {{ autoPackage ? t('overview.on') : t('overview.off') }}
           </TBadge>
           <TBadge :tone="persistence ? 'info' : 'neutral'" variant="soft">
-            Persistence {{ persistence ? 'on' : 'off' }}
+            {{ t('overview.persistence') }} {{ persistence ? t('overview.on') : t('overview.off') }}
           </TBadge>
         </TStack>
       </TStack>
     </TCard>
 
     <TStack v-if="loading && !health" direction="horizontal" justify="center" align="center">
-      <TSpinner label="Loading overview..." />
+      <TSpinner :label="t('overview.loading')" />
     </TStack>
 
     <template v-else>
@@ -176,43 +182,45 @@ onBeforeUnmount(() => {
       <TGrid :columns="2" gap="1rem">
         <TCard variant="outline">
           <template #header>
-            <TText weight="semibold">Server status</TText>
+            <TText weight="semibold">{{ t('overview.serverStatus') }}</TText>
           </template>
           <TDescriptionList>
-            <TDescriptionItem label="Self engine">
+            <TDescriptionItem :label="t('overview.selfEngine')">
               <TBadge :tone="engineTone" variant="soft">
-                {{ engineRunning ? 'Running' : 'Offline' }}
+                {{ engineRunning ? t('overview.running') : t('overview.offline') }}
               </TBadge>
             </TDescriptionItem>
-            <TDescriptionItem label="Endpoint">
+            <TDescriptionItem :label="t('overview.endpoint')">
               <TText family="mono">{{ config?.engine?.endpoint || '—' }}</TText>
             </TDescriptionItem>
-            <TDescriptionItem label="Runs in">
-              <TTag size="sm" variant="soft">this process — no Docker</TTag>
+            <TDescriptionItem :label="t('overview.runsIn')">
+              <TTag size="sm" variant="soft">{{ t('overview.runsInValue') }}</TTag>
             </TDescriptionItem>
           </TDescriptionList>
           <TDivider />
           <TDescriptionList>
-            <TDescriptionItem label="Dynamo Proxy">
+            <TDescriptionItem :label="t('overview.dynamoProxy')">
               <TStack direction="horizontal" gap="0.375rem" align="center">
                 <TBadge
                   v-if="proxyEnabled"
                   :tone="proxyRunning ? 'success' : 'warning'"
                   variant="soft"
                 >
-                  {{ proxyRunning ? `Listening :${health?.dynamoProxy?.port}` : 'Enabled, not listening' }}
+                  {{ proxyRunning
+                    ? t('overview.proxyListening', { port: health?.dynamoProxy?.port ?? '' })
+                    : t('overview.proxyEnabledNotListening') }}
                 </TBadge>
-                <TBadge v-else tone="neutral" variant="soft">Disabled</TBadge>
+                <TBadge v-else tone="neutral" variant="soft">{{ t('common.disabled') }}</TBadge>
               </TStack>
             </TDescriptionItem>
-            <TDescriptionItem label="Auto-package">
+            <TDescriptionItem :label="t('overview.autoPackage')">
               <TBadge :tone="autoPackage ? 'info' : 'neutral'" variant="soft">
-                {{ autoPackage ? 'on' : 'off' }}
+                {{ autoPackage ? t('overview.on') : t('overview.off') }}
               </TBadge>
             </TDescriptionItem>
-            <TDescriptionItem label="Persistence">
+            <TDescriptionItem :label="t('overview.persistence')">
               <TBadge :tone="persistence ? 'info' : 'neutral'" variant="soft">
-                {{ persistence ? 'on' : 'off' }}
+                {{ persistence ? t('overview.on') : t('overview.off') }}
               </TBadge>
             </TDescriptionItem>
           </TDescriptionList>
@@ -221,23 +229,23 @@ onBeforeUnmount(() => {
         <TCard variant="outline">
           <template #header>
             <TStack direction="horizontal" justify="space-between" align="center">
-              <TText weight="semibold">LSS configuration</TText>
+              <TText weight="semibold">{{ t('overview.lssConfiguration') }}</TText>
               <RouterLink to="/settings" style="text-decoration: none;">
-                <TButton size="sm" variant="ghost">Edit <TIcon name="arrow-right" /></TButton>
+                <TButton size="sm" variant="ghost">{{ t('overview.edit') }} <TIcon name="arrow-right" /></TButton>
               </RouterLink>
             </TStack>
           </template>
           <TDescriptionList>
-            <TDescriptionItem label="Engine">
+            <TDescriptionItem :label="t('overview.engine')">
               <TTag size="sm" variant="soft">{{ config?.engine?.kind || '—' }}</TTag>
             </TDescriptionItem>
-            <TDescriptionItem label="Default region">
+            <TDescriptionItem :label="t('overview.defaultRegion')">
               <TText family="mono">{{ config?.region || '—' }}</TText>
             </TDescriptionItem>
-            <TDescriptionItem label="Server port">
+            <TDescriptionItem :label="t('overview.serverPort')">
               <TText family="mono">{{ config?.serverPort || '—' }}</TText>
             </TDescriptionItem>
-            <TDescriptionItem label="Emulated services">
+            <TDescriptionItem :label="t('overview.emulatedServices')">
               <TStack direction="horizontal" gap="0.25rem" wrap justify="flex-end">
                 <TTag v-for="svc in emulatedServices" :key="svc" size="sm" variant="soft">
                   {{ svc }}
@@ -245,10 +253,10 @@ onBeforeUnmount(() => {
                 <TText v-if="!emulatedServices.length" tone="muted">—</TText>
               </TStack>
             </TDescriptionItem>
-            <TDescriptionItem label="Seeds dir">
+            <TDescriptionItem :label="t('overview.seedsDir')">
               <TText family="mono" size="xs">{{ config?.seedsDir || '—' }}</TText>
             </TDescriptionItem>
-            <TDescriptionItem v-if="config?.configPath" label="Config file">
+            <TDescriptionItem v-if="config?.configPath" :label="t('overview.configFile')">
               <TText family="mono" size="xs">{{ config.configPath }}</TText>
             </TDescriptionItem>
           </TDescriptionList>
@@ -259,9 +267,9 @@ onBeforeUnmount(() => {
       <TCard variant="outline">
         <template #header>
           <TStack direction="horizontal" justify="space-between" align="center">
-            <TText weight="semibold">Exposed ports</TText>
+            <TText weight="semibold">{{ t('overview.exposedPorts') }}</TText>
             <TText tone="muted" size="xs">
-              What to point your SDKs, curl and browser at
+              {{ t('overview.exposedPortsHint') }}
             </TText>
           </TStack>
         </template>
@@ -273,53 +281,53 @@ onBeforeUnmount(() => {
           >
             <TStack direction="horizontal" gap="0.5rem" align="center" wrap justify="flex-end">
               <TText tone="muted" size="xs">{{ entry.description }}</TText>
-              <TBadge :tone="portKindTone[entry.kind]" variant="soft">{{ portKindLabel[entry.kind] }}</TBadge>
+              <TBadge :tone="portKindTone[entry.kind]" variant="soft">{{ portKindLabel(entry.kind) }}</TBadge>
               <TText family="mono" size="sm">{{ entry.url }}</TText>
             </TStack>
           </TDescriptionItem>
         </TDescriptionList>
-        <TText v-else tone="muted" size="sm">No ports reported — is the orchestrator healthy?</TText>
+        <TText v-else tone="muted" size="sm">{{ t('overview.noPorts') }}</TText>
       </TCard>
 
       <!-- Totalizers -->
       <TGrid :columns="5" gap="1rem">
         <TStat
-          label="Services running"
+          :label="t('overview.statServicesRunning')"
           :value="`${runningServices} / ${totalServices}`"
           tone="success"
         />
         <TStat
-          label="Lambdas online"
+          :label="t('overview.statLambdasOnline')"
           :value="`${lambdasOnline} / ${totalLambdas}`"
           tone="success"
         />
         <TStat
-          label="API routes"
+          :label="t('overview.statApiRoutes')"
           :value="apiRoutesTotal"
           tone="info"
         />
         <TStat
-          label="DynamoDB tables"
+          :label="t('overview.statDynamoTables')"
           :value="resources.tables.length"
           tone="info"
         />
         <TStat
-          label="SQS queues"
+          :label="t('overview.statSqsQueues')"
           :value="resources.queues.length"
           tone="warning"
         />
         <TStat
-          label="SNS topics"
+          :label="t('overview.statSnsTopics')"
           :value="resources.topics.length"
           tone="info"
         />
         <TStat
-          label="S3 buckets"
+          :label="t('overview.statS3Buckets')"
           :value="resources.buckets.length"
           tone="neutral"
         />
         <TStat
-          label="OpenSearch collections"
+          :label="t('overview.statOpenSearchCollections')"
           :value="resources.collections?.length ?? 0"
           tone="info"
         />
@@ -329,9 +337,9 @@ onBeforeUnmount(() => {
       <TCard variant="outline">
         <template #header>
           <TStack direction="horizontal" justify="space-between" align="center">
-            <TText weight="semibold">What's covered</TText>
+            <TText weight="semibold">{{ t('overview.whatsCovered') }}</TText>
             <TText tone="muted" size="xs">
-              Resource types LSS understands today
+              {{ t('overview.whatsCoveredHint') }}
             </TText>
           </TStack>
         </template>
@@ -350,7 +358,7 @@ onBeforeUnmount(() => {
                     :tone="item.status === 'covered' ? 'success' : 'neutral'"
                     variant="soft"
                   >
-                    {{ item.status === 'covered' ? 'Supported' : 'Planned' }}
+                    {{ item.status === 'covered' ? t('overview.supported') : t('overview.planned') }}
                   </TBadge>
                 </TStack>
                 <TText tone="muted" size="sm">
@@ -362,7 +370,7 @@ onBeforeUnmount(() => {
                 :to="item.to"
                 style="text-decoration: none;"
               >
-                <TButton size="sm" variant="ghost">Open <TIcon name="arrow-right" /></TButton>
+                <TButton size="sm" variant="ghost">{{ t('overview.open') }} <TIcon name="arrow-right" /></TButton>
               </RouterLink>
             </TStack>
           </TCard>

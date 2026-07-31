@@ -69,7 +69,7 @@ the engine. `autoPackage` can run the packaging command on demand when the templ
 |---|---|---|
 | Registration API | `POST /api/services/register` with a bare `{ servicePath }` is complete: the orchestrator packages when the template is missing (`autoPackage`) and reads name/region/`custom.lss` ports from the packaged `serverless-state.json`. Explicit `apiPort`/`invokePort`/`region` in the payload win over the state hints; `serviceRuntime` (config) wins over both. | unit (`routes/services`, `serverless-state-parser`) + integration |
 | Service discovery | `GET /api/services/scan` / `lss scan` walk the project root (depth ≤ 6, dependency/build/VCS trees skipped, a service root is a leaf) and report every Serverless/osls service with `installed`/`packaged`/`registered` flags plus effective ports and package command (`serviceRuntime`/`servicePackaging` overlays win over yml hints — same precedence registration applies). | unit (`service-scanner`, `routes/services`, `cli`) |
-| Preparation endpoints | `POST /api/services/install` runs a dependency install in the service dir (default `npm install`; first token whitelisted to npm/npx/yarn/pnpm/node) and `POST /api/services/package` runs the effective package command (global merged with the `servicePackaging` override). Both answer `{ exitCode, durationMs, output }`, 422 with the output tail on failure. | unit (`routes/services`) |
+| Preparation endpoints | `POST /api/services/install` runs a dependency install in the service dir (default `npm install`) and `POST /api/services/package` runs the effective package command (global merged with the `servicePackaging` override). Both answer `{ exitCode, durationMs, output }`, 422 with the output tail on failure. Both confine `servicePath` to the project root, and the install command is validated by **shape** — package manager + install verb + flags only — so `node -e …`, `npm exec …` and `npm install <other-package>` are all rejected. | unit (`routes/services`) |
 | CLI registration | `lss register [path...]` (defaults to `.`) POSTs each path and exits non-zero if any fails; `lss scan` prints the checklist. | unit (`cli`) + integration (live proof) |
 | Guided onboarding | First dashboard visit with no services opens a 3-step flow — ports, branding, project scan with tick-to-select and install → package → register buttons; per-service ports and package commands are editable inline and persist to `lss.config.json` (`serviceRuntime`/`servicePackaging`, merged per entry so sibling settings survive). Reopenable from Settings. | vue-tsc + manual |
 | Service lifecycle API | `GET/DELETE /api/services`, `PATCH /:name/status`, `POST /:name/start|stop`, `GET /:name/logs`. | unit (`routes/services`) |
@@ -154,6 +154,17 @@ favicon, defaultTheme, plus `colors`/`themeColors` as TreeUI token overrides) cu
 at `GET /api/config/branding`; local logo/favicon files are exposed at `GET /api/config/branding/logo|favicon`.
 A working showcase (logo file + per-theme colors) ships with `examples/self-hosted` — every project under
 `examples/` carries its own branding block. Asserted by: unit (`config-manager` "branding" block).
+
+### Languages (dashboard + CLI)
+
+Both interfaces speak **English, Brazilian Portuguese and Spanish**. The dashboard picks the language
+from a stored choice, else the browser's `navigator.languages` (`pt` → `pt-BR`, `es-AR` → `es`,
+anything unknown → English); switch it in the ⋮ menu and the choice is remembered per browser. The CLI
+resolves `LSS_LANG` first, then the POSIX `LC_ALL` / `LC_MESSAGES` / `LANG` chain, and falls back to
+English. Both layers are hand-rolled and dependency-free (`src/ui/src/i18n/`, `bin/i18n.js`): a missing
+key falls back to English and then to the key itself, so an untranslated screen still renders something
+actionable. AWS proper nouns, config keys, CLI commands and flags are deliberately never translated.
+Asserted by: unit (`cli/i18n`) + `vue-tsc`.
 
 ## 11. Programmatic client (`LssClient`)
 

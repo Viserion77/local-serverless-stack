@@ -9,7 +9,9 @@ import { api } from '../../services/api';
 import type {
   QueueSnapshot, SqsMessage, SqsMessageAttributeInput,
 } from '../../services/api';
+import { useI18n } from '../../i18n';
 
+const { t } = useI18n();
 const props = defineProps<{ queue: QueueSnapshot }>();
 const emit = defineEmits<{ (e: 'refresh'): void }>();
 
@@ -44,13 +46,15 @@ const attrTypeOptions = [
 
 const isFifo = computed(() => props.queue.fifo);
 
-const messagesColumns = [
-  { key: 'preview', label: 'Body preview' },
-  { key: 'messageId', label: 'Message ID' },
-  { key: 'sentAt', label: 'Sent at' },
-  { key: 'attrs', label: 'Attrs', align: 'right' as const },
+// Computed so the headers follow a language switch — `t()` is only reactive
+// when it runs inside a render/computed, never hoisted to a module const.
+const messagesColumns = computed(() => [
+  { key: 'preview', label: t('queues.colBodyPreview') },
+  { key: 'messageId', label: t('queues.colMessageId') },
+  { key: 'sentAt', label: t('queues.colSentAt') },
+  { key: 'attrs', label: t('queues.colAttrs'), align: 'right' as const },
   { key: 'actions', label: '', align: 'right' as const },
-];
+]);
 
 const messagesRows = computed(() =>
   messages.value.map((m, idx) => ({
@@ -101,7 +105,7 @@ function toggleExpanded(id: string) {
 
 async function send() {
   if (!body.value.trim()) {
-    sendError.value = 'Message body is required';
+    sendError.value = t('queues.bodyRequired');
     return;
   }
   sending.value = true;
@@ -118,13 +122,13 @@ async function send() {
     });
     lastSent.value = { messageId: result.messageId, sequenceNumber: result.sequenceNumber };
     toast.add({
-      title: 'Message sent',
+      title: t('queues.messageSent'),
       description: result.messageId,
       variant: 'success',
     });
     emit('refresh');
   } catch (err: any) {
-    sendError.value = err.message || 'Failed to send message';
+    sendError.value = err.message || t('queues.sendFailed');
   } finally {
     sending.value = false;
   }
@@ -142,14 +146,14 @@ async function poll() {
     messages.value = res.messages;
     if (!res.messages.length) {
       toast.add({
-        title: 'No messages available',
-        description: 'The queue returned an empty batch.',
+        title: t('queues.noMessagesAvailable'),
+        description: t('queues.noMessagesAvailableDescription'),
         variant: 'info',
       });
     }
     emit('refresh');
   } catch (err: any) {
-    pollError.value = err.message || 'Failed to poll messages';
+    pollError.value = err.message || t('queues.pollFailed');
   } finally {
     polling.value = false;
   }
@@ -161,11 +165,11 @@ async function deleteOne(m: SqsMessage) {
   try {
     await api.deleteQueueMessage(props.queue.name, m.receiptHandle);
     messages.value = messages.value.filter(x => x.messageId !== m.messageId);
-    toast.add({ title: 'Message deleted', variant: 'success' });
+    toast.add({ title: t('queues.messageDeleted'), variant: 'success' });
     emit('refresh');
   } catch (err: any) {
     toast.add({
-      title: 'Failed to delete message',
+      title: t('queues.deleteFailed'),
       description: err.message,
       variant: 'danger',
     });
@@ -180,14 +184,14 @@ async function doPurge() {
     await api.purgeQueue(props.queue.name);
     messages.value = [];
     toast.add({
-      title: 'Queue purged',
-      description: 'All messages were removed. It can take up to 60s to fully clear.',
+      title: t('queues.queuePurged'),
+      description: t('queues.queuePurgedDescription'),
       variant: 'warning',
     });
     emit('refresh');
   } catch (err: any) {
     toast.add({
-      title: 'Failed to purge queue',
+      title: t('queues.purgeFailed'),
       description: err.message,
       variant: 'danger',
     });
@@ -199,7 +203,7 @@ async function doPurge() {
 
 function copyToClipboard(text: string) {
   navigator.clipboard?.writeText(text).then(() => {
-    toast.add({ title: 'Copied to clipboard', variant: 'info' });
+    toast.add({ title: t('queues.copiedToClipboard'), variant: 'info' });
   });
 }
 </script>
@@ -209,13 +213,13 @@ function copyToClipboard(text: string) {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <TText weight="semibold">Send a message</TText>
+          <TText weight="semibold">{{ t('queues.sendMessageTitle') }}</TText>
           <TBadge v-if="isFifo" tone="info" variant="soft">FIFO</TBadge>
         </TStack>
       </template>
 
       <TStack direction="vertical" gap="0.75rem">
-        <TFormField label="Message body" hint="Plain text or JSON">
+        <TFormField :label="t('queues.messageBody')" :hint="t('queues.messageBodyHint')">
           <TTextarea
             v-model="body"
             :rows="6"
@@ -226,7 +230,7 @@ function copyToClipboard(text: string) {
         <TStack direction="horizontal" gap="1rem">
           <TFormField
             v-if="!isFifo"
-            label="Delay (seconds)"
+            :label="t('queues.delayLabel')"
             hint="0–900"
             style="flex: 1;"
           >
@@ -235,7 +239,7 @@ function copyToClipboard(text: string) {
           <TFormField
             v-if="isFifo"
             label="MessageGroupId"
-            hint="Required for FIFO. Defaults to 'default'."
+            :hint="t('queues.groupIdHint')"
             style="flex: 1;"
           >
             <TInput v-model="messageGroupId" placeholder="default" />
@@ -243,7 +247,7 @@ function copyToClipboard(text: string) {
           <TFormField
             v-if="isFifo"
             label="MessageDeduplicationId"
-            hint="Optional if content-based dedup is on"
+            :hint="t('queues.dedupIdHint')"
             style="flex: 1;"
           >
             <TInput v-model="messageDeduplicationId" placeholder="auto" />
@@ -252,8 +256,10 @@ function copyToClipboard(text: string) {
 
         <TStack direction="vertical" gap="0.5rem">
           <TStack direction="horizontal" justify="space-between" align="center">
-            <TText weight="semibold" size="sm">Message attributes – optional</TText>
-            <TButton size="sm" variant="outline" @click="addAttr">Add attribute</TButton>
+            <TText weight="semibold" size="sm">{{ t('queues.messageAttributesOptional') }}</TText>
+            <TButton size="sm" variant="outline" @click="addAttr">
+              {{ t('queues.addAttribute') }}
+            </TButton>
           </TStack>
           <TStack
             v-for="(a, i) in attrs"
@@ -262,16 +268,18 @@ function copyToClipboard(text: string) {
             gap="0.5rem"
             align="end"
           >
-            <TFormField label="Name" style="flex: 1.4;">
+            <TFormField :label="t('common.name')" style="flex: 1.4;">
               <TInput v-model="a.name" placeholder="contentType" />
             </TFormField>
-            <TFormField label="Type" style="flex: 0.9;">
+            <TFormField :label="t('common.type')" style="flex: 0.9;">
               <TSelect v-model="a.type" :options="attrTypeOptions" />
             </TFormField>
-            <TFormField label="Value" style="flex: 2;">
+            <TFormField :label="t('queues.value')" style="flex: 2;">
               <TInput v-model="a.value" placeholder="application/json" />
             </TFormField>
-            <TButton size="sm" variant="outline" @click="removeAttr(i)">Remove</TButton>
+            <TButton size="sm" variant="outline" @click="removeAttr(i)">
+              {{ t('queues.remove') }}
+            </TButton>
           </TStack>
         </TStack>
       </TStack>
@@ -279,11 +287,15 @@ function copyToClipboard(text: string) {
       <template #footer>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
           <TStack direction="horizontal" gap="0.5rem" align="center">
-            <TButton variant="solid" :loading="sending" @click="send">Send message</TButton>
-            <TButton variant="ghost" :disabled="sending" @click="body = ''">Clear</TButton>
+            <TButton variant="solid" :loading="sending" @click="send">
+              {{ t('queues.sendMessage') }}
+            </TButton>
+            <TButton variant="ghost" :disabled="sending" @click="body = ''">
+              {{ t('queues.clear') }}
+            </TButton>
           </TStack>
           <TText v-if="lastSent" tone="muted" family="mono" size="xs">
-            Last sent: {{ lastSent.messageId }}
+            {{ t('queues.lastSent') }} {{ lastSent.messageId }}
             <template v-if="lastSent.sequenceNumber">
               · seq {{ lastSent.sequenceNumber }}
             </template>
@@ -299,25 +311,29 @@ function copyToClipboard(text: string) {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <TText weight="semibold">Poll for messages</TText>
+          <TText weight="semibold">{{ t('queues.pollTitle') }}</TText>
           <TBadge tone="warning" variant="soft">
-            Messages become invisible during the visibility timeout
+            {{ t('queues.visibilityNotice') }}
           </TBadge>
         </TStack>
       </template>
 
       <TStack direction="horizontal" gap="1rem">
-        <TFormField label="Max messages" hint="1–10" style="flex: 1;">
+        <TFormField :label="t('queues.maxMessages')" hint="1–10" style="flex: 1;">
           <TInput v-model.number="maxMessages" type="number" min="1" max="10" />
         </TFormField>
         <TFormField
-          label="Visibility timeout (s)"
-          hint="0 keeps messages visible"
+          :label="t('queues.visibilityTimeoutSeconds')"
+          :hint="t('queues.visibilityTimeoutHint')"
           style="flex: 1;"
         >
           <TInput v-model.number="visibilityTimeout" type="number" min="0" />
         </TFormField>
-        <TFormField label="Wait time (s)" hint="0–20 (long polling)" style="flex: 1;">
+        <TFormField
+          :label="t('queues.waitTime')"
+          :hint="t('queues.waitTimeHint')"
+          style="flex: 1;"
+        >
           <TInput v-model.number="waitTimeSeconds" type="number" min="0" max="20" />
         </TFormField>
       </TStack>
@@ -325,13 +341,15 @@ function copyToClipboard(text: string) {
       <template #footer>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
           <TStack direction="horizontal" gap="0.5rem">
-            <TButton variant="solid" :loading="polling" @click="poll">Poll messages</TButton>
+            <TButton variant="solid" :loading="polling" @click="poll">
+              {{ t('queues.pollMessages') }}
+            </TButton>
             <TButton variant="ghost" :disabled="!messages.length" @click="messages = []">
-              Clear results
+              {{ t('queues.clearResults') }}
             </TButton>
           </TStack>
           <TButton size="sm" variant="outline" tone="danger" @click="confirmPurgeOpen = true">
-            Purge queue
+            {{ t('queues.purgeQueue') }}
           </TButton>
         </TStack>
       </template>
@@ -344,24 +362,31 @@ function copyToClipboard(text: string) {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <TText weight="semibold">Received messages ({{ messages.length }})</TText>
+          <TText weight="semibold">
+            {{ t('queues.receivedMessages', { count: messages.length }) }}
+          </TText>
           <TText tone="muted" size="xs">
-            Click a row to view the full body
+            {{ t('queues.clickRowHint') }}
           </TText>
         </TStack>
       </template>
 
       <TStack v-if="polling && !messages.length" direction="horizontal" justify="center" align="center">
-        <TSpinner label="Polling..." />
+        <TSpinner :label="t('queues.polling')" />
       </TStack>
 
       <TEmptyState
         v-else-if="!messages.length"
-        title="No messages loaded"
-        description="Use Poll messages to fetch a batch from the queue."
+        :title="t('queues.noMessagesLoaded')"
+        :description="t('queues.noMessagesLoadedDescription')"
       />
 
-      <TTable v-else :columns="messagesColumns" :rows="messagesRows" aria-label="Received messages">
+      <TTable
+        v-else
+        :columns="messagesColumns"
+        :rows="messagesRows"
+        :aria-label="t('queues.receivedMessagesAria')"
+      >
         <template #cell-preview="{ row }">
           <a
             href="#"
@@ -397,7 +422,7 @@ function copyToClipboard(text: string) {
               variant="ghost"
               @click="copyToClipboard(String((row as any).__raw.body || ''))"
             >
-              Copy
+              {{ t('common.copy') }}
             </TButton>
             <TButton
               size="sm"
@@ -406,7 +431,7 @@ function copyToClipboard(text: string) {
               :loading="deleting[String((row as any).messageId)]"
               @click="deleteOne((row as any).__raw)"
             >
-              Delete
+              {{ t('common.delete') }}
             </TButton>
           </TStack>
         </template>
@@ -434,7 +459,7 @@ function copyToClipboard(text: string) {
             </TStack>
 
             <div v-if="m.messageAttributes && Object.keys(m.messageAttributes).length">
-              <TText weight="semibold" size="sm">Message attributes</TText>
+              <TText weight="semibold" size="sm">{{ t('queues.messageAttributes') }}</TText>
               <TStack direction="horizontal" gap="0.375rem" wrap>
                 <TBadge
                   v-for="(v, k) in m.messageAttributes"
@@ -448,7 +473,13 @@ function copyToClipboard(text: string) {
             </div>
 
             <TDivider />
-            <TCodeBlock :code="formatJsonIfPossible(m.body)" label="Message body" max-block-size="24rem" wrap copyable />
+            <TCodeBlock
+              :code="formatJsonIfPossible(m.body)"
+              :label="t('queues.messageBody')"
+              max-block-size="24rem"
+              wrap
+              copyable
+            />
           </TStack>
         </div>
       </template>
@@ -456,10 +487,10 @@ function copyToClipboard(text: string) {
 
     <TConfirmDialog
       v-model:open="confirmPurgeOpen"
-      title="Purge queue"
-      :description="`Delete every message in '${props.queue.name}'? AWS rate-limits PurgeQueue to once every 60 seconds.`"
-      confirm-label="Purge"
-      cancel-label="Cancel"
+      :title="t('queues.purgeQueue')"
+      :description="t('queues.purgeConfirmDescription', { queue: props.queue.name })"
+      :confirm-label="t('queues.purgeConfirmLabel')"
+      :cancel-label="t('common.cancel')"
       tone="danger"
       :loading="purging"
       @confirm="doPurge"

@@ -18,18 +18,25 @@ import { api } from '../services/api';
 import type { LssConfigSnapshot, ScannedService } from '../services/api';
 import { loadBranding } from '../services/branding';
 import { markOnboardingDone } from '../services/onboarding';
+import { useI18n } from '../i18n';
 
 const router = useRouter();
+const { t } = useI18n();
 
-const STEPS: TStepItem[] = [
-  { value: 'ports', label: 'Ports', description: 'One port for everything' },
-  { value: 'brand', label: 'Brand', description: 'Make the dashboard yours' },
-  { value: 'services', label: 'Services', description: 'Scan and register' },
-];
+// Only the keys live at module scope — the copy is resolved inside the computed
+// below so switching language re-renders the stepper instead of freezing the
+// labels captured at setup time.
+const STEPS = [
+  { value: 'ports', labelKey: 'onboarding.stepPorts', descriptionKey: 'onboarding.stepPortsDescription' },
+  { value: 'brand', labelKey: 'onboarding.stepBrand', descriptionKey: 'onboarding.stepBrandDescription' },
+  { value: 'services', labelKey: 'onboarding.stepServices', descriptionKey: 'onboarding.stepServicesDescription' },
+] as const;
 const step = ref<'ports' | 'brand' | 'services'>('ports');
-const stepItems = computed(() =>
+const stepItems = computed<TStepItem[]>(() =>
   STEPS.map((item, index) => ({
-    ...item,
+    value: item.value,
+    label: t(item.labelKey),
+    description: t(item.descriptionKey),
     status: item.value === step.value
       ? 'current' as const
       : index < STEPS.findIndex(s => s.value === step.value) ? 'complete' as const : 'upcoming' as const,
@@ -60,7 +67,7 @@ async function savePorts(): Promise<void> {
     }
     step.value = 'brand';
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to save ports';
+    error.value = e instanceof Error ? e.message : t('onboarding.portsSaveFailed');
   } finally {
     ports.saving = false;
   }
@@ -68,10 +75,11 @@ async function savePorts(): Promise<void> {
 
 // ---- step 2: branding -----------------------------------------------------
 const brand = reactive({ title: '', subtitle: '', theme: 'dark', primary: '', saving: false });
-const themeOptions = [
-  { value: 'dark', label: 'Dark' },
-  { value: 'light', label: 'Light' },
-];
+// Computed, not a const: the toggle relabels itself on a language switch.
+const themeOptions = computed(() => [
+  { value: 'dark', label: t('onboarding.themeDark') },
+  { value: 'light', label: t('onboarding.themeLight') },
+]);
 
 async function saveBrand(): Promise<void> {
   brand.saving = true;
@@ -90,7 +98,7 @@ async function saveBrand(): Promise<void> {
     step.value = 'services';
     void scan();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to save branding';
+    error.value = e instanceof Error ? e.message : t('onboarding.brandSaveFailed');
   } finally {
     brand.saving = false;
   }
@@ -149,7 +157,7 @@ async function scan(): Promise<void> {
       resultWarnings: [],
     }));
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Scan failed';
+    error.value = e instanceof Error ? e.message : t('onboarding.scanFailed');
   } finally {
     scanning.value = false;
   }
@@ -189,7 +197,7 @@ async function persistOverrides(): Promise<boolean> {
     const apiPort = parsePort(row.editApiPort);
     const invokePort = parsePort(row.editInvokePort);
     if (apiPort === 'invalid' || invokePort === 'invalid') {
-      error.value = `${row.name}: ports must be integers between 1024 and 65535`;
+      error.value = t('onboarding.portRangeError', { name: row.name });
       return false;
     }
     const entry: { apiPort?: number | null; invokePort?: number | null } = {};
@@ -219,7 +227,7 @@ async function persistOverrides(): Promise<boolean> {
     await refreshEffective();
     return true;
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Failed to save service settings';
+    error.value = e instanceof Error ? e.message : t('onboarding.serviceSettingsSaveFailed');
     return false;
   }
 }
@@ -251,6 +259,14 @@ async function refreshEffective(): Promise<void> {
   }
 }
 
+// The generic failure line for each bulk action, resolved at call time so the
+// message follows the current language.
+const ACTION_FAILED_KEYS: Record<'install' | 'package' | 'register', string> = {
+  install: 'onboarding.installFailed',
+  package: 'onboarding.packageFailed',
+  register: 'onboarding.registerFailed',
+};
+
 // One sequential runner for the three bulk actions: parallel runs would
 // interleave npm/serverless output and port claims.
 async function runSelected(
@@ -272,7 +288,7 @@ async function runSelected(
       await run(row);
     } catch (e) {
       row.status = 'failed';
-      row.resultMessage = e instanceof Error ? e.message : `${action} failed`;
+      row.resultMessage = e instanceof Error ? e.message : t(ACTION_FAILED_KEYS[action]);
       row.resultOutput = extractOutput(e);
     }
   }
@@ -290,20 +306,24 @@ const installSelected = () => runSelected('install', 'installing', async (row) =
   const res = await api.installService(row.root);
   row.installed = true;
   row.status = 'idle';
-  row.resultMessage = `dependencies installed in ${(res.durationMs / 1000).toFixed(1)}s`;
+  row.resultMessage = t('onboarding.installedIn', { seconds: (res.durationMs / 1000).toFixed(1) });
 });
 
 const packageSelected = () => runSelected('package', 'packaging', async (row) => {
   const res = await api.packageService(row.root);
   row.packaged = true;
   row.status = 'idle';
-  row.resultMessage = `packaged in ${(res.durationMs / 1000).toFixed(1)}s`;
+  row.resultMessage = t('onboarding.packagedIn', { seconds: (res.durationMs / 1000).toFixed(1) });
 });
 
 const registerSelected = () => runSelected('register', 'registering', async (row) => {
   const res = await api.registerService(row.root);
   row.status = 'done';
-  row.resultMessage = `${res.resourcesCount} resource(s), ${res.functionsCount} function(s), ${res.routesCount} route(s)`;
+  row.resultMessage = t('onboarding.registerSummary', {
+    resources: res.resourcesCount,
+    functions: res.functionsCount,
+    routes: res.routesCount,
+  });
   row.resultWarnings = res.warnings;
 });
 
@@ -321,9 +341,9 @@ async function finish(): Promise<void> {
 const registerLabel = computed(() => {
   const selected = rows.value.filter(r => r.selected);
   const fresh = selected.filter(r => !r.registered).length;
-  if (selected.length === 0) return 'Register';
-  if (fresh === 0) return `Re-register ${selected.length} service(s)`;
-  return `Register ${selected.length} service(s)`;
+  if (selected.length === 0) return t('onboarding.register');
+  if (fresh === 0) return t('onboarding.reRegisterCount', { count: selected.length });
+  return t('onboarding.registerCount', { count: selected.length });
 });
 
 function rowTone(row: Row): 'success' | 'danger' | 'info' | 'neutral' {
@@ -334,13 +354,13 @@ function rowTone(row: Row): 'success' | 'danger' | 'info' | 'neutral' {
 }
 
 function rowLabel(row: Row): string {
-  if (row.registered || row.status === 'done') return 'registered';
-  if (row.status === 'failed') return 'failed';
-  if (row.status === 'installing') return 'installing…';
-  if (row.status === 'packaging') return 'packaging…';
-  if (row.status === 'registering') return 'registering…';
-  if (!row.installed) return 'not installed';
-  return row.packaged ? 'packaged' : 'not packaged';
+  if (row.registered || row.status === 'done') return t('onboarding.statusRegistered');
+  if (row.status === 'failed') return t('onboarding.statusFailed');
+  if (row.status === 'installing') return t('onboarding.statusInstalling');
+  if (row.status === 'packaging') return t('onboarding.statusPackaging');
+  if (row.status === 'registering') return t('onboarding.statusRegistering');
+  if (!row.installed) return t('onboarding.statusNotInstalled');
+  return row.packaged ? t('onboarding.statusPackaged') : t('onboarding.statusNotPackaged');
 }
 
 onMounted(async () => {
@@ -354,7 +374,7 @@ onMounted(async () => {
     brand.theme = cfg.branding.defaultTheme;
     brand.primary = cfg.branding.colors['brand-primary'] ?? '';
   } catch (e) {
-    error.value = e instanceof Error ? e.message : 'Could not load the configuration';
+    error.value = e instanceof Error ? e.message : t('onboarding.configLoadFailed');
   }
 });
 </script>
@@ -364,13 +384,11 @@ onMounted(async () => {
     <TCard variant="outline">
       <TStack direction="vertical" gap="1rem">
         <TStack direction="horizontal" gap="0.75rem" align="center" wrap>
-          <TText size="xl" weight="semibold">Welcome to LSS</TText>
-          <TBadge tone="info" variant="soft">guided setup</TBadge>
+          <TText size="xl" weight="semibold">{{ t('onboarding.welcome') }}</TText>
+          <TBadge tone="info" variant="soft">{{ t('onboarding.guidedSetup') }}</TBadge>
         </TStack>
         <TText tone="muted">
-          Three steps: confirm the port layout, brand the dashboard, then scan this project for
-          Serverless/osls services and register the ones you want. Everything here is editable
-          later in Settings.
+          {{ t('onboarding.intro') }}
         </TText>
         <TSteps :items="stepItems" :model-value="step" size="sm" />
       </TStack>
@@ -380,60 +398,59 @@ onMounted(async () => {
 
     <!-- Step 1: ports -->
     <TCard v-if="step === 'ports'" variant="outline">
-      <template #header><TText weight="semibold">Ports</TText></template>
+      <template #header><TText weight="semibold">{{ t('onboarding.stepPorts') }}</TText></template>
       <TStack direction="vertical" gap="0.75rem">
         <TText tone="muted">
-          By default the dashboard, the REST API and the AWS wire share one port — your services
-          point <TText family="mono" size="sm">AWS_ENDPOINT</TText> at the same URL you are looking
-          at now. Give the two values below different ports to split them.
+          {{ t('onboarding.portsIntroBefore') }}
+          <TText family="mono" size="sm">AWS_ENDPOINT</TText>
+          {{ t('onboarding.portsIntroAfter') }}
         </TText>
         <TGrid :columns="2" gap="0.75rem">
-          <TFormField label="Stack port (serverPort)" hint="Dashboard + REST API">
+          <TFormField :label="t('onboarding.serverPortLabel')" :hint="t('onboarding.serverPortHint')">
             <TInput v-model.number="ports.serverPort" type="number" min="1024" max="65535" />
           </TFormField>
-          <TFormField label="Engine port (selfEngine.port)" hint="AWS wire — equal means one listener">
+          <TFormField :label="t('onboarding.enginePortLabel')" :hint="t('onboarding.enginePortHint')">
             <TInput v-model.number="ports.enginePort" type="number" min="1024" max="65535" />
           </TFormField>
         </TGrid>
         <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
           <TBadge :tone="singleListener ? 'success' : 'info'" variant="soft">
-            {{ singleListener ? 'single listener — one port for everything' : 'two listeners' }}
+            {{ singleListener ? t('onboarding.singleListener') : t('onboarding.twoListeners') }}
           </TBadge>
           <TTag v-if="restartRequired.length" size="sm" variant="soft">
-            restart required: lss stop && lss start
+            {{ t('onboarding.restartRequired') }} lss stop && lss start
           </TTag>
         </TStack>
         <TStack direction="horizontal" gap="0.5rem" justify="flex-end">
-          <TButton variant="solid" :loading="ports.saving" @click="savePorts">Continue</TButton>
+          <TButton variant="solid" :loading="ports.saving" @click="savePorts">{{ t('common.continue') }}</TButton>
         </TStack>
       </TStack>
     </TCard>
 
     <!-- Step 2: branding -->
     <TCard v-if="step === 'brand'" variant="outline">
-      <template #header><TText weight="semibold">Brand</TText></template>
+      <template #header><TText weight="semibold">{{ t('onboarding.stepBrand') }}</TText></template>
       <TStack direction="vertical" gap="0.75rem">
         <TText tone="muted">
-          Title, subtitle and colors show on every screen — teams usually put the product or squad
-          name here. Applied live, no restart.
+          {{ t('onboarding.brandIntro') }}
         </TText>
         <TGrid :columns="2" gap="0.75rem">
-          <TFormField label="Title" hint="Blank keeps the default">
+          <TFormField :label="t('onboarding.titleLabel')" :hint="t('onboarding.titleHint')">
             <TInput v-model="brand.title" placeholder="Local Serverless Stack" />
           </TFormField>
-          <TFormField label="Subtitle">
-            <TInput v-model="brand.subtitle" placeholder="Local development control plane" />
+          <TFormField :label="t('onboarding.subtitleLabel')">
+            <TInput v-model="brand.subtitle" :placeholder="t('onboarding.subtitlePlaceholder')" />
           </TFormField>
-          <TFormField label="Default theme">
+          <TFormField :label="t('onboarding.themeLabel')">
             <TToggleGroup v-model="brand.theme" :options="themeOptions" size="md" />
           </TFormField>
-          <TFormField label="Brand color" hint="Any CSS color — blank keeps the default">
+          <TFormField :label="t('onboarding.brandColorLabel')" :hint="t('onboarding.brandColorHint')">
             <TInput v-model="brand.primary" placeholder="#0d9488" />
           </TFormField>
         </TGrid>
         <TStack direction="horizontal" gap="0.5rem" justify="space-between">
-          <TButton variant="ghost" @click="step = 'ports'">Back</TButton>
-          <TButton variant="solid" :loading="brand.saving" @click="saveBrand">Continue</TButton>
+          <TButton variant="ghost" @click="step = 'ports'">{{ t('common.back') }}</TButton>
+          <TButton variant="solid" :loading="brand.saving" @click="saveBrand">{{ t('common.continue') }}</TButton>
         </TStack>
       </TStack>
     </TCard>
@@ -442,38 +459,35 @@ onMounted(async () => {
     <TCard v-if="step === 'services'" variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between" wrap>
-          <TText weight="semibold">Services</TText>
-          <TButton size="sm" variant="ghost" :loading="scanning" @click="scan">Rescan</TButton>
+          <TText weight="semibold">{{ t('onboarding.stepServices') }}</TText>
+          <TButton size="sm" variant="ghost" :loading="scanning" @click="scan">{{ t('onboarding.rescan') }}</TButton>
         </TStack>
       </template>
       <TStack direction="vertical" gap="0.75rem">
         <TText tone="muted">
-          Already-registered services stay editable: change a port or the package command and
-          register again to apply it.
+          {{ t('onboarding.servicesIntro') }}
         </TText>
         <TText tone="muted">
-          Every Serverless/osls service found under
-          <TText family="mono" size="sm">{{ projectRoot || '…' }}</TText>. Pick the ones to bring
-          into LSS — install dependencies and package right here if needed, then register:
-          registration provisions the declared AWS resources and wires the event sources.
-          Edited ports and package commands are saved to
+          {{ t('onboarding.scanIntroBefore') }}
+          <TText family="mono" size="sm">{{ projectRoot || '…' }}</TText>.
+          {{ t('onboarding.scanIntroAfter') }}
           <TText family="mono" size="sm">lss.config.json</TText>
           (<TText family="mono" size="sm">serviceRuntime</TText> / <TText family="mono" size="sm">servicePackaging</TText>).
         </TText>
 
         <TStack v-if="scanning" direction="horizontal" justify="center">
-          <TSpinner label="Scanning project…" />
+          <TSpinner :label="t('onboarding.scanning')" />
         </TStack>
 
         <TAlert v-else-if="rows.length === 0" variant="info">
-          No Serverless/osls services found. Create one with a serverless.yml and hit Rescan — or
-          register a path directly with <TText family="mono" size="sm">npx lss register &lt;dir&gt;</TText>.
+          {{ t('onboarding.emptyScan') }}
+          <TText family="mono" size="sm">npx lss register &lt;dir&gt;</TText>.
         </TAlert>
 
         <template v-else>
           <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
-            <TCheckbox v-model="allSelected">select all</TCheckbox>
-            <TText tone="muted" size="sm">{{ selectedCount }} selected</TText>
+            <TCheckbox v-model="allSelected">{{ t('onboarding.selectAll') }}</TCheckbox>
+            <TText tone="muted" size="sm">{{ t('onboarding.selectedCount', { count: selectedCount }) }}</TText>
           </TStack>
           <TDivider />
           <TStack direction="vertical" gap="0.75rem">
@@ -494,13 +508,13 @@ onMounted(async () => {
                 </TStack>
                 <TText tone="muted" size="sm" family="mono">{{ row.relPath }}/{{ row.configFile }}</TText>
                 <TGrid :columns="3" gap="0.5rem">
-                  <TFormField label="API port" hint="blank = the service's own custom.lss port">
+                  <TFormField :label="t('onboarding.apiPortLabel')" :hint="t('onboarding.apiPortHint')">
                     <TInput v-model="row.editApiPort" type="number" min="1024" max="65535" placeholder="3000" />
                   </TFormField>
-                  <TFormField label="Invoke port" hint="blank = api port + 10000">
+                  <TFormField :label="t('onboarding.invokePortLabel')" :hint="t('onboarding.invokePortHint')">
                     <TInput v-model="row.editInvokePort" type="number" min="1024" max="65535" placeholder="13000" />
                   </TFormField>
-                  <TFormField label="Package command" hint="blank restores the global one">
+                  <TFormField :label="t('onboarding.packageCommandLabel')" :hint="t('onboarding.packageCommandHint')">
                     <TInput v-model="row.editPackageCommand" placeholder="npx serverless package" />
                   </TFormField>
                 </TGrid>
@@ -522,7 +536,7 @@ onMounted(async () => {
         </template>
 
         <TStack direction="horizontal" gap="0.5rem" justify="space-between" wrap>
-          <TButton variant="ghost" :disabled="working !== null" @click="step = 'brand'">Back</TButton>
+          <TButton variant="ghost" :disabled="working !== null" @click="step = 'brand'">{{ t('common.back') }}</TButton>
           <TStack direction="horizontal" gap="0.5rem" wrap>
             <TButton
               variant="outline"
@@ -530,7 +544,7 @@ onMounted(async () => {
               :loading="working === 'install'"
               @click="installSelected"
             >
-              Install selected
+              {{ t('onboarding.installSelected') }}
             </TButton>
             <TButton
               variant="outline"
@@ -538,7 +552,7 @@ onMounted(async () => {
               :loading="working === 'package'"
               @click="packageSelected"
             >
-              Package selected
+              {{ t('onboarding.packageSelected') }}
             </TButton>
             <TButton
               variant="solid"
@@ -548,7 +562,7 @@ onMounted(async () => {
             >
               {{ registerLabel }}
             </TButton>
-            <TButton variant="outline" :disabled="working !== null" @click="finish">Finish</TButton>
+            <TButton variant="outline" :disabled="working !== null" @click="finish">{{ t('common.finish') }}</TButton>
           </TStack>
         </TStack>
       </TStack>
