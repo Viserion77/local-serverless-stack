@@ -42,6 +42,11 @@ function detectLocale(env = process.env) {
 
 const MESSAGES = {
   en: {
+    'scan.warning.not-installed': 'dependencies not installed — packaging needs an install first',
+    'scan.warning.not-packaged': 'not packaged yet — registering packages it for you (autoPackage)',
+    'scan.warning.ts-config': 'TypeScript service config — name, region and ports resolve at packaging time',
+    'scan.warning.unreadable-config': 'could not read {file}',
+    'scan.warning.invalid-json': 'serverless.json is not valid JSON',
     // --- config discovery --------------------------------------------------
     'config.parseFailed': '⚠️  Failed to parse config file {path}',
     'config.notFound': '⚠️  Config file not found: {path}',
@@ -193,6 +198,11 @@ const MESSAGES = {
   },
 
   'pt-BR': {
+    'scan.warning.not-installed': 'dependências não instaladas — empacotar exige instalar antes',
+    'scan.warning.not-packaged': 'ainda não empacotado — registrar empacota para você (autoPackage)',
+    'scan.warning.ts-config': 'config em TypeScript — nome, região e portas só resolvem no empacotamento',
+    'scan.warning.unreadable-config': 'não consegui ler {file}',
+    'scan.warning.invalid-json': 'serverless.json não é um JSON válido',
     'config.parseFailed': '⚠️  Não consegui ler o arquivo de config {path}',
     'config.notFound': '⚠️  Arquivo de config não encontrado: {path}',
 
@@ -329,6 +339,11 @@ const MESSAGES = {
   },
 
   es: {
+    'scan.warning.not-installed': 'dependencias sin instalar — empaquetar requiere instalarlas antes',
+    'scan.warning.not-packaged': 'aún sin empaquetar — registrar lo empaqueta por ti (autoPackage)',
+    'scan.warning.ts-config': 'config en TypeScript — nombre, región y puertos se resuelven al empaquetar',
+    'scan.warning.unreadable-config': 'no se pudo leer {file}',
+    'scan.warning.invalid-json': 'serverless.json no es un JSON válido',
     'config.parseFailed': '⚠️  No se pudo leer el archivo de configuración {path}',
     'config.notFound': '⚠️  Archivo de configuración no encontrado: {path}',
 

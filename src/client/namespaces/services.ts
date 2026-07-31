@@ -42,7 +42,15 @@ export interface ScannedService {
   invokePort?: number;
   // Effective package command for this service (servicePackaging else global).
   packageCommand: string;
-  warnings: string[];
+  // `code` is what a localised surface translates; `message` is the English
+  // fallback and what a non-localised consumer (log, script) reads.
+  warnings: ScanWarning[];
+}
+
+export interface ScanWarning {
+  code: string;
+  message: string;
+  params?: Record<string, string>;
 }
 
 // Result of the preparation endpoints (install/package).

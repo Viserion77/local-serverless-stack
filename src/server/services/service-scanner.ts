@@ -32,7 +32,20 @@ export interface ScannedService {
   apiPort?: number;
   invokePort?: number;
   // Anything the operator should fix before or after registering.
-  warnings: string[];
+  //
+  // Each carries a stable `code` AND an English `message`. The code is what a
+  // localised surface (dashboard, CLI) translates; the message keeps the
+  // payload self-explanatory for anything reading the API directly — a log, a
+  // curl, an agent — and is the fallback when a surface has no string for a
+  // code it has not seen yet.
+  warnings: ScanWarning[];
+}
+
+export interface ScanWarning {
+  code: 'not-installed' | 'not-packaged' | 'ts-config' | 'unreadable-config' | 'invalid-json';
+  message: string;
+  // Values the localised string interpolates (e.g. the config file name).
+  params?: Record<string, string>;
 }
 
 const CONFIG_FILES = ['serverless.yml', 'serverless.yaml', 'serverless.json', 'serverless.ts'];
@@ -81,15 +94,21 @@ export function scanForServices(rootDir: string, registeredRoots: Iterable<strin
   }
 
   function inspect(dir: string, configFile: string): ScannedService {
-    const warnings: string[] = [];
+    const warnings: ScanWarning[] = [];
     const hints = readHints(path.join(dir, configFile), warnings);
     const installed = hasDependencies(dir, path.resolve(rootDir));
     const packaged = fs.existsSync(path.join(dir, '.serverless', 'cloudformation-template-update-stack.json'));
     if (!installed) {
-      warnings.push('dependencies not installed — packaging needs an install first (node_modules is missing)');
+      warnings.push({
+        code: 'not-installed',
+        message: 'dependencies not installed — packaging needs an install first (node_modules is missing)',
+      });
     }
     if (!packaged) {
-      warnings.push('not packaged yet — registration will package it (autoPackage) or run `serverless package` first');
+      warnings.push({
+        code: 'not-packaged',
+        message: 'not packaged yet — registration will package it (autoPackage) or run `serverless package` first',
+      });
     }
     return {
       name: hints.name ?? path.basename(dir),
@@ -120,7 +139,11 @@ function hasDependencies(dir: string, rootDir: string): boolean {
     if (fs.existsSync(path.join(current, 'node_modules'))) return true;
     if (current === rootDir) return false;
     const parent = path.dirname(current);
-    // Defensive: a service outside the scanned root would otherwise walk to /.
+    /* istanbul ignore next -- unreachable via scanForServices: `dir` always
+       comes from walk(), which starts at the resolved rootDir and only
+       descends, so the `current === rootDir` check above always ends the loop
+       first. Kept so a future caller passing an unrelated directory cannot
+       spin at the filesystem root. */
     if (parent === current) return false;
     current = parent;
   }
@@ -136,17 +159,24 @@ interface Hints {
 // Line-oriented scrape of the obvious keys. serverless.json parses properly;
 // serverless.ts is executable code, so it only contributes the warning — the
 // packaged state resolves it for real.
-function readHints(configPath: string, warnings: string[]): Hints {
+function readHints(configPath: string, warnings: ScanWarning[]): Hints {
   let raw: string;
   try {
     raw = fs.readFileSync(configPath, 'utf-8');
   } catch {
-    warnings.push(`could not read ${path.basename(configPath)}`);
+    warnings.push({
+      code: 'unreadable-config',
+      message: `could not read ${path.basename(configPath)}`,
+      params: { file: path.basename(configPath) },
+    });
     return {};
   }
 
   if (configPath.endsWith('.ts')) {
-    warnings.push('TypeScript service config — name/region/ports resolve at packaging time');
+    warnings.push({
+      code: 'ts-config',
+      message: 'TypeScript service config — name/region/ports resolve at packaging time',
+    });
     return {};
   }
 
@@ -164,7 +194,7 @@ function readHints(configPath: string, warnings: string[]): Hints {
         invokePort: asPort(parsed.custom?.lss?.invokePort),
       };
     } catch {
-      warnings.push('serverless.json is not valid JSON');
+      warnings.push({ code: 'invalid-json', message: 'serverless.json is not valid JSON' });
       return {};
     }
   }

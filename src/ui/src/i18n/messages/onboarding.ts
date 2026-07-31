@@ -9,6 +9,11 @@ import type { AreaMessages } from './index';
 
 export const onboarding: AreaMessages = {
   en: {
+    'warning.not-installed': 'dependencies not installed — packaging needs an install first',
+    'warning.not-packaged': 'not packaged yet — registering packages it for you (autoPackage)',
+    'warning.ts-config': 'TypeScript service config — name, region and ports resolve at packaging time',
+    'warning.unreadable-config': 'could not read {file}',
+    'warning.invalid-json': 'serverless.json is not valid JSON',
     welcome: 'Welcome to LSS',
     guidedSetup: 'guided setup',
     intro: 'Three steps: confirm the port layout, brand the dashboard, then scan this project for '
@@ -97,6 +102,11 @@ export const onboarding: AreaMessages = {
     statusNotPackaged: 'not packaged',
   },
   'pt-BR': {
+    'warning.not-installed': 'dependências não instaladas — empacotar exige instalar antes',
+    'warning.not-packaged': 'ainda não empacotado — registrar empacota para você (autoPackage)',
+    'warning.ts-config': 'config em TypeScript — nome, região e portas só resolvem no empacotamento',
+    'warning.unreadable-config': 'não consegui ler {file}',
+    'warning.invalid-json': 'serverless.json não é um JSON válido',
     welcome: 'Bem-vindo ao LSS',
     guidedSetup: 'configuração guiada',
     intro: 'Três passos: confirme o layout de portas, personalize a marca do dashboard e depois '
@@ -183,6 +193,11 @@ export const onboarding: AreaMessages = {
     statusNotPackaged: 'não empacotado',
   },
   es: {
+    'warning.not-installed': 'dependencias sin instalar — empaquetar requiere instalarlas antes',
+    'warning.not-packaged': 'aún sin empaquetar — registrar lo empaqueta por ti (autoPackage)',
+    'warning.ts-config': 'config en TypeScript — nombre, región y puertos se resuelven al empaquetar',
+    'warning.unreadable-config': 'no se pudo leer {file}',
+    'warning.invalid-json': 'serverless.json no es un JSON válido',
     welcome: 'Bienvenido a LSS',
     guidedSetup: 'configuración guiada',
     intro: 'Tres pasos: confirma el esquema de puertos, personaliza la marca del panel y luego '

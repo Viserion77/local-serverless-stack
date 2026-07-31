@@ -1474,8 +1474,16 @@ describe('bin/cli.js helpers', () => {
           body: JSON.stringify({
             projectRoot: '/abs',
             services: [
-              { name: 'orders', relPath: 'services/orders', registered: true, packaged: true, apiPort: 3631, invokePort: 13631, warnings: [] },
-              { name: 'fresh', relPath: 'services/fresh', registered: false, packaged: false, warnings: ['not packaged yet'] },
+              { name: 'orders', relPath: 'services/orders', registered: true, installed: true, packaged: true, apiPort: 3631, invokePort: 13631, packageCommand: 'npx serverless package', warnings: [] },
+              {
+                name: 'fresh', relPath: 'services/fresh', registered: false, packaged: false,
+                warnings: [
+                  { code: 'not-packaged', message: 'not packaged yet — server wording' },
+                  // A code this CLI has no string for still prints, via the
+                  // English message the server sent with it.
+                  { code: 'from-a-newer-server', message: 'something the CLI has never heard of' },
+                ],
+              },
               // api hint without invoke hint, and no warnings key at all
               { name: 'bare', relPath: 'services/bare', registered: false, packaged: true, apiPort: 3640 },
             ],
@@ -1489,8 +1497,86 @@ describe('bin/cli.js helpers', () => {
       expect(out).toContain('✓ orders  (services/orders) — registered, installed, packaged api:3631 invoke:13631');
       expect(out).toContain('· fresh  (services/fresh) — not registered, not installed, not packaged');
       expect(out).toContain('· bare  (services/bare) — not registered, not installed, packaged api:3640');
-      expect(out).toContain('⚠ not packaged yet');
+      expect(out).toContain('package: npx serverless package');
+      // Rendered from the code, not from the server's wording…
+      expect(out).toContain('⚠ not packaged yet — registering packages it for you (autoPackage)');
+      // …and an unknown code falls back to the message instead of vanishing.
+      expect(out).toContain('⚠ something the CLI has never heard of');
       expect(out).toContain('npx lss register');
+    });
+
+    // `installed` is the flag onboarding shows beside registered/packaged: it
+    // answers "can this be packaged at all, or does it need an install first?".
+    // GET /scan has always returned it; the CLI used to drop it on the floor.
+    it('reports the installed flag independently of packaged', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        GET: {
+          status: 200,
+          body: JSON.stringify({
+            projectRoot: '/abs',
+            services: [
+              { name: 'stale', relPath: 'services/stale', registered: false, installed: false, packaged: true },
+              { name: 'ready', relPath: 'services/ready', registered: false, installed: true, packaged: false },
+            ],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      await cli.scanServices();
+      const out = logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
+      expect(out).toContain('· stale  (services/stale) — not registered, not installed, packaged');
+      expect(out).toContain('· ready  (services/ready) — not registered, installed, not packaged');
+    });
+
+    // The effective package command is per-service configurable
+    // (`servicePackaging`), so it earns its own line: it is what
+    // install → package → register would actually run for that service.
+    it('prints the effective package command only for the services that carry one', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        GET: {
+          status: 200,
+          body: JSON.stringify({
+            projectRoot: '/abs',
+            services: [
+              {
+                name: 'orders', relPath: 'services/orders', registered: true, installed: true, packaged: true,
+                packageCommand: 'npm run package:local',
+              },
+              // No packageCommand at all — the line is simply omitted.
+              { name: 'bare', relPath: 'services/bare', registered: false, installed: true, packaged: false },
+            ],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      await cli.scanServices();
+      const out = logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
+      expect(out).toContain('      package: npm run package:local');
+      expect(out.match(/package: /g)).toHaveLength(1);
+    });
+
+    // End-to-end proof that the catalogue is wired to the locale resolved from
+    // the environment, not just to the English default.
+    it('speaks the locale resolved from the environment', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        GET: {
+          status: 200,
+          body: JSON.stringify({
+            projectRoot: '/abs',
+            services: [
+              { name: 'orders', relPath: 'services/orders', registered: true, installed: false, packaged: false },
+            ],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'scan'], { LSS_LANG: 'pt-BR' });
+      await cli.scanServices();
+      const out = logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
+      expect(out).toContain('1 serviço(s) sob /abs');
+      expect(out).toContain('registrado, não instalado, não empacotado');
     });
 
     it('says so when nothing is found', async () => {

@@ -206,7 +206,15 @@ export interface ScannedService {
   invokePort?: number;
   // Effective package command for this service (servicePackaging else global).
   packageCommand: string;
-  warnings: string[];
+  warnings: ScanWarning[];
+}
+
+// A scan warning carries a stable code the dashboard translates, plus the
+// English message the server produced as a fallback.
+export interface ScanWarning {
+  code: string;
+  message: string;
+  params?: Record<string, string>;
 }
 
 // Result of POST /api/services/install and /api/services/package.

@@ -170,11 +170,18 @@ async function scan(): Promise<void> {
 }
 
 // The install/package step-warnings clear as the flags flip; everything else
-// (TS config, unreadable file) stays verbatim.
+// (TS config, unreadable file) stays. Each is rendered from its stable `code`,
+// falling back to the server's English `message` for a code this dashboard
+// does not know — a new server warning shows up as text rather than vanishing.
 function displayWarnings(row: Row): string[] {
-  return row.warnings.filter(w =>
-    !(row.installed && w.startsWith('dependencies not installed'))
-    && !(row.packaged && w.startsWith('not packaged yet')));
+  return row.warnings
+    .filter(w => !(row.installed && w.code === 'not-installed')
+      && !(row.packaged && w.code === 'not-packaged'))
+    .map(w => {
+      const key = `onboarding.warning.${w.code}`;
+      const translated = t(key, w.params);
+      return translated === key ? w.message : translated;
+    });
 }
 
 // The key a serviceRuntime/servicePackaging entry is written under. relPath is

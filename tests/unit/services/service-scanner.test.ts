@@ -123,7 +123,7 @@ describe('hints', () => {
     write('anon/serverless.json', JSON.stringify({ provider: { region: 'us-east-1' } }));
     const [anon, bad, good] = scanForServices(root, []);
     expect(good).toMatchObject({ name: 'catalog', region: 'sa-east-1', apiPort: 3634 });
-    expect(bad.warnings.some(w => w.includes('not valid JSON'))).toBe(true);
+    expect(bad.warnings.map(w => w.code)).toContain('invalid-json');
     expect(anon.name).toBe('anon');
   });
 
@@ -131,7 +131,7 @@ describe('hints', () => {
     write('ts-svc/serverless.ts', 'export default { service: "ts" };\n');
     const [svc] = scanForServices(root, []);
     expect(svc.name).toBe('ts-svc');
-    expect(svc.warnings.some(w => w.includes('TypeScript service config'))).toBe(true);
+    expect(svc.warnings.map(w => w.code)).toContain('ts-config');
   });
 
   it('warns when the config file cannot be read', () => {
@@ -141,7 +141,11 @@ describe('hints', () => {
     }) as never);
     const [svc] = scanForServices(root, []);
     spy.mockRestore();
-    expect(svc.warnings.some(w => w.includes('could not read'))).toBe(true);
+    // The file name travels as a param so a localised surface can interpolate it.
+    expect(svc.warnings).toContainEqual(expect.objectContaining({
+      code: 'unreadable-config',
+      params: { file: 'serverless.yml' },
+    }));
   });
 });
 
@@ -158,8 +162,8 @@ describe('checklist flags', () => {
     expect(byName.fresh.installed).toBe(false);
     expect(byName.fresh.packaged).toBe(false);
     expect(byName.fresh.registered).toBe(false);
-    expect(byName.fresh.warnings.some(w => w.includes('dependencies not installed'))).toBe(true);
-    expect(byName.fresh.warnings.some(w => w.includes('not packaged yet'))).toBe(true);
+    expect(byName.fresh.warnings.map(w => w.code)).toContain('not-installed');
+    expect(byName.fresh.warnings.map(w => w.code)).toContain('not-packaged');
   });
 
   it('an installed but unpackaged service warns only about packaging', () => {
@@ -167,9 +171,10 @@ describe('checklist flags', () => {
     write('svc/node_modules/.package-lock.json', '{}');
     const [svc] = scanForServices(root, []);
     expect(svc.installed).toBe(true);
-    expect(svc.warnings).toEqual([
-      expect.stringContaining('not packaged yet'),
-    ]);
+    expect(svc.warnings.map(w => w.code)).toEqual(['not-packaged']);
+    // The English message travels alongside the code, for anything reading
+    // the API without a translation layer.
+    expect(svc.warnings[0].message).toContain('not packaged yet');
   });
 
   it('counts hoisted dependencies: a workspace package with no local node_modules is installed', () => {
@@ -179,7 +184,7 @@ describe('checklist flags', () => {
     write('services/orders/serverless.yml', 'service: orders\n');
     const [svc] = scanForServices(root, []);
     expect(svc.installed).toBe(true);
-    expect(svc.warnings.some(w => w.includes('dependencies not installed'))).toBe(false);
+    expect(svc.warnings.map(w => w.code)).not.toContain('not-installed');
   });
 
   it('stops the ancestor walk at the scanned root', () => {
@@ -193,12 +198,9 @@ describe('checklist flags', () => {
     expect(svc.installed).toBe(false);
   });
 
-  it('a service outside the scanned root stops the walk at the filesystem root', () => {
-    // Defensive arm: rootDir is never an ancestor, so the walk must terminate
-    // on its own rather than loop at '/'.
+  it('the walk stops at the scanned root rather than climbing to /', () => {
     write('svc/serverless.yml', 'service: svc\n');
     const [svc] = scanForServices(root, []);
-    // '/' has no node_modules in the sandbox, so the walk ends false.
     expect(svc.installed).toBe(false);
   });
 });

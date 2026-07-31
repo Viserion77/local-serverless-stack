@@ -694,6 +694,19 @@ async function registerServices(paths) {
  * configurable (`servicePackaging`) and is what the install→package→register
  * buttons would run.
  */
+/**
+ * Render one scan warning. The orchestrator sends a stable `code` plus the
+ * English `message` it produced; the code is what gets localised, and the
+ * message is the fallback for a code this CLI has not been taught yet — a
+ * newer server's warning still prints instead of disappearing.
+ */
+function scanWarningText(warning) {
+  if (!warning || typeof warning !== 'object') return String(warning);
+  const key = `scan.warning.${warning.code}`;
+  const translated = t(key, warning.params);
+  return translated === key ? warning.message : translated;
+}
+
 async function scanServices() {
   ensureRunningOrExit();
   try {
@@ -716,7 +729,7 @@ async function scanServices() {
         console.log(`      ${t('scan.packageCommand', { command: svc.packageCommand })}`);
       }
       for (const warning of svc.warnings || []) {
-        console.log(`      ⚠ ${warning}`);
+        console.log(`      ⚠ ${scanWarningText(warning)}`);
       }
     }
     console.log(t('scan.hint'));
