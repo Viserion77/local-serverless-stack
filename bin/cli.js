@@ -5,6 +5,10 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const { pathToFileURL } = require('url');
+// Every user-facing string goes through t(). The locale is resolved once, at
+// require time, from LSS_LANG / LC_ALL / LC_MESSAGES / LANG — English by
+// default. See bin/i18n.js for what is deliberately left untranslated.
+const { t } = require('./i18n');
 
 // Default paths used when no config is present. The actual paths are derived
 // per-invocation by runtimePaths() below, scoped to the configured serverPort
@@ -56,10 +60,10 @@ function loadConfig() {
       try {
         return JSON.parse(fs.readFileSync(EXPLICIT_CONFIG, 'utf-8'));
       } catch (error) {
-        console.warn(`⚠️  Failed to parse config file ${EXPLICIT_CONFIG}`);
+        console.warn(t('config.parseFailed', { path: EXPLICIT_CONFIG }));
       }
     } else {
-      console.warn(`⚠️  Config file not found: ${EXPLICIT_CONFIG}`);
+      console.warn(t('config.notFound', { path: EXPLICIT_CONFIG }));
     }
   }
 
@@ -76,7 +80,7 @@ function loadConfig() {
         const content = fs.readFileSync(candidate, 'utf-8');
         return JSON.parse(content);
       } catch (error) {
-        console.warn(`⚠️  Failed to parse config file ${candidate}`);
+        console.warn(t('config.parseFailed', { path: candidate }));
       }
     }
   }
@@ -145,8 +149,8 @@ function assertNoLocalStackFlags() {
     legacy.push('engine: "localstack"');
   }
   if (legacy.length === 0) return;
-  console.error(`❌ ${legacy.join(', ')} — LSS v2 removed the LocalStack backend; the self engine is the only engine.`);
-  console.error('   Drop the flag and any localstack* keys from lss.config.json. See docs/MIGRATION-v2.md.');
+  console.error(t('legacy.removed', { flags: legacy.join(', ') }));
+  console.error(t('legacy.hint'));
   process.exit(1);
 }
 
@@ -185,11 +189,11 @@ function startOrchestrator() {
       process.kill(pid, 0);
       const config = loadConfig();
       const cfg = getConfig(config);
-      console.log('✅ LSS Orchestrator already running (PID:', pid + ')');
-      console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
-      console.log(`🔧 Self Engine: http://localhost:${cfg.selfEnginePort}`);
+      console.log(t('start.already', { pid }));
+      console.log(t('start.server', { url: `http://localhost:${cfg.serverPort}` }));
+      console.log(t('start.engine', { url: `http://localhost:${cfg.selfEnginePort}` }));
       if (cfg.enableDynamoProxy) {
-        console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
+        console.log(t('start.dynamoProxy', { url: `http://localhost:${cfg.dynamoProxyPort}` }));
       }
       return;
     } catch (e) {
@@ -200,12 +204,12 @@ function startOrchestrator() {
   const orchestratorPath = getOrchestratorPath();
   
   if (!orchestratorPath) {
-    console.error('❌ Orchestrator not found or not built.');
+    console.error(t('start.notBuilt'));
     console.error('');
-    console.error('If you are developing LSS, run:');
+    console.error(t('start.notBuiltDev'));
     console.error('  cd /path/to/local-serverless-stack && npm run build');
     console.error('');
-    console.error('If you installed via npm, please report this as a bug.');
+    console.error(t('start.notBuiltBug'));
     process.exit(1);
   }
 
@@ -248,20 +252,20 @@ function startOrchestrator() {
   fs.closeSync(logFd);
   fs.writeFileSync(pidFile, child.pid.toString());
 
-  console.log('🚀 LSS Orchestrator started (PID:', child.pid + ')');
-  console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
-  console.log(`🔧 Self Engine: http://localhost:${cfg.selfEnginePort} (no Docker)`);
+  console.log(t('start.started', { pid: child.pid }));
+  console.log(t('start.server', { url: `http://localhost:${cfg.serverPort}` }));
+  console.log(t('start.engine', { url: `http://localhost:${cfg.selfEnginePort}` }));
   if (enableDynamoProxy) {
-    console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
+    console.log(t('start.dynamoProxy', { url: `http://localhost:${cfg.dynamoProxyPort}` }));
   }
-  console.log('📝 Logs:', logFile);
+  console.log(t('start.logs', { path: logFile }));
 
   setTimeout(() => {
     try {
       process.kill(child.pid, 0);
-      console.log('✅ Service is running');
+      console.log(t('start.running'));
     } catch (e) {
-      console.error('❌ Service failed to start. Check logs:', logFile);
+      console.error(t('start.failed', { path: logFile }));
       if (fs.existsSync(pidFile)) {
         fs.unlinkSync(pidFile);
       }
@@ -305,7 +309,7 @@ function waitForExit(pid, timeoutMs = 10000, intervalMs = 200) {
 async function stopOrchestrator() {
   const { pidFile } = runtimePaths();
   if (!fs.existsSync(pidFile)) {
-    console.log('⚠️  LSS Orchestrator is not running');
+    console.log(t('stop.notRunning'));
     return;
   }
 
@@ -314,7 +318,7 @@ async function stopOrchestrator() {
   try {
     process.kill(pid, 'SIGTERM');
   } catch (e) {
-    console.error('❌ Failed to stop process:', e.message);
+    console.error(t('stop.failed', { error: e.message }));
     if (fs.existsSync(pidFile)) {
       fs.unlinkSync(pidFile);
     }
@@ -324,16 +328,16 @@ async function stopOrchestrator() {
   const exited = await waitForExit(pid);
   fs.unlinkSync(pidFile);
   if (exited) {
-    console.log('🛑 LSS Orchestrator stopped (PID:', pid + ')');
+    console.log(t('stop.stopped', { pid }));
   } else {
-    console.warn(`⚠️  Process ${pid} did not exit within 10s of SIGTERM — the server port may still be busy. Check \`lss status\` before starting again.`);
+    console.warn(t('stop.timeout', { pid }));
   }
 }
 
 function showStatus() {
   const { pidFile, logFile } = runtimePaths();
   if (!fs.existsSync(pidFile)) {
-    console.log('⚪ LSS Orchestrator: NOT RUNNING');
+    console.log(t('status.notRunning'));
     return;
   }
 
@@ -343,15 +347,15 @@ function showStatus() {
     process.kill(pid, 0);
     const config = loadConfig();
     const cfg = getConfig(config);
-    console.log('🟢 LSS Orchestrator: RUNNING (PID:', pid + ')');
-    console.log(`📊 Server: http://localhost:${cfg.serverPort}`);
-    console.log(`🔧 Self Engine: http://localhost:${cfg.selfEnginePort}`);
+    console.log(t('status.running', { pid }));
+    console.log(t('status.server', { url: `http://localhost:${cfg.serverPort}` }));
+    console.log(t('status.engine', { url: `http://localhost:${cfg.selfEnginePort}` }));
     if (cfg.enableDynamoProxy) {
-      console.log(`🔄 DynamoDB Proxy: http://localhost:${cfg.dynamoProxyPort} (enabled)`);
+      console.log(t('status.dynamoProxy', { url: `http://localhost:${cfg.dynamoProxyPort}` }));
     }
-    console.log('📝 Logs:', logFile);
+    console.log(t('status.logs', { path: logFile }));
   } catch (e) {
-    console.log('⚪ LSS Orchestrator: NOT RUNNING (stale PID file)');
+    console.log(t('status.stale'));
     fs.unlinkSync(pidFile);
   }
 }
@@ -366,13 +370,13 @@ function getServerPort() {
 // orchestrator startup window) — fall back through every signal we have so
 // `formatError` is guaranteed not to return an empty string.
 function formatError(e) {
-  if (!e) return 'erro desconhecido (sem detalhes)';
-  if (typeof e === 'string') return e.trim() || 'erro desconhecido (sem detalhes)';
+  if (!e) return t('error.unknown');
+  if (typeof e === 'string') return e.trim() || t('error.unknown');
   if (e.message && String(e.message).trim()) return String(e.message).trim();
-  if (e.code) return `erro de I/O (${e.code})`;
+  if (e.code) return t('error.io', { code: e.code });
   if (e.name) return e.name;
   const s = String(e);
-  return s && s !== '[object Object]' ? s : 'erro desconhecido (sem detalhes)';
+  return s && s !== '[object Object]' ? s : t('error.unknown');
 }
 
 function buildHttpError(res, data) {
@@ -382,7 +386,9 @@ function buildHttpError(res, data) {
   if (fromBody && String(fromBody).trim()) return new Error(String(fromBody).trim());
   const snippet = data && data.length < 300 ? data.trim() : '';
   const statusText = res.statusMessage ? `${res.statusCode} ${res.statusMessage}` : `${res.statusCode}`;
-  return new Error(snippet ? `HTTP ${statusText}: ${snippet}` : `HTTP ${statusText} (sem corpo de erro)`);
+  // `HTTP <status>: <snippet>` is pure wire detail, so only the "no body at
+  // all" variant carries translatable prose.
+  return new Error(snippet ? `HTTP ${statusText}: ${snippet}` : t('error.httpNoBody', { status: statusText }));
 }
 
 function postJson(path, body) {
@@ -414,7 +420,7 @@ function postJson(path, body) {
         });
       },
     );
-    req.on('error', err => reject(err && err.message ? err : new Error(`falha na conexão HTTP com o orchestrator: ${formatError(err)}`)));
+    req.on('error', err => reject(err && err.message ? err : new Error(t('error.httpConnection', { error: formatError(err) }))));
     req.write(payload);
     req.end();
   });
@@ -423,7 +429,7 @@ function postJson(path, body) {
 function ensureRunningOrExit() {
   const { pidFile } = runtimePaths();
   if (!fs.existsSync(pidFile)) {
-    console.error('❌ LSS Orchestrator is not running. Start it with: npx lss start');
+    console.error(t('error.notRunning'));
     process.exit(1);
   }
 }
@@ -432,12 +438,12 @@ function printSeedRunResults(results) {
   let missingTables = 0;
   for (const r of results) {
     if (r.skipped) {
-      console.log(`  ⚠ ${r.tableName}: skipped (${r.reason})`);
+      console.log(t('seed.skipped', { table: r.tableName, reason: r.reason }));
       if (r.reason && r.reason.includes('does not exist in the engine')) {
         missingTables++;
       }
     } else {
-      console.log(`  ✓ ${r.tableName}: ${r.inserted} item(s) inserted`);
+      console.log(t('seed.inserted', { table: r.tableName, count: r.inserted }));
     }
   }
   return { missingTables };
@@ -453,37 +459,39 @@ function printSeedMismatchDiagnostic({ entries, liveTables, focusTable }) {
 
   console.log('');
   if (focusTable) {
-    console.log(`📂 Arquivo de seed inspecionado: ${focusTable}.json`);
+    console.log(t('seed.diagFile', { table: focusTable }));
   } else if (focusList.length > 0) {
-    console.log('📂 Arquivos de seed inspecionados (tabela esperada):');
+    console.log(t('seed.diagFiles'));
     for (const name of focusList) console.log(`     - ${name}`);
   } else {
-    console.log('📂 Nenhum arquivo *.json encontrado no seedsDir.');
+    console.log(t('seed.diagNoFiles'));
   }
 
   if (liveTables && liveTables.length > 0) {
     console.log('');
-    console.log(`🗂️  Tabelas vivas no engine (${liveTables.length}):`);
+    console.log(t('seed.diagLiveTables', { count: liveTables.length }));
     for (const name of liveTables) console.log(`     - ${name}`);
     console.log('');
-    console.log('💡 Os nomes dos arquivos de seed precisam bater EXATAMENTE com o `TableName` no CloudFormation.');
-    console.log('   Confira se há prefixo/sufixo divergente entre o arquivo e a tabela.');
+    console.log(t('seed.diagMatchHint'));
+    console.log(t('seed.diagPrefixHint'));
   } else {
     console.log('');
-    console.log('🗂️  Nenhuma tabela viva no engine ainda.');
-    console.log('💡 Provavelmente o stack ainda não foi provisionado. Tente:');
-    console.log('     npx lss start                # garante o orquestrador rodando');
-    console.log('     npx serverless deploy        # cria as tabelas');
-    console.log('   E rode `npx lss seed` novamente.');
+    console.log(t('seed.diagNoLiveTables'));
+    console.log(t('seed.diagNotProvisioned'));
+    // The commands themselves are never translated — only the comment that
+    // explains what each one buys you.
+    console.log(`     npx lss start                # ${t('seed.diagStepStart')}`);
+    console.log(`     npx serverless deploy        # ${t('seed.diagStepDeploy')}`);
+    console.log(t('seed.diagRetry'));
   }
 }
 
 function printSeedClearResults(results) {
   for (const r of results) {
     if (r.skipped) {
-      console.log(`  ⚠ ${r.tableName}: skipped (${r.reason})`);
+      console.log(t('seed.skipped', { table: r.tableName, reason: r.reason }));
     } else {
-      console.log(`  ✓ ${r.tableName}: ${r.deleted} item(s) deleted`);
+      console.log(t('seed.deleted', { table: r.tableName, count: r.deleted }));
     }
   }
 }
@@ -491,7 +499,7 @@ function printSeedClearResults(results) {
 async function runSeed(tableName) {
   ensureRunningOrExit();
   try {
-    console.log(tableName ? `🌱 Seeding ${tableName}...` : '🌱 Seeding all tables with seed files...');
+    console.log(tableName ? t('seed.runningTable', { table: tableName }) : t('seed.running'));
     const res = await postJson('/api/seeds/run', tableName ? { tableName } : {});
     const { missingTables } = printSeedRunResults(res.results || []);
     if (missingTables > 0) {
@@ -504,11 +512,11 @@ async function runSeed(tableName) {
         });
       } catch (diagErr) {
         // Diagnostic is best-effort; don't fail the seed because the hint failed.
-        console.log(`(não consegui detalhar tabelas vivas: ${formatError(diagErr)})`);
+        console.log(t('seed.diagFailed', { error: formatError(diagErr) }));
       }
     }
   } catch (e) {
-    console.error('❌ Seed failed:', formatError(e));
+    console.error(t('seed.failed'), formatError(e));
     process.exit(1);
   }
 }
@@ -537,7 +545,7 @@ function getJson(path) {
         });
       },
     );
-    req.on('error', err => reject(err && err.message ? err : new Error(`falha na conexão HTTP com o orchestrator: ${formatError(err)}`)));
+    req.on('error', err => reject(err && err.message ? err : new Error(t('error.httpConnection', { error: formatError(err) }))));
     req.end();
   });
 }
@@ -549,7 +557,7 @@ function promptConfirmation(expectedWord) {
       input: process.stdin,
       output: process.stdout,
     });
-    rl.question(`Digite "${expectedWord}" para prosseguir (ou qualquer outra coisa para cancelar): `, answer => {
+    rl.question(t('seed.confirmPrompt', { word: expectedWord }), answer => {
       rl.close();
       resolve(answer.trim() === expectedWord);
     });
@@ -576,47 +584,52 @@ async function clearSeed(tableName) {
 
     if (liveTargets.length === 0) {
       if (tableName) {
-        console.log(`⚠️  Nenhuma tabela "${tableName}" existente no engine para limpar.`);
+        console.log(t('clear.noSuchTable', { table: tableName }));
       } else if (entries.length === 0) {
-        console.log('⚠️  Nenhum arquivo de seed (*.json) encontrado no seedsDir — nada para limpar.');
+        console.log(t('clear.noSeedFiles'));
       } else {
-        console.log(`⚠️  ${entries.length} arquivo(s) de seed encontrados, mas NENHUMA das tabelas correspondentes existe no engine.`);
+        console.log(t('clear.noneLive', { count: entries.length }));
       }
       printSeedMismatchDiagnostic({ entries, liveTables, focusTable: tableName });
       return;
     }
 
     scopeDescription = tableName
-      ? `a tabela "${tableName}"`
-      : `${liveTargets.length} tabela(s): ${liveTargets.map(e => e.tableName).join(', ')}`;
+      ? t('clear.scopeTable', { table: tableName })
+      : t('clear.scopeTables', {
+        count: liveTargets.length,
+        tables: liveTargets.map(e => e.tableName).join(', '),
+      });
 
     console.log('');
-    console.log('⚠️  ATENÇÃO: operação destrutiva');
-    console.log(`   Alvo:      ${scopeDescription}`);
-    console.log(`   Engine:    http://localhost:${cfg.selfEnginePort}`);
-    console.log('   Esta ação NÃO toca em nenhuma conta AWS — apenas o engine local acima.');
+    console.log(t('clear.warning'));
+    console.log(t('clear.target', { scope: scopeDescription }));
+    console.log(t('clear.engine', { url: `http://localhost:${cfg.selfEnginePort}` }));
+    console.log(t('clear.noAws'));
     console.log('');
   } catch (e) {
-    console.error('❌ Não consegui listar as tabelas antes de limpar:', formatError(e));
+    console.error(t('clear.listFailed'), formatError(e));
     process.exit(1);
   }
 
   if (!skipConfirm) {
+    // The word itself is NOT translated: it is a magic token CI scripts and the
+    // docs already depend on, so it stays `confirmar` in every locale.
     const ok = await promptConfirmation('confirmar');
     if (!ok) {
-      console.log('🚫 Cancelado — nenhuma alteração feita.');
+      console.log(t('seed.aborted'));
       return;
     }
   } else {
-    console.log('↳ --yes informado, pulando confirmação interativa.');
+    console.log(t('clear.skipPrompt'));
   }
 
   try {
-    console.log(tableName ? `🧹 Clearing ${tableName}...` : '🧹 Clearing all seeded tables...');
+    console.log(tableName ? t('seed.clearingTable', { table: tableName }) : t('seed.clearing'));
     const res = await postJson('/api/seeds/clear', tableName ? { tableName } : {});
     printSeedClearResults(res.results || []);
   } catch (e) {
-    console.error('❌ Clear failed:', formatError(e));
+    console.error(t('clear.failed'), formatError(e));
     process.exit(1);
   }
 }
@@ -644,18 +657,24 @@ async function registerServices(paths) {
   for (const target of targets) {
     const servicePath = path.resolve(target);
     if (!fs.existsSync(servicePath)) {
-      console.error(`✗ ${target}: directory not found`);
+      console.error(t('register.notFound', { target }));
       failed++;
       continue;
     }
     try {
       const result = await postJson('/api/services/register', { servicePath });
-      console.log(`✓ ${result.serviceName}: ${result.resourcesCount} resource(s), ${result.functionsCount} function(s), ${result.routesCount} route(s)`);
+      console.log(t('register.ok', {
+        name: result.serviceName,
+        resources: result.resourcesCount,
+        functions: result.functionsCount,
+        routes: result.routesCount,
+      }));
+      // Warnings come from the orchestrator already worded; only the bullet is ours.
       for (const warning of result.warnings || []) {
         console.log(`  ⚠ ${warning}`);
       }
     } catch (e) {
-      console.error(`✗ ${target}: ${formatError(e)}`);
+      console.error(t('register.failed', { target, error: formatError(e) }));
       failed++;
     }
   }
@@ -666,7 +685,14 @@ async function registerServices(paths) {
 
 /**
  * `lss scan` — list every Serverless/osls service found under the project
- * root, with the flags onboarding shows (packaged/registered + hints).
+ * root, with the same flags onboarding shows.
+ *
+ * The three flags mirror the checklist: `registered` (known to this
+ * orchestrator), `installed` (node_modules resolvable, so packaging can run
+ * without an install first) and `packaged` (a template already exists). The
+ * effective package command gets its own line because it is per-service
+ * configurable (`servicePackaging`) and is what the install→package→register
+ * buttons would run.
  */
 async function scanServices() {
   ensureRunningOrExit();
@@ -674,24 +700,28 @@ async function scanServices() {
     const result = await getJson('/api/services/scan');
     const services = result.services || [];
     if (services.length === 0) {
-      console.log(`Nenhum serviço Serverless/osls encontrado sob ${result.projectRoot}`);
+      console.log(t('scan.none', { root: result.projectRoot }));
       return;
     }
-    console.log(`${services.length} serviço(s) sob ${result.projectRoot}:\n`);
+    console.log(`${t('scan.header', { count: services.length, root: result.projectRoot })}\n`);
     for (const svc of services) {
       const flags = [
-        svc.registered ? 'registrado' : 'não registrado',
-        svc.packaged ? 'empacotado' : 'não empacotado',
+        svc.registered ? t('scan.registered') : t('scan.notRegistered'),
+        svc.installed ? t('scan.installed') : t('scan.notInstalled'),
+        svc.packaged ? t('scan.packaged') : t('scan.notPackaged'),
       ].join(', ');
       const ports = svc.apiPort ? ` api:${svc.apiPort}${svc.invokePort ? ` invoke:${svc.invokePort}` : ''}` : '';
       console.log(`  ${svc.registered ? '✓' : '·'} ${svc.name}  (${svc.relPath}) — ${flags}${ports}`);
+      if (svc.packageCommand) {
+        console.log(`      ${t('scan.packageCommand', { command: svc.packageCommand })}`);
+      }
       for (const warning of svc.warnings || []) {
         console.log(`      ⚠ ${warning}`);
       }
     }
-    console.log('\nRegistre com: npx lss register <path...>  (ou pelo onboarding do dashboard)');
+    console.log(t('scan.hint'));
   } catch (e) {
-    console.error('❌ Scan falhou:', formatError(e));
+    console.error(t('scan.failed'), formatError(e));
     process.exit(1);
   }
 }
@@ -717,7 +747,7 @@ function runMcpServer() {
   const version = getPackageVersion();
   /* istanbul ignore else: the "found" path falls through to the dynamic import below, which is the process entry point (it binds this process's stdio) and so is not unit-testable */
   if (!serverPath) {
-    console.error('❌ MCP server build not found. Run `npm run build` first.');
+    console.error(t('mcp.missing'));
     process.exit(1); // never returns
   }
   // Dynamic import: the MCP build is ESM, and loading it only for this command
@@ -726,98 +756,115 @@ function runMcpServer() {
   import(pathToFileURL(serverPath).href)
     .then(mod => mod.main(version))
     .catch(error => {
-      console.error('❌ Failed to start the MCP server:', error && error.message ? error.message : error);
+      console.error(t('mcp.startFailed'), error && error.message ? error.message : error);
       process.exit(1);
     });
 }
 
-function showHelp() {
-  console.log(`
-Local Serverless Stack (LSS) CLI
-
-Usage: npx lss <command> [options]
-
-Commands:
-  start              Start the LSS Orchestrator in background
-  stop               Stop the LSS Orchestrator
-  status             Check if the orchestrator is running
-  logs               Show the logs
-  seed [table]       Apply seed file(s) from seedsDir into DynamoDB
-                     (no args = all matching tables)
-  scan               List every Serverless/osls service found under the
-                     project root (registered/packaged flags + port hints)
-  register [path...] Register services with the running orchestrator (defaults
-                     to the current directory; packaging runs on demand via
-                     autoPackage). Replaces the retired serverless-lss plugin.
-  seed:clear [table] Delete all items from the given table (or all
-                     tables with a seed file when no arg is given).
-                     Pede confirmação interativa (digitar "confirmar")
-                     antes de qualquer escrita.
-  mcp                Run the Model Context Protocol server on stdio, so an MCP
-                     client (Claude Code) can drive this stack with tools.
-                     Requires a running orchestrator; see docs/MCP.md.
-  help               Show this help message
-
-Options:
-  --config <path>              Load config from this file (precedes the cwd/home search).
-                               Applies to start/stop/status/logs so an isolated instance
-                               can be addressed without cd-ing into its folder.
-  --enable-dynamo-proxy        Enable DynamoDB proxy on port 8000 (for start command)
-  --yes, -y                    Skip interactive confirmation on seed:clear (use only in CI)
-
-Environment:
-  LSS_DASHBOARD_PORT           Orchestrator port (overrides serverPort)
-  LSS_ENGINE_PORT              Self engine port (overrides selfEngine.port)
-  LSS_ENGINE_DATA_DIR          Self engine state directory (overrides selfEngine.dataDir)
-  AWS_REGION                   Default region for provisioning and the explorers
-
-Configuration:
-  Create a lss.config.json or .lssrc file in your project root to customize:
-
-  Example lss.config.json:
-  {
-    "serverPort": 3100,
-    "selfEngine": { "port": 14566 },
-    "enableDynamoProxy": false,
-    "dynamoProxyPort": 8000,
-    "region": "us-east-1",
-    "persistence": true,
-    "debug": false,
-    "stateDir": ".lss"
+// One `  <name>   <description>` row of the help screen. The description is
+// wrapped and hanging-indented under itself so a translation can be longer than
+// the English original without shredding the column — the reason the help text
+// is assembled here instead of living in the catalogue as one pre-formatted blob.
+function helpRow(name, description, nameWidth, textWidth) {
+  const gutter = ' '.repeat(2 + nameWidth);
+  const wrapped = [];
+  let current = '';
+  for (const word of description.split(' ')) {
+    if (current && current.length + 1 + word.length > textWidth) {
+      wrapped.push(current);
+      current = word;
+    } else {
+      current = current ? `${current} ${word}` : word;
+    }
   }
+  wrapped.push(current);
+  return [`  ${name.padEnd(nameWidth)}${wrapped[0]}`, ...wrapped.slice(1).map(line => gutter + line)]
+    .join('\n');
+}
 
-  stateDir (optional): directory for this instance's PID/log files. Set it (e.g.
-  ".lss-e2e") together with --config to run a fully isolated instance alongside
-  the dev one. When omitted, PID/log live in the OS temp dir scoped by serverPort.
+// A `  npx lss …   # what it does` example line. The command is never translated.
+function helpExample(command, comment) {
+  return `  ${command.padEnd(43)}# ${comment}`;
+}
 
-  For the Serverless Plugin, add to serverless.yml:
-  custom:
-    orchestrator:
-      enabled: true
-      orchestratorUrl: http://localhost:3100
+function showHelp() {
+  // Command names, flags, env var names, paths and the JSON template are
+  // identifiers — they stay here, untranslated. Only prose goes through t().
+  const cmd = (name, key) => helpRow(name, t(key), 19, 56);
+  const opt = (name, key) => helpRow(name, t(key), 29, 46);
 
-Examples:
-  npx lss start                              # Start the orchestrator + self engine (no Docker)
-  npx lss start --enable-dynamo-proxy        # Start with DynamoDB proxy enabled
-  npx lss mcp                                # Serve MCP tools to an AI agent on stdio
-  npx lss stop                               # Stop the orchestrator
-  npx lss status                             # Check status
-  npx lss logs                               # View logs
-  npx lss seed                               # Seed every table that has a {name}.json file
-  npx lss seed users                         # Seed only the "users" table
-  npx lss seed:clear users                   # Delete all items from "users" (com confirmação)
-  npx lss seed:clear users --yes             # Mesma coisa, sem prompt (CI)
-`);
+  console.log([
+    '',
+    'Local Serverless Stack (LSS) CLI',
+    '',
+    t('help.usage'),
+    '',
+    t('help.commands'),
+    cmd('start', 'help.cmd.start'),
+    cmd('stop', 'help.cmd.stop'),
+    cmd('status', 'help.cmd.status'),
+    cmd('logs', 'help.cmd.logs'),
+    cmd('seed [table]', 'help.cmd.seed'),
+    cmd('scan', 'help.cmd.scan'),
+    cmd('register [path...]', 'help.cmd.register'),
+    cmd('seed:clear [table]', 'help.cmd.seedClear'),
+    cmd('mcp', 'help.cmd.mcp'),
+    cmd('help', 'help.cmd.help'),
+    '',
+    t('help.options'),
+    opt('--config <path>', 'help.opt.config'),
+    opt('--enable-dynamo-proxy', 'help.opt.dynamoProxy'),
+    opt('--yes, -y', 'help.opt.yes'),
+    '',
+    t('help.environment'),
+    opt('LSS_DASHBOARD_PORT', 'help.env.dashboardPort'),
+    opt('LSS_ENGINE_PORT', 'help.env.enginePort'),
+    opt('LSS_ENGINE_DATA_DIR', 'help.env.engineDataDir'),
+    opt('AWS_REGION', 'help.env.awsRegion'),
+    opt('LSS_LANG', 'help.env.lang'),
+    '',
+    t('help.configuration'),
+    `  ${t('help.config.intro')}`,
+    '',
+    `  ${t('help.config.example')}`,
+    '  {',
+    '    "serverPort": 3100,',
+    '    "selfEngine": { "port": 14566 },',
+    '    "enableDynamoProxy": false,',
+    '    "dynamoProxyPort": 8000,',
+    '    "region": "us-east-1",',
+    '    "persistence": true,',
+    '    "debug": false,',
+    '    "stateDir": ".lss"',
+    '  }',
+    '',
+    helpRow('', t('help.config.stateDir'), 0, 76),
+    '',
+    t('help.examples'),
+    helpExample('npx lss start', t('help.ex.start')),
+    helpExample('npx lss start --enable-dynamo-proxy', t('help.ex.startProxy')),
+    helpExample('npx lss mcp', t('help.ex.mcp')),
+    helpExample('npx lss stop', t('help.ex.stop')),
+    helpExample('npx lss status', t('help.ex.status')),
+    helpExample('npx lss logs', t('help.ex.logs')),
+    helpExample('npx lss scan', t('help.ex.scan')),
+    helpExample('npx lss register', t('help.ex.register')),
+    helpExample('npx lss seed', t('help.ex.seed')),
+    helpExample('npx lss seed users', t('help.ex.seedTable')),
+    helpExample('npx lss seed:clear users', t('help.ex.seedClear')),
+    helpExample('npx lss seed:clear users --yes', t('help.ex.seedClearYes')),
+    '',
+  ].join('\n'));
 }
 
 function showLogs() {
   const { logFile } = runtimePaths();
   if (!fs.existsSync(logFile)) {
-    console.log('⚠️  No logs found');
+    console.log(t('logs.missing', { path: logFile }));
     return;
   }
 
-  console.log('📝 Logs from:', logFile);
+  console.log(t('logs.from', { path: logFile }));
   console.log('---');
   const logs = fs.readFileSync(logFile, 'utf8');
   const lines = logs.split('\n');
@@ -922,7 +969,7 @@ if (require.main === module) {
       showHelp();
       break;
     default:
-      console.log('❌ Unknown command:', command);
+      console.log(t('help.unknown', { command }));
       showHelp();
       process.exit(1);
   }

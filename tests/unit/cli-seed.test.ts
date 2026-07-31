@@ -198,10 +198,10 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr + result.stdout).toContain('Não consegui listar');
+      expect(result.stderr + result.stdout).toContain('Could not list the tables before clearing');
       // Critical: the error suffix must NEVER be empty. Match the colon followed
       // by at least one non-whitespace character.
-      expect(result.stderr + result.stdout).toMatch(/Não consegui listar.*:\s*\S+/);
+      expect(result.stderr + result.stdout).toMatch(/Could not list the tables before clearing.*:\s*\S+/);
       expect(result.stderr + result.stdout).toContain('HTTP 500');
     });
 
@@ -210,7 +210,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr + result.stdout).toMatch(/Não consegui listar.*:\s*\S+/);
+      expect(result.stderr + result.stdout).toMatch(/Could not list the tables before clearing.*:\s*\S+/);
     });
 
     it('shows a useful message when the orchestrator returns 500 with {error: ""}', async () => {
@@ -219,7 +219,7 @@ describe('CLI — seed and seed:clear', () => {
 
       expect(result.exitCode).toBe(1);
       // Empty error from server should not lead to empty CLI message
-      expect(result.stderr + result.stdout).toMatch(/Não consegui listar.*:\s*\S+/);
+      expect(result.stderr + result.stdout).toMatch(/Could not list the tables before clearing.*:\s*\S+/);
       expect(result.stderr + result.stdout).toContain('HTTP 500');
     });
   });
@@ -240,9 +240,9 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear', '--yes'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('ATENÇÃO');
+      expect(result.stdout).toContain('WARNING');
       expect(result.stdout).toMatch(/Engine:\s+http:\/\/localhost:14566/);
-      expect(result.stdout).toMatch(/não toca em nenhuma conta AWS/i);
+      expect(result.stdout).toMatch(/does NOT touch any AWS account/i);
     });
 
     it('skips the prompt with --yes and clears all live tables', async () => {
@@ -253,7 +253,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear', '--yes'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('pulando confirmação');
+      expect(result.stdout).toContain('skipping the interactive confirmation');
       expect(result.stdout).toContain('Users: 1 item(s) deleted');
       expect(result.stdout).toContain('Orders: 1 item(s) deleted');
       expect(stub.state.clearCalls).toHaveLength(1);
@@ -294,7 +294,7 @@ describe('CLI — seed and seed:clear', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Cancelado');
+      expect(result.stdout).toContain('Aborted');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
@@ -308,7 +308,7 @@ describe('CLI — seed and seed:clear', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Cancelado');
+      expect(result.stdout).toContain('Aborted');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
@@ -322,7 +322,7 @@ describe('CLI — seed and seed:clear', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Cancelado');
+      expect(result.stdout).toContain('Aborted');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
@@ -334,7 +334,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('NENHUMA das tabelas correspondentes existe no engine');
+      expect(result.stdout).toContain('NONE of the matching tables exist in the engine');
       expect(result.stdout).toContain('Ghost');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
@@ -345,7 +345,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Nenhum arquivo de seed');
+      expect(result.stdout).toContain('No seed file');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
@@ -379,7 +379,7 @@ describe('CLI — seed and seed:clear', () => {
       expect(result.stdout).toContain('pro-sample-microservice-Users');
       expect(result.stdout).toContain('pro-sample-microservice-Sessions');
       // And the actionable hint about TableName matching:
-      expect(result.stdout).toMatch(/bater EXATAMENTE com.*TableName/);
+      expect(result.stdout).toMatch(/match the `TableName`.*EXACTLY/);
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
@@ -390,7 +390,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear', 'Orders'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Nenhuma tabela "Orders"');
+      expect(result.stdout).toContain('No table "Orders" exists in the engine');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
@@ -436,8 +436,8 @@ describe('CLI — seed and seed:clear', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Users: 3 item(s) inserted');
       // The diagnostic now lists live tables (since some exist):
-      expect(result.stdout).toContain('Tabelas vivas no engine');
-      expect(result.stdout).toMatch(/bater EXATAMENTE/);
+      expect(result.stdout).toContain('Live tables in the engine');
+      expect(result.stdout).toMatch(/match the `TableName`.*EXACTLY/);
     });
 
     it('shows the deploy-the-stack hint when no live tables exist at all', async () => {
@@ -448,7 +448,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Nenhuma tabela viva no engine');
+      expect(result.stdout).toContain('No live tables in the engine');
       expect(result.stdout).toContain('npx lss start');
       expect(result.stdout).toContain('serverless deploy');
     });

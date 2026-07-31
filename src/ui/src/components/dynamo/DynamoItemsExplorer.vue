@@ -518,27 +518,27 @@ watch(() => [mode.value, indexName.value], () => {
               gap="0.5rem"
               align="end"
             >
-              <TFormField label="Attribute name" style="flex: 1.4;">
-                <TInput v-model="f.attr" placeholder="Enter attribute name" />
+              <TFormField :label="t('dynamo.attributeName')" style="flex: 1.4;">
+                <TInput v-model="f.attr" :placeholder="t('dynamo.enterAttributeName')" />
               </TFormField>
-              <TFormField label="Condition" style="flex: 1.4;">
+              <TFormField :label="t('dynamo.condition')" style="flex: 1.4;">
                 <TSelect v-model="f.op" :options="filterOps" />
               </TFormField>
-              <TFormField label="Type" style="flex: 0.9;">
+              <TFormField :label="t('common.type')" style="flex: 0.9;">
                 <TSelect v-model="f.type" :options="filterTypeOptions" />
               </TFormField>
-              <TFormField label="Value" style="flex: 1.7;">
+              <TFormField :label="t('dynamo.value')" style="flex: 1.7;">
                 <TInput
                   v-model="f.value"
                   :disabled="f.op === 'attribute_exists' || f.op === 'attribute_not_exists'"
-                  placeholder="Enter attribute value"
+                  :placeholder="t('dynamo.enterAttributeValue')"
                 />
               </TFormField>
-              <TButton size="sm" variant="outline" @click="removeFilter(i)">Remove</TButton>
+              <TButton size="sm" variant="outline" @click="removeFilter(i)">{{ t('dynamo.remove') }}</TButton>
             </TStack>
 
             <div>
-              <TButton size="sm" variant="outline" @click="addFilter">Add filter</TButton>
+              <TButton size="sm" variant="outline" @click="addFilter">{{ t('dynamo.addFilter') }}</TButton>
             </div>
           </TStack>
         </TStack>
@@ -547,11 +547,11 @@ watch(() => [mode.value, indexName.value], () => {
       <template #footer>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
           <TStack direction="horizontal" gap="0.5rem" align="center">
-            <TButton variant="solid" :loading="running" @click="run()">Run</TButton>
-            <TButton variant="ghost" @click="reset">Reset</TButton>
+            <TButton variant="solid" :loading="running" @click="run()">{{ t('dynamo.run') }}</TButton>
+            <TButton variant="ghost" @click="reset">{{ t('dynamo.reset') }}</TButton>
           </TStack>
           <TStack direction="horizontal" gap="0.5rem" align="center">
-            <TText tone="muted">Limit</TText>
+            <TText tone="muted">{{ t('dynamo.limit') }}</TText>
             <TInput v-model.number="limit" type="number" size="sm" style="width: 6rem;" />
           </TStack>
         </TStack>
@@ -570,10 +570,12 @@ watch(() => [mode.value, indexName.value], () => {
     >
       <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
         <span>
-          <TText as="strong" weight="semibold">{{ statusInfo.finished ? 'Completed' : 'Stopped' }}</TText>
-          · Items returned: <TText as="strong" weight="semibold">{{ statusInfo.returned }}</TText>
-          · Items scanned: <TText as="strong" weight="semibold">{{ statusInfo.scanned }}</TText>
-          · Efficiency: <TText as="strong" weight="semibold">{{ statusInfo.efficiency }}%</TText>
+          <TText as="strong" weight="semibold">
+            {{ statusInfo.finished ? t('dynamo.completed') : t('dynamo.stopped') }}
+          </TText>
+          · {{ t('dynamo.itemsReturned') }}: <TText as="strong" weight="semibold">{{ statusInfo.returned }}</TText>
+          · {{ t('dynamo.itemsScanned') }}: <TText as="strong" weight="semibold">{{ statusInfo.scanned }}</TText>
+          · {{ t('dynamo.efficiency') }}: <TText as="strong" weight="semibold">{{ statusInfo.efficiency }}%</TText>
         </span>
         <TButton
           v-if="!statusInfo.finished"
@@ -582,7 +584,7 @@ watch(() => [mode.value, indexName.value], () => {
           :loading="running"
           @click="nextPage"
         >
-          Retrieve next page
+          {{ t('dynamo.retrieveNextPage') }}
         </TButton>
       </TStack>
     </TAlert>
@@ -594,34 +596,38 @@ watch(() => [mode.value, indexName.value], () => {
             <TText weight="semibold">
               {{
                 indexName
-                  ? `Index: ${indexName} (${props.table.name})`
-                  : `Table: ${props.table.name}`
+                  ? t('dynamo.resultsIndex', { index: indexName, table: props.table.name })
+                  : t('dynamo.resultsTable', { table: props.table.name })
               }}
-              – Items returned ({{ items.length }})
+              – {{ t('dynamo.itemsReturnedCount', { count: items.length }) }}
             </TText>
             <TText tone="muted" size="xs">
-              {{ mode === 'scan' ? 'Scan' : 'Query' }} started on
-              {{ startedAt ? startedAt.toLocaleString() : '—' }}
+              {{
+                t('dynamo.startedOn', {
+                  mode: mode === 'scan' ? 'Scan' : 'Query',
+                  time: startedAt ? startedAt.toLocaleString() : '—',
+                })
+              }}
             </TText>
           </TStack>
           <TStack direction="horizontal" gap="0.5rem">
-            <TButton size="sm" variant="ghost" :loading="running" @click="run()">Refresh</TButton>
-            <TButton size="sm" variant="outline" @click="openCreate">Create item</TButton>
+            <TButton size="sm" variant="ghost" :loading="running" @click="run()">{{ t('common.refresh') }}</TButton>
+            <TButton size="sm" variant="outline" @click="openCreate">{{ t('dynamo.createItem') }}</TButton>
           </TStack>
         </TStack>
       </template>
 
       <TStack v-if="running && !items.length" direction="horizontal" justify="center" align="center">
-        <TSpinner label="Running..." />
+        <TSpinner :label="t('dynamo.running')" />
       </TStack>
 
       <TEmptyState
         v-else-if="!items.length"
-        title="No items"
-        description="Run the operation to load items."
+        :title="t('dynamo.noItemsTitle')"
+        :description="t('dynamo.noItemsDesc')"
       />
 
-      <TTable v-else :columns="columns" :rows="rows" aria-label="Scan and query results">
+      <TTable v-else :columns="columns" :rows="rows" :aria-label="t('dynamo.resultsAriaLabel')">
         <template
           v-for="(name, idx) in keyAttrNames"
           :key="`k-${name}`"
@@ -666,10 +672,10 @@ watch(() => [mode.value, indexName.value], () => {
 
     <TConfirmDialog
       v-model:open="confirmDeleteOpen"
-      title="Delete item"
-      :description="`Delete this item from ${props.table.name}? This cannot be undone.`"
-      confirm-label="Delete"
-      cancel-label="Cancel"
+      :title="t('dynamo.deleteItemTitle')"
+      :description="t('dynamo.deleteItemDesc', { table: props.table.name })"
+      :confirm-label="t('common.delete')"
+      :cancel-label="t('common.cancel')"
       tone="danger"
       @confirm="doDelete"
     />

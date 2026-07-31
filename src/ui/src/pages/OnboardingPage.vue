@@ -90,7 +90,13 @@ async function saveBrand(): Promise<void> {
       subtitle: brand.subtitle.trim() || null,
       defaultTheme: brand.theme,
     };
-    if (brand.primary.trim()) branding.colors = { 'brand-primary': brand.primary.trim() };
+    // `branding.colors` is replaced wholesale by the config merge (it merges
+    // one level, and `colors` IS that level), so the existing token map has to
+    // be carried along — sending only the one field the wizard edits would
+    // silently delete every other token the project had configured.
+    if (brand.primary.trim()) {
+      branding.colors = { ...(config.value?.branding.colors ?? {}), 'brand-primary': brand.primary.trim() };
+    }
     const res = await api.updateConfig({ branding } as never);
     config.value = res.config;
     // Branding is hot: re-pull it so the new identity shows immediately.
