@@ -52,12 +52,12 @@ describe('client config-discovery — resolveConfig', () => {
 
     it('ignores a non-numeric LSS_SERVER_PORT and falls back to the default', () => {
       process.env.LSS_SERVER_PORT = 'not-a-port';
-      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:3100');
+      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:14566');
     });
 
     it('ignores a non-positive LSS_SERVER_PORT and falls back to the default', () => {
       process.env.LSS_SERVER_PORT = '0';
-      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:3100');
+      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:14566');
     });
 
     it('reads serverPort from an explicit configPath', () => {
@@ -78,16 +78,16 @@ describe('client config-discovery — resolveConfig', () => {
 
     it('ignores a config file whose serverPort is not a number, using the default', () => {
       fs.writeFileSync(path.join(tmp, 'lss.config.json'), JSON.stringify({ serverPort: 'nope' }));
-      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:3100');
+      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:14566');
     });
 
     it('ignores an unparseable config file, using the default port', () => {
       fs.writeFileSync(path.join(tmp, 'lss.config.json'), 'not json {');
-      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:3100');
+      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:14566');
     });
 
     it('defaults to port 3100 when no config is found anywhere', () => {
-      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:3100');
+      expect(resolveConfig({ cwd: tmp }).baseUrl).toBe('http://localhost:14566');
     });
   });
 

@@ -9,7 +9,7 @@
 import fs from 'fs';
 import path from 'path';
 
-const DEFAULT_PORT = 3100;
+const DEFAULT_PORT = 14566;
 const DEFAULT_TIMEOUT_MS = 130_000; // above await-idle's 120 s server-side clamp
 
 export interface ResolveOptions {

@@ -59,7 +59,7 @@ protocol revision `2024-11-05` and advertises only the `tools` capability.
 | `LSS_CONFIG` | Explicit config file to read `serverPort` from. |
 
 With neither set, the server reads `serverPort` from `lss.config.json` (then
-`.lssrc`) in its working directory, and falls back to `http://localhost:3100`.
+`.lssrc`) in its working directory, and falls back to `http://localhost:14566`.
 
 > **The orchestrator has to be running.** `lss mcp` never boots one — it only
 > talks HTTP to a stack you started with `lss start`. If nothing answers, every
@@ -74,9 +74,9 @@ that text before asking a human to approve the call.
 
 | Tool | What it answers |
 |---|---|
-| `lss_health` | Which engine is active, its endpoint, how many event-source loops and schedule rules are armed |
+| `lss_health` | Engine endpoint, the AWS services it answers for, how many event-source loops and schedule rules are armed |
 | `lss_config` | Effective configuration (no secret values), including the lambda residency policy |
-| `lss_ports` | Every local port: orchestrator, engine, per-service API and invoke listeners |
+| `lss_ports` | Every local port: the stack's own (dashboard + API + AWS wire) plus each service's API and invoke listeners |
 | `lss_services` | Registered services: resources, routes, runtime status, `runtimeWarm` |
 | `lss_resources` / `lss_resource_owners` | Provisioned resources, and which service declared each |
 | `lss_lambdas` / `lss_lambda_logs` | Functions with triggers and counters; per-invocation logs |

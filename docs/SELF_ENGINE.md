@@ -13,7 +13,8 @@ container, no auth token. Design rationale and phased roadmap:
 // lss.config.json
 {
   "selfEngine": {
-    "port": 14566,                   // default — outside 4566–4599 on purpose*
+    "port": 14566,                   // default — equal to serverPort, so the
+                                     // engine shares the orchestrator's listener*
     "dataDir": null,                 // default: <stateDir>/engine, else ~/.lss/projects/<slug>/engine
     "account": "000000000000",
     "idleUnloadMs": 300000,          // dehydrate idle data stores after 5 min
@@ -24,9 +25,15 @@ container, no auth token. Design rationale and phased roadmap:
 }
 ```
 
-Env overrides: `LSS_ENGINE_PORT`, `LSS_ENGINE_DATA_DIR` — together with
-`LSS_DASHBOARD_PORT` they are everything a second instance needs. The engine
-starts with the orchestrator; there is nothing to enable.
+The engine starts with the orchestrator and, by default, **on the same port**:
+`selfEngine.port` defaults to the same value as `serverPort`, so the dashboard,
+the REST API and the AWS wire are one URL. A request is routed by shape — SigV4,
+`X-Amz-Target` or any `x-amz-*` header reaches the engine, everything else the
+API/SPA (`src/server/engine/http/is-aws-request.ts`). Give the two keys different
+values to go back to two listeners.
+
+Env overrides: `LSS_ENGINE_PORT`, `LSS_ENGINE_DATA_DIR` — with `LSS_DASHBOARD_PORT`
+they are everything a second instance needs.
 
 Point your application at the engine like any AWS endpoint:
 
@@ -34,7 +41,7 @@ Point your application at the engine like any AWS endpoint:
 AWS_ENDPOINT=http://localhost:14566
 ```
 
-\* A real LocalStack install (if your machine has one) intercepts ports 4566–4599 on some hosts (Docker
+\* And outside 4566–4599: a real LocalStack install (if your machine has one) intercepts that range on some hosts (Docker
 Desktop/WSL2), silently hijacking traffic. If you need the engine on 4566 for
 drop-in compatibility, set `selfEngine.port` explicitly.
 

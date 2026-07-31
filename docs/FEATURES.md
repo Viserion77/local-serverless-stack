@@ -19,7 +19,7 @@ by the live integration suite (`npm run test:integration`).
 
 | Feature | Promise | Asserted by |
 |---|---|---|
-| `lss start` | Starts the orchestrator + engine in the background; writes a PID file and logs. | integration (`features.test.ts` boots via `lss start --config`) + unit (`cli`) |
+| `lss start` | Starts the orchestrator + engine in the background on **one port** (default 14566: dashboard, REST API and AWS wire); writes a PID file and logs. | integration (`features.test.ts` boots via `lss start --config`) + unit (`cli`) |
 | `lss stop` | Gracefully stops the orchestrator addressed by the active config. | integration (`features.test.ts` teardown) + unit (`cli`) |
 | `lss status` | Reports RUNNING/NOT RUNNING + ports for the addressed instance. | unit (`cli`) |
 | `lss logs` | Prints the tail of the instance log. | unit (`cli`) |
@@ -223,6 +223,7 @@ the next milestone and rows below will gain integration assertions with it.
 
 | Feature | Promise | Asserted by |
 |---|---|---|
+| One port for everything | `serverPort` and `selfEngine.port` both default to `14566`, and being equal is the switch: the orchestrator binds one listener and routes each request by shape — SigV4 / `X-Amz-Target` / any `x-amz-*` header / an engine-owned path (`/_aoss`, `/2015-03-31/`, `/_lss/health`) / a `POST` of `multipart` or form-encoded goes to the engine, everything else to the REST API and the SPA. A bucket named `api` is not a conflict: the SDK signs, the browser does not. Give the two keys different values to bind two listeners as before. | unit (`engine/http/is-aws-request`, `config-manager`, `routes/config`) + integration |
 | Engine configuration | `selfEngine` config block; `LSS_ENGINE_PORT` / `LSS_ENGINE_DATA_DIR` env overrides — with `LSS_DASHBOARD_PORT`, everything a second instance needs without writing a config file. | unit (`config-manager`, `cli`) |
 | Wire front door | SigV4-scope/X-Amz-Target/path routing on one port; per-protocol error shapes (`__type`, Query XML, S3 XML with body-less HEAD, Lambda + `x-amzn-ErrorType`); `x-amzn-query-error` SQS compat header; aws-chunked PutObject decoding; `fallbackEndpoint` verbatim reverse proxy for anything unimplemented. | unit (`engine/http`) |
 | Storage & footprint | JSONL snapshot + WAL per table (torn-tail-safe replay, compaction), atomic JSON catalogs, content-addressed S3 blobs (never in heap), hydrate-on-first-touch + idle dehydrate + `memoryBudgetMb` LRU, debounced flushes with opt-in fsync. | unit (`engine/store`) |

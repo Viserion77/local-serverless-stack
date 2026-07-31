@@ -24,6 +24,7 @@ import { GatewayManager } from './services/gateway-manager.js';
 import { SourceWatcher } from './services/source-watcher.js';
 import { startDynamoProxy } from './dev/dynamo-proxy.js';
 import { applyRegionToExplorers } from './services/explorer-region.js';
+import { isAwsRequest } from './engine/http/is-aws-request.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -88,16 +89,42 @@ async function start() {
     console.log('🚀 Starting Orchestrator Server...');
 
     // In-process AWS engine: no Docker, no container, no auth token.
+    //
+    // By default it shares this process's listener instead of binding its own,
+    // so the REST API, the dashboard and the AWS wire are all one port and one
+    // URL. `isAwsRequest` decides per request which handler answers; give
+    // `serverPort` and `selfEngine.port` different values to split them again.
     const engine = EngineManager.getInstance();
-    await engine.start();
+    const single = configManager.isSingleListener();
+    let awsHandler: ((req: http.IncomingMessage, res: http.ServerResponse) => void) | null = null;
+    if (single) {
+      awsHandler = await engine.startEmbedded();
+    } else {
+      await engine.start();
+    }
 
     // An EADDRINUSE on the dashboard port has to be a named, actionable
     // failure: without an 'error' listener it surfaces as an unhandled
     // exception AFTER the engine has already bound its own port and started
     // its delivery loops, leaving a half-alive process behind.
-    const httpServer = app.listen(PORT, () => {
-      console.log(`✅ Server running on http://localhost:${PORT}`);
-      console.log(`✅ Self engine running on ${engine.getEndpoint()}`);
+    // One server, two handlers: an AWS SDK call goes to the engine, everything
+    // else to Express. The engine's own dispatcher falls back to S3 for
+    // anything it cannot classify, so `GET /assets/app.js` would be read as a
+    // bucket — the split has to happen here, in front of it.
+    const httpServer = http.createServer((req, res) => {
+      if (awsHandler && isAwsRequestMessage(req)) {
+        awsHandler(req, res);
+        return;
+      }
+      app(req, res);
+    });
+    httpServer.listen(PORT, () => {
+      if (single) {
+        console.log(`✅ LSS on http://localhost:${PORT} — dashboard, REST API and AWS wire`);
+      } else {
+        console.log(`✅ Server running on http://localhost:${PORT}`);
+        console.log(`✅ Self engine running on ${engine.getEndpoint()}`);
+      }
     });
     httpServer.on('error', (error: NodeJS.ErrnoException) => {
       if (error.code === 'EADDRINUSE') {
@@ -157,6 +184,18 @@ async function start() {
     console.error('❌ Failed to start server:', error);
     process.exit(1);
   }
+}
+
+// Adapts a raw request to the probe `isAwsRequest` takes.
+function isAwsRequestMessage(req: http.IncomingMessage): boolean {
+  const url = req.url ?? '/';
+  const queryIndex = url.indexOf('?');
+  return isAwsRequest({
+    method: (req.method ?? 'GET').toUpperCase(),
+    path: queryIndex === -1 ? url : url.slice(0, queryIndex),
+    headers: req.headers,
+    query: new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
+  });
 }
 
 // Graceful shutdown. `code` is non-zero when a fatal boot problem (e.g. the

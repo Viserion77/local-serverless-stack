@@ -42,7 +42,7 @@ Delete these keys — they are rejected as unknown on `PUT /api/config`, and
 |---|---|
 | `engine` | none — there is one engine (drop the key; `"self"` is tolerated) |
 | `mode` (`managed` / `external`) | none |
-| `localstackPort`, `localstackEndpoint` | `selfEngine.port` (default `14566`) |
+| `localstackPort`, `localstackEndpoint` | `serverPort` / `selfEngine.port` — both default to `14566`, and being equal is what puts the dashboard, the REST API and the AWS wire on **one** listener |
 | `localstackEdition`, `localstackVersion`, `localstackImage` | none |
 | `localstackAuthToken` | none |
 | `services` | none — the engine serves its full set; see `GET /api/health` → `engine.services` |
@@ -65,11 +65,13 @@ Before:
 After:
 
 ```jsonc
-{
-  "serverPort": 3100,
-  "selfEngine": { "port": 14566 }
-}
+{}
 ```
+
+That is not a typo: every key above is now a default. The stack answers on
+`14566` — dashboard, REST API and AWS wire — so `AWS_ENDPOINT` and the browser
+URL are the same. Keep two listeners by giving `serverPort` and
+`selfEngine.port` different values.
 
 ### 2. Environment variables
 
@@ -98,8 +100,8 @@ visibly instead of quietly starting the wrong thing.
 
 ### 4. Service endpoints
 
-Point your handlers' AWS endpoint at the engine port (default `14566`) instead of
-`4566`:
+Point your handlers' AWS endpoint at the stack's port (default `14566`) instead
+of `4566` — the same port the dashboard and the plugin use:
 
 ```yaml
 provider:

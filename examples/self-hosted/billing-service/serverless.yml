@@ -21,7 +21,7 @@ custom:
   accountId: '000000000000'
   orchestrator:
     enabled: true
-    orchestratorUrl: http://localhost:3140
+    orchestratorUrl: http://localhost:14566
   lss:
     apiPort: 3632
     invokePort: 13632

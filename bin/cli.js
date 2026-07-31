@@ -9,6 +9,8 @@ const { pathToFileURL } = require('url');
 // Default paths used when no config is present. The actual paths are derived
 // per-invocation by runtimePaths() below, scoped to the configured serverPort
 // so multiple examples (each with their own lss.config.json) can run in parallel.
+// The dashboard, the REST API and the AWS wire all answer here by default.
+const DEFAULT_PORT = 14566;
 const DEFAULT_PID_FILE = path.join(os.tmpdir(), 'lss-orchestrator.pid');
 const DEFAULT_LOG_FILE = path.join(os.tmpdir(), 'lss-orchestrator.log');
 
@@ -33,7 +35,7 @@ function runtimePaths() {
   const port = cfg.serverPort;
   // Keep the legacy global path when the default port is in use so existing
   // installations don't lose their running process across an upgrade.
-  if (!port || port === 3100) {
+  if (!port || port === DEFAULT_PORT) {
     return { pidFile: DEFAULT_PID_FILE, logFile: DEFAULT_LOG_FILE };
   }
   return {
@@ -82,19 +84,34 @@ function loadConfig() {
   return {};
 }
 
+// Positive integer from an env var, or undefined when unset/garbage — so a
+// typo falls back to the file value instead of yielding NaN.
+function envPort(name) {
+  const parsed = parseInt(process.env[name] || '', 10);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
+}
+
 /**
- * Get configuration values with defaults
+ * Get configuration values with defaults.
+ *
+ * Applies the same environment overrides the server does. Without this the CLI
+ * printed the file's ports while the server bound the env's — and, worse,
+ * runtimePaths() derives the PID/log path from serverPort when no stateDir is
+ * set, so `LSS_DASHBOARD_PORT=… lss start` followed by `lss stop` addressed two
+ * different files. Running a second instance purely from the environment is a
+ * documented workflow (docs/CONFIGURATION.md), so it has to agree end to end.
  */
 function getConfig(config) {
   return {
-    serverPort: config.serverPort || 3100,
-
-    enableDynamoProxy: config.enableDynamoProxy || false,
-    dynamoProxyPort: config.dynamoProxyPort || 8000,
+    serverPort: envPort('LSS_DASHBOARD_PORT') || envPort('PORT') || config.serverPort || DEFAULT_PORT,
+    enableDynamoProxy: process.env.LSS_ENABLE_DYNAMO_PROXY
+      ? process.env.LSS_ENABLE_DYNAMO_PROXY === 'true' || process.env.LSS_ENABLE_DYNAMO_PROXY === '1'
+      : config.enableDynamoProxy || false,
+    dynamoProxyPort: envPort('LSS_DYNAMO_PROXY_PORT') || config.dynamoProxyPort || 8000,
     mode: config.mode || 'managed',
     stateDir: config.stateDir,
     engine: config.engine,
-    selfEnginePort: (config.selfEngine && config.selfEngine.port) || 14566,
+    selfEnginePort: envPort('LSS_ENGINE_PORT') || (config.selfEngine && config.selfEngine.port) || DEFAULT_PORT,
   };
 }
 
@@ -202,7 +219,7 @@ function startOrchestrator() {
 
   // Build environment variables from config
   const env = { ...process.env };
-  /* istanbul ignore else: getConfig() always defaults serverPort to 3100, so the else is unreachable */
+  /* istanbul ignore else: getConfig() always defaults serverPort, so the else is unreachable */
   if (cfg.serverPort) {
     env.PORT = cfg.serverPort;
   }

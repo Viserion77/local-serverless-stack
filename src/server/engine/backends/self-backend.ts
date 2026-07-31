@@ -34,6 +34,11 @@ export class SelfEngineBackend {
   readonly kind = 'self' as const;
 
   private readonly overrides: Partial<ResolvedSelfEngineConfig>;
+  // Set when the engine shares the orchestrator's listener instead of binding
+  // its own: start() builds everything but skips listen(), and the caller
+  // mounts getRequestHandler() behind its own server.
+  private embedded = false;
+  private handler: ((req: http.IncomingMessage, res: http.ServerResponse) => void) | null = null;
   private config: ResolvedSelfEngineConfig | null = null;
   private store: EngineStore | null = null;
   private sqs: SqsEmulator | null = null;
@@ -49,6 +54,17 @@ export class SelfEngineBackend {
   // tests use it for ephemeral ports (0) and temp data dirs.
   constructor(overrides: Partial<ResolvedSelfEngineConfig> = {}) {
     this.overrides = overrides;
+  }
+
+  /**
+   * Build the engine without binding a port. The returned handler answers the
+   * AWS wire; the caller decides which requests reach it (see is-aws-request).
+   */
+  async startEmbedded(): Promise<(req: http.IncomingMessage, res: http.ServerResponse) => void> {
+    this.embedded = true;
+    await this.start();
+    // start() always assigns the handler before returning.
+    return this.handler as (req: http.IncomingMessage, res: http.ServerResponse) => void;
   }
 
   async start(): Promise<void> {
@@ -112,6 +128,14 @@ export class SelfEngineBackend {
       ctx,
       emulators: [dynamo, sqs, s3, events, sns, sts, secretsManager, lambdaCtl, opensearch],
     });
+    this.handler = handler;
+
+    if (this.embedded) {
+      // The orchestrator owns the listener; everything above is already live.
+      this.running = true;
+      return;
+    }
+
     const server = http.createServer(handler);
     server.on('connection', socket => {
       this.sockets.add(socket);
@@ -183,6 +207,11 @@ export class SelfEngineBackend {
 
   getEndpoint(): string {
     return `http://localhost:${this.boundPort ?? this.resolveConfig().port}`;
+  }
+
+  /** The AWS wire handler — non-null once start()/startEmbedded() resolved. */
+  getRequestHandler(): ((req: http.IncomingMessage, res: http.ServerResponse) => void) | null {
+    return this.handler;
   }
 
   getConfig(): { endpoint: string; region: string; credentials: { accessKeyId: string; secretAccessKey: string } } {

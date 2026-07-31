@@ -15,7 +15,8 @@ export interface ResolvedConfig {
   timeoutMs: number;
 }
 
-const DEFAULT_PORT = 3100;
+// One port for everything — see docs/CONFIGURATION.md.
+const DEFAULT_PORT = 14566;
 const DEFAULT_TIMEOUT_MS = 15000;
 
 function stripTrailingSlash(url: string): string {

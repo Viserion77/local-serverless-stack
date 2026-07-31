@@ -91,12 +91,12 @@
 const CONFIG = {
   // Links shown top-right: [label, url]
   links: [
-    ['Dashboard', 'http://localhost:3140'],
+    ['Dashboard', 'http://localhost:14566'],
   ],
   // Health checks: {label, url, note}  (any 2xx/3xx/4xx response counts as "up";
   // only network failure marks it down — LocalStack/engine endpoints often 404.)
   statuses: [
-    { label: 'LSS orchestrator', url: 'http://localhost:3140/api/health', note: ':3140' },
+    { label: 'LSS orchestrator', url: 'http://localhost:14566/api/health', note: ':14566' },
     { label: 'orders-service', url: 'http://localhost:3631/orders', note: ':3631' },
     { label: 'billing-service', url: 'http://localhost:3632/receipts', note: ':3632' },
     { label: 'notifications-service', url: 'http://localhost:3633/notifications', note: ':3633' },
@@ -140,8 +140,8 @@ const CONFIG = {
         { name: 'Create poison order (total: -1)', method: 'POST', url: 'http://localhost:3631/orders',
           body: { customerId: 'u-poison', total: -1 },
           extract: { poisonOrderId: 'id' }, pause: 13000 },
-        { name: 'peek DLQ (message count > 0 after redrive)', method: 'GET', url: 'http://localhost:3140/api/queues/orders-to-process-dlq' },
-        { name: 'peek source queue (drained)', method: 'GET', url: 'http://localhost:3140/api/queues/orders-to-process' },
+        { name: 'peek DLQ (message count > 0 after redrive)', method: 'GET', url: 'http://localhost:14566/api/queues/orders-to-process-dlq' },
+        { name: 'peek source queue (drained)', method: 'GET', url: 'http://localhost:14566/api/queues/orders-to-process' },
         { name: 'No receipt was written for it', method: 'GET', url: 'http://localhost:3632/receipts' },
       ],
     },

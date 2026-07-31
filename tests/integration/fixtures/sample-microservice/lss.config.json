@@ -1,13 +1,11 @@
 {
-  "serverPort": 3110,
   "region": "us-east-1",
   "persistence": true,
   "seedsDir": "./seeds",
   "autoPackage": true,
   "packageCommand": "npx serverless package",
   "packageTimeoutMs": 300000,
-  "engine": "self",
   "selfEngine": {
-    "port": 14570
+    "port": 14599
   }
 }

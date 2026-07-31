@@ -1,12 +1,8 @@
 {
-  "serverPort": 3101,
-  "selfEngine": {
-    "port": 14566
-  },
-  "enableDynamoProxy": false,
-  "dynamoProxyPort": 8001,
+  "stateDir": ".lss",
   "region": "us-east-1",
   "persistence": true,
   "debug": true,
-  "stateDir": ".lss"
+  "enableDynamoProxy": false,
+  "dynamoProxyPort": 8001
 }

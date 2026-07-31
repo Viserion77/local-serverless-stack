@@ -63,7 +63,7 @@ What this exercises on the self engine:
   tables and queues, JSON catalogs + a JSONL table per index for OpenSearch); everything
   survives an orchestrator restart. Delete the folder for a clean slate.
 
-> **Ports** — LSS server `3140`, self engine `14566`, service APIs `3631`–`3634`, invoke
+> **Ports** — LSS `14566` (dashboard, REST API and AWS wire on one listener), service APIs `3631`–`3634`, invoke
 > `13631`–`13634`. The engine's default port sits **outside 4566–4599** on purpose: a real
 > LocalStack install intercepts that whole range on some hosts.
 
@@ -72,7 +72,7 @@ in its fullest form: `lss.config.json` sets a custom `title`/`subtitle`, points 
 `favicon` at `assets/logo.svg`, defaults the dashboard to the dark theme, overrides the
 TreeUI brand tokens (`brand-primary`/`brand-hover`/`brand-soft`) with teal tones — plus
 per-theme dark overrides and a raw custom property (`--tree-radius-md`) — so the dashboard
-at `http://localhost:3140` opens dark with a teal accent and the example's own identity.
+at `http://localhost:14566` opens dark with a teal accent and the example's own identity.
 
 ## Prerequisites
 
@@ -102,7 +102,7 @@ curl http://localhost:3631/orders          # order stored (plus the seeded one)
 curl http://localhost:3632/receipts        # receipt written to S3 by billing
 curl http://localhost:3633/notifications   # notification created via EventBridge
 
-# 5. Dashboard: http://localhost:3140 (services, queues, tables, lambdas, APIs, Secrets)
+# 5. Dashboard: http://localhost:14566 (services, queues, tables, lambdas, APIs, Secrets)
 
 npm run lss:stop
 ```
@@ -134,8 +134,8 @@ curl -s -X POST http://localhost:3631/orders \
 # has been delivered twice and moved to the dead-letter queue.
 sleep 13
 
-curl -s http://localhost:3140/api/queues/orders-to-process-dlq   # 1 message
-curl -s http://localhost:3140/api/queues/orders-to-process       # drained
+curl -s http://localhost:14566/api/queues/orders-to-process-dlq   # 1 message
+curl -s http://localhost:14566/api/queues/orders-to-process       # drained
 ```
 
 The redriven message keeps its original `MessageId`, body and MD5 digests; its

@@ -7,6 +7,7 @@
 // the backend, and so `getEndpoint()` answers correctly before `start()` — the
 // explorers build their clients at construction time.
 
+import type http from 'http';
 import { ConfigManager } from '../services/config-manager.js';
 import type { SelfEngineBackend } from './backends/self-backend.js';
 
@@ -26,6 +27,14 @@ export class EngineManager {
     await (await this.resolveBackend()).start();
   }
 
+  /**
+   * Start the engine WITHOUT binding a port and hand back its request handler,
+   * so the orchestrator can serve the AWS wire on its own listener.
+   */
+  async startEmbedded(): Promise<(req: http.IncomingMessage, res: http.ServerResponse) => void> {
+    return (await this.resolveBackend()).startEmbedded();
+  }
+
   async stop(): Promise<void> {
     if (this.backend) {
       await this.backend.stop();
@@ -37,6 +46,9 @@ export class EngineManager {
   }
 
   getEndpoint(): string {
+    // Embedded: the engine never bound a port of its own, so the endpoint is
+    // whatever the orchestrator resolved.
+    if (this.configManager.isSingleListener()) return this.configManager.getOrchestratorUrl();
     return this.backend?.getEndpoint() ?? this.configManager.getEngineEndpoint();
   }
 

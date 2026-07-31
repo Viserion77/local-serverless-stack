@@ -38,7 +38,7 @@ class ServerlessOrchestratorPlugin {
     // Merge priority: env > options > custom > defaults
     const merged = {
       enabled: true,
-      orchestratorUrl: 'http://localhost:3100',
+      orchestratorUrl: 'http://localhost:14566',
       ...customConfig,
       ...options,
     } as PluginOptions;

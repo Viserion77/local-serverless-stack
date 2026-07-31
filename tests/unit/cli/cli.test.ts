@@ -179,7 +179,7 @@ describe('bin/cli.js helpers', () => {
     it('applies defaults when the config is empty', () => {
       const cli = loadCli();
       expect(cli.getConfig({})).toEqual({
-        serverPort: 3100,
+        serverPort: 14566,
         enableDynamoProxy: false,
         dynamoProxyPort: 8000,
         mode: 'managed',
@@ -187,6 +187,41 @@ describe('bin/cli.js helpers', () => {
         engine: undefined,
         selfEnginePort: 14566,
       });
+    });
+
+    // The server applies these overrides, so the CLI has to agree: it prints the
+    // ports AND derives the PID/log path from serverPort when no stateDir is set.
+    // Disagreeing meant `LSS_DASHBOARD_PORT=… lss start` and `lss stop`
+    // addressed two different files.
+    it('applies the same environment overrides the server does', () => {
+      const cli = loadCli(['node', 'cli.js'], {
+        LSS_DASHBOARD_PORT: '3250',
+        LSS_ENGINE_PORT: '14766',
+        LSS_DYNAMO_PROXY_PORT: '8123',
+        LSS_ENABLE_DYNAMO_PROXY: '1',
+      });
+      const out = cli.getConfig({ serverPort: 14566, selfEngine: { port: 14566 }, dynamoProxyPort: 8000 });
+      expect(out.serverPort).toBe(3250);
+      expect(out.selfEnginePort).toBe(14766);
+      expect(out.dynamoProxyPort).toBe(8123);
+      expect(out.enableDynamoProxy).toBe(true);
+    });
+
+    it('falls back to PORT, and to the file when an override is unset or garbage', () => {
+      expect(loadCli(['node', 'cli.js'], { PORT: '4200' }).getConfig({}).serverPort).toBe(4200);
+      const cli = loadCli(['node', 'cli.js'], {
+        LSS_DASHBOARD_PORT: 'not-a-port',
+        LSS_ENGINE_PORT: '0',
+        PORT: undefined,
+      });
+      const out = cli.getConfig({ serverPort: 3300, selfEngine: { port: 15000 } });
+      expect(out.serverPort).toBe(3300);
+      expect(out.selfEnginePort).toBe(15000);
+    });
+
+    it('LSS_ENABLE_DYNAMO_PROXY set to anything else disables the proxy', () => {
+      const cli = loadCli(['node', 'cli.js'], { LSS_ENABLE_DYNAMO_PROXY: 'no' });
+      expect(cli.getConfig({ enableDynamoProxy: true }).enableDynamoProxy).toBe(false);
     });
 
     it('passes through provided values', () => {
@@ -349,7 +384,7 @@ describe('bin/cli.js helpers', () => {
   describe('getServerPort', () => {
     it('returns the default port when no config', () => {
       const cli = loadCli();
-      expect(cli.getServerPort()).toBe(3100);
+      expect(cli.getServerPort()).toBe(14566);
     });
   });
 

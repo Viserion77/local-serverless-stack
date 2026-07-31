@@ -21,7 +21,7 @@ plugins:
 custom:
   orchestrator:
     enabled: true
-    orchestratorUrl: http://localhost:3140
+    orchestratorUrl: http://localhost:14566
   lss:
     apiPort: 3631
     invokePort: 13631

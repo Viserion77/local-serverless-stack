@@ -50,14 +50,14 @@ describe('resolveBaseUrl', () => {
     expect(resolveBaseUrl({ cwd: dir })).toBe('http://localhost:3999');
   });
 
-  it('defaults to 3100 when nothing is readable, unparseable, or has no numeric serverPort', () => {
-    expect(resolveBaseUrl({ cwd: dir })).toBe('http://localhost:3100');
+  it('defaults to 14566 when nothing is readable, unparseable, or has no numeric serverPort', () => {
+    expect(resolveBaseUrl({ cwd: dir })).toBe('http://localhost:14566');
     fs.writeFileSync(path.join(dir, 'lss.config.json'), '{ not json');
-    expect(resolveBaseUrl({ cwd: dir })).toBe('http://localhost:3100');
+    expect(resolveBaseUrl({ cwd: dir })).toBe('http://localhost:14566');
     fs.writeFileSync(path.join(dir, 'lss.config.json'), JSON.stringify({ serverPort: '3140' }));
-    expect(resolveBaseUrl({ cwd: dir })).toBe('http://localhost:3100');
+    expect(resolveBaseUrl({ cwd: dir })).toBe('http://localhost:14566');
     fs.writeFileSync(path.join(dir, 'lss.config.json'), JSON.stringify({ serverPort: 1.5 }));
-    expect(resolveBaseUrl({ cwd: dir })).toBe('http://localhost:3100');
+    expect(resolveBaseUrl({ cwd: dir })).toBe('http://localhost:14566');
   });
 
   it('defaults the working directory to the process cwd', () => {
@@ -79,9 +79,9 @@ const res = (status: number, body: string, statusText = '') =>
 describe('createHttp', () => {
   it('GETs without a content-type and parses the JSON body', async () => {
     const spy = mockFetch(() => res(200, '{"status":"ok"}'));
-    const http = createHttp('http://localhost:3100');
+    const http = createHttp('http://localhost:14566');
     expect(await http('GET', '/api/health')).toEqual({ status: 'ok' });
-    expect(spy.mock.calls[0][0]).toBe('http://localhost:3100/api/health');
+    expect(spy.mock.calls[0][0]).toBe('http://localhost:14566/api/health');
     expect((spy.mock.calls[0][1] as RequestInit).headers).toBeUndefined();
   });
 
@@ -121,9 +121,9 @@ describe('createHttp', () => {
 
   it('a connection failure explains how to start the stack', async () => {
     mockFetch(() => Promise.reject(Object.assign(new Error('ECONNREFUSED'), { name: 'TypeError' })));
-    await expect(createHttp('http://localhost:3100')('GET', '/api/health')).rejects.toThrow(LssUnreachableError);
-    await expect(createHttp('http://localhost:3100')('GET', '/api/health')).rejects.toThrow(
-      /Could not reach the LSS orchestrator at http:\/\/localhost:3100 \(ECONNREFUSED\).*npx lss start/s,
+    await expect(createHttp('http://localhost:14566')('GET', '/api/health')).rejects.toThrow(LssUnreachableError);
+    await expect(createHttp('http://localhost:14566')('GET', '/api/health')).rejects.toThrow(
+      /Could not reach the LSS orchestrator at http:\/\/localhost:14566 \(ECONNREFUSED\).*npx lss start/s,
     );
   });
 

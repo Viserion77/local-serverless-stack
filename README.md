@@ -13,9 +13,9 @@ LSS provides a unified local development environment for serverless microservice
 ```mermaid
 flowchart LR
     DEV[Developer] -->|npx lss start| CLI[CLI<br/>bin/cli.js]
-    CLI --> ORCH[Orchestrator<br/>Express API + dashboard :3100]
+    CLI --> ORCH["Orchestrator :14566<br/>REST API + dashboard + AWS wire"]
     SVC[Your services<br/>serverless.yml + serverless-lss] -->|sls package → register| ORCH
-    ORCH -->|provision + events| SELF[Self engine<br/>in-process :14566]
+    ORCH -->|provision + events| SELF[Self engine<br/>in-process, same listener]
     ORCH --> RT[Lambda runtime + API Gateway emulation<br/>your handlers, ports 30xx/130xx]
 ```
 
@@ -75,7 +75,7 @@ LSS features come in two layers:
 - **Dashboard (Vue 3 SPA)** — ten tabs: **Overview** (health, config, exposed-ports map), **Services** (status/start/stop/logs + per-service resource breakdown incl. EventBridge buses & rules and OpenSearch collections), **Lambdas** (registry + invoke + logs), **APIs**, **Queues**, **S3**, **DynamoDB**, **OpenSearch**, **Secrets**, **Settings** — plus a region selector and theme toggle
   - **Settings**: edit `lss.config.json` from the dashboard — only changed fields are written (you review and commit the diff), hot-reload for lazy keys, explicit restart-required and env-var-masked flags, plus a reload-from-disk button
   - **Branding**: navbar title/subtitle, logo, favicon, default theme and any TreeUI color token per theme, via the `branding` config key
-- **serverless-lss plugin** — auto-registers each service on `sls package`/`offline`; orchestrator URL precedence (`ORCHESTRATOR_URL` > `LSS_DASHBOARD_PORT` > `custom.orchestrator` > 3100)
+- **serverless-lss plugin** — auto-registers each service on `sls package`/`offline`; orchestrator URL precedence (`ORCHESTRATOR_URL` > `LSS_DASHBOARD_PORT` > `custom.orchestrator` > 14566)
 - **Programmatic client (`LssClient`)** — the CLI/dashboard surface from code: HTTP namespaces `seeds`, `queues`, `dynamo`, `buckets`, `resources`, `services`, `lambdas`, `apis`, `config`, `health` + `lifecycle` (`start`/`stop`/`status`/`logs`/`waitUntilReady`, shells out to the CLI)
 - **DynamoDB dev proxy** — optional reverse proxy on `:8000` (`enableDynamoProxy`) forwarding to the active engine, for tooling that expects DynamoDB on the standard port
 - **DynamoDB seeds** — `seeds/{tableName}.json` fixtures auto-applied on table creation, re-applied via `lss seed` or the dashboard
@@ -83,7 +83,7 @@ LSS features come in two layers:
 
 ### ⚡ The engine: an in-process AWS emulator
 
-The orchestrator serves the AWS wire protocols itself on one port (default `14566`); events are
+The orchestrator serves the AWS wire protocols itself, on the **same port as the dashboard and the REST API** (default `14566`); events are
 delivered **in-process** straight to the LSS Lambda runtime — no container, no proxy Lambdas, no
 polling. Data persists as JSONL snapshot + WAL / content-addressed blobs under `~/.lss/engine`,
 hydrated on first touch and dehydrated when idle. Anything unimplemented answers with an explicit
@@ -196,7 +196,7 @@ plugins:
 custom:
   orchestrator:
     enabled: true
-    orchestratorUrl: http://localhost:3100   # must match serverPort
+    orchestratorUrl: http://localhost:14566  # must match serverPort
   lss:
     apiPort: 3000        # HTTP API (API Gateway emulation)
     invokePort: 3001     # direct Lambda invocations
@@ -208,7 +208,7 @@ custom:
 npx sls package
 
 # 5. Watch everything in the dashboard
-open http://localhost:3100
+open http://localhost:14566
 ```
 
 A minimal template lives at [docs/serverless.yml.example](docs/serverless.yml.example);
@@ -240,14 +240,14 @@ npx lss help                   # all commands, flags and a config template
 ```bash
 $ npx lss start --self-engine
 🚀 LSS Orchestrator started (PID: 12345)
-📊 Server: http://localhost:3100
+📊 Server: http://localhost:14566
 🔧 Self Engine: http://localhost:14566 (no Docker)
 ✅ Service is running
 ```
 
 The CLI runs the orchestrator detached, storing the PID in
 `$TMPDIR/lss-orchestrator-{serverPort}.pid` and logs in
-`$TMPDIR/lss-orchestrator-{serverPort}.log` (no suffix for the default port 3100;
+`$TMPDIR/lss-orchestrator-{serverPort}.log` (no suffix for the default port;
 under `stateDir` both move into that directory). The port-scoped paths let multiple
 LSS instances coexist — one per project — without trampling each other.
 
@@ -258,8 +258,8 @@ optional — [full reference](docs/CONFIGURATION.md)):
 
 ```jsonc
 {
-  "serverPort": 3100,                // dashboard + API
-  "selfEngine": { "port": 14566 },   // engine settings — docs/SELF_ENGINE.md
+  "serverPort": 14566,               // dashboard + REST API + AWS wire, one port
+  "selfEngine": { "port": 14566 },   // equal to serverPort ⇒ one listener
   "seedsDir": "./seeds",             // DynamoDB fixtures ({tableName}.json)
   "autoPackage": false,              // run `sls package` on register when template is missing
   "lambdaRuntime": { "enabled": true, "execution": "auto" },
@@ -289,7 +289,7 @@ may still have one.
 
 ## Dashboard
 
-The Vue 3 dashboard at `http://localhost:3100` has ten tabs — **Overview** (health,
+The Vue 3 dashboard at `http://localhost:14566` has ten tabs — **Overview** (health,
 config snapshot, exposed-ports map), **Services** (status, start/stop, live logs,
 per-service resource breakdown incl. EventBridge buses & rules), **Lambdas** (registry +
 invoke), **APIs** (emulated HTTP routes), **Queues** (send/receive/purge, consumers),
@@ -390,7 +390,7 @@ local-serverless-stack/
 
 - **CLI** (`bin/cli.js`): background process management (start/stop/status/logs/seed)
 - **Server** (`src/server/`): Express API + engine orchestration; serves the built UI
-- **Engine** (`src/server/engine/`): the AWS provider behind everything — the in-process **self engine** (:14566, no Docker)
+- **Engine** (`src/server/engine/`): the AWS provider behind everything — the in-process **self engine**, sharing the orchestrator's listener (no Docker)
 - **Client** (`src/client/`): `LssClient` — the same API surface as the dashboard, from code
 - **Plugin** (`packages/serverless-plugin/`): auto-registration on `sls package`
 
@@ -423,10 +423,10 @@ npx jest tests/unit/services/config-manager.test.ts   # a single suite
 npx lss status          # running? which ports?
 npx lss logs            # orchestrator log (also: $TMPDIR/lss-orchestrator*.log)
 ls dist/server dist/ui  # built? if not: npm run build
-lsof -i :3100           # who owns the port?
+lsof -i :14566          # who owns the port?
 ```
 
-- **Plugin registers nothing** → is `orchestratorUrl` pointing at the right `serverPort`? Try `ORCHESTRATOR_URL=http://localhost:3100 npx sls package`.
+- **Plugin registers nothing** → is `orchestratorUrl` pointing at the right `serverPort`? Try `ORCHESTRATOR_URL=http://localhost:14566 npx sls package`.
 - **Ports 4566–4599 behave strangely** → a real LocalStack install may intercept the whole range; the self engine defaults to 14566 for this reason.
 - **DynamoDB on port 8000 expected by your tooling** → enable the proxy: `lss start --enable-dynamo-proxy` (or `enableDynamoProxy: true`); it forwards to the active engine.
 

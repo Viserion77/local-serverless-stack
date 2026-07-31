@@ -4,9 +4,9 @@ One complete runnable project: a self-contained monorepo slice with its own
 `lss.config.json`, AWS region, npm scripts, DynamoDB seeds, dashboard branding and
 a browser validation console.
 
-| Example | Region | Docker? | Dashboard / engine ports | Services (API / invoke) | What it demonstrates |
+| Example | Region | Docker? | Stack port | Services (API / invoke) | What it demonstrates |
 | --- | --- | --- | --- | --- | --- |
-| [self-hosted](self-hosted/) | `us-west-2` | No | 3140 / engine 14566 | orders 3631 · billing 3632 · notifications 3633 · catalog 3634 (invoke 13631–13634) | The engine end to end: DynamoDB, SQS with DLQ redrive, S3 (incl. presigned POST), EventBridge, Secrets Manager, and an OpenSearch Serverless catalog (full-text search, filters, aggregations) |
+| [self-hosted](self-hosted/) | `us-west-2` | No | 14566 (dashboard + API + AWS wire) | orders 3631 · billing 3632 · notifications 3633 · catalog 3634 (invoke 13631–13634) | The engine end to end: DynamoDB, SQS with DLQ redrive, S3 (incl. presigned POST), EventBridge, Secrets Manager, and an OpenSearch Serverless catalog (full-text search, filters, aggregations) |
 
 ## Shared conventions
 

@@ -14,7 +14,7 @@ import fs from 'fs';
 const execAsync = promisify(exec);
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const CONFIG = 'tests/integration/fixtures/lss.integration.config.json';
-const BASE = 'http://localhost:3399';
+const BASE = 'http://localhost:14599';
 const SERVICE_PATH = path.join(REPO_ROOT, 'tests/integration/fixtures/sample-microservice');
 const STATE_PID = path.join(REPO_ROOT, 'tests/.lss-integration/orchestrator.pid');
 
@@ -76,9 +76,10 @@ suite('LSS promised features (integration)', () => {
     it('exposes the isolated instance config', async () => {
       const { status, data } = await api('GET', '/api/config');
       expect(status).toBe(200);
-      expect(data.serverPort).toBe(3399);
+      expect(data.serverPort).toBe(14599);
       expect(data.engine.kind).toBe('self');
-      expect(data.engine.endpoint).toBe('http://localhost:14599');
+      // Single listener: the AWS endpoint IS the dashboard URL.
+      expect(data.engine.endpoint).toBe(BASE);
       expect(data.configPath).toContain('lss.integration.config.json');
     });
 

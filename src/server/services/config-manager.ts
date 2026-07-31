@@ -166,9 +166,13 @@ export interface ResolvedBranding {
   };
 }
 
-// Front door port for the engine. Deliberately outside 4566–4599, which a real
+// One port for the whole stack: the REST API, the dashboard and the AWS wire
+// all answer here by default. Deliberately outside 4566–4599, which a real
 // LocalStack install intercepts on some hosts (Docker Desktop/WSL2).
-const DEFAULT_ENGINE_PORT = 14566;
+//
+// Setting `serverPort` and `selfEngine.port` to DIFFERENT values splits them
+// back onto two listeners — see isSingleListener().
+const DEFAULT_PORT = 14566;
 
 export type BrandingAssetKind = 'logo' | 'favicon';
 
@@ -625,7 +629,7 @@ export class ConfigManager {
   }
 
   getServerPort(): number {
-    return this.config.serverPort ?? (parseInt(process.env.PORT || '', 10) || 3100);
+    return this.config.serverPort ?? (parseInt(process.env.PORT || '', 10) || DEFAULT_PORT);
   }
 
   // Alias for backward compatibility
@@ -790,7 +794,7 @@ export class ConfigManager {
     const rawDataDir = selfEngine.dataDir
       ?? (stateDir ? path.join(stateDir, 'engine') : this.homeStateDir('engine'));
     return {
-      port: selfEngine.port ?? DEFAULT_ENGINE_PORT,
+      port: selfEngine.port ?? DEFAULT_PORT,
       dataDir: path.isAbsolute(rawDataDir) ? rawDataDir : path.resolve(process.cwd(), rawDataDir),
       account: selfEngine.account ?? '000000000000',
       idleUnloadMs: selfEngine.idleUnloadMs ?? 300000,
@@ -815,7 +819,16 @@ export class ConfigManager {
   // which would also resolve the data dir — needless work for a URL, and it
   // drags the project-root lookup into every caller that only wants an endpoint.
   getEngineEndpoint(): string {
-    return `http://localhost:${this.config.selfEngine?.port ?? DEFAULT_ENGINE_PORT}`;
+    return `http://localhost:${this.config.selfEngine?.port ?? DEFAULT_PORT}`;
+  }
+
+  /**
+   * True when the orchestrator and the engine share one listener — the default,
+   * since both ports default to the same value. Give them different values to
+   * go back to two listeners.
+   */
+  isSingleListener(): boolean {
+    return this.getServerPort() === (this.config.selfEngine?.port ?? DEFAULT_PORT);
   }
 
   getConfigPath(): string {

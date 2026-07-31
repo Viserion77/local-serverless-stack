@@ -41,9 +41,9 @@ describe('serverless-lss plugin', () => {
   });
 
   describe('orchestratorUrl precedence', () => {
-    it('defaults to http://localhost:3100', () => {
+    it('defaults to http://localhost:14566', () => {
       const p = new Plugin(makeServerless(), {});
-      expect(p.orchestratorUrl).toBe('http://localhost:3100');
+      expect(p.orchestratorUrl).toBe('http://localhost:14566');
     });
 
     it('uses custom.orchestrator.orchestratorUrl when set', () => {
@@ -107,7 +107,7 @@ describe('serverless-lss plugin', () => {
   it('constructs with default options (no second arg) and a service without custom', () => {
     // Covers the `options = {}` default param and the `service?.custom || {}` fallback.
     const p = new Plugin({ config: { servicePath: '/x', service: 'c' }, service: undefined } as any);
-    expect(p.orchestratorUrl).toBe('http://localhost:3100');
+    expect(p.orchestratorUrl).toBe('http://localhost:14566');
     expect(p.enabled).toBe(true);
   });
 
@@ -135,7 +135,7 @@ describe('serverless-lss plugin', () => {
       await p.hooks['before:offline:start']();
       expect(fetchMock).toHaveBeenCalledTimes(1);
       const [url, opts] = fetchMock.mock.calls[0];
-      expect(url).toBe('http://localhost:3100/api/services/register');
+      expect(url).toBe('http://localhost:14566/api/services/register');
       const body = JSON.parse(opts.body);
       expect(body).toEqual({ servicePath: '/svc/path', invokePort: 3010, region: 'sa-east-1' });
     });

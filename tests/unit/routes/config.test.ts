@@ -27,8 +27,8 @@ interface StubOptions {
 // touch the filesystem or env.
 function stub(options: StubOptions = {}) {
   const cm = ConfigManager.getInstance();
-  jest.spyOn(cm, 'getServerPort').mockReturnValue(3100);
-  jest.spyOn(cm, 'getOrchestratorUrl').mockReturnValue('http://localhost:3100');
+  jest.spyOn(cm, 'getServerPort').mockReturnValue(14566);
+  jest.spyOn(cm, 'getOrchestratorUrl').mockReturnValue('http://localhost:14566');
   jest.spyOn(cm, 'getEngineEndpoint').mockReturnValue('http://localhost:14566');
   jest.spyOn(cm, 'getSelfEngineConfig').mockReturnValue({
     port: 14566,
@@ -100,7 +100,7 @@ describe('GET /api/config', () => {
     const res = await request(appWith()).get('/api/config');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
-      serverPort: 3100,
+      serverPort: 14566,
       engine: { kind: 'self', endpoint: 'http://localhost:14566' },
       selfEngine: { port: 14566, account: '000000000000', fallbackEndpoint: null },
       dynamoProxy: { enabled: false, port: 8000 },
@@ -165,7 +165,7 @@ describe('PUT /api/config', () => {
     expect(res.body.configPath).toBe('/abs/lss.config.json');
     expect(res.body.restartRequired).toEqual(['serverPort']);
     expect(res.body.envOverridden).toEqual(['region']);
-    expect(res.body.config.serverPort).toBe(3100);
+    expect(res.body.config.serverPort).toBe(14566);
   });
 
   it('answers 400 with every detail on a validation error', async () => {
@@ -212,7 +212,7 @@ describe('POST /api/config/reload', () => {
     expect(reload).toHaveBeenCalled();
     expect(res.body.configPath).toBe('/abs/lss.config.json');
     expect(res.body.restartRequired).toEqual(['engine']);
-    expect(res.body.config.serverPort).toBe(3100);
+    expect(res.body.config.serverPort).toBe(14566);
   });
 
   it('answers 400 when the file no longer parses (working config kept)', async () => {
@@ -273,7 +273,7 @@ describe('GET /api/config/ports', () => {
     const res = await request(appWith()).get('/api/config/ports');
     expect(res.status).toBe(200);
     expect(res.body.ports.map((p: { kind: string; name: string; port: number }) => [p.kind, p.name, p.port])).toEqual([
-      ['orchestrator', 'Orchestrator', 3100],
+      ['orchestrator', 'Orchestrator', 14566],
       ['engine', 'Self engine', 14566],
       ['proxy', 'DynamoDB proxy', 8000],
       ['service-api', 'svc-a', 3001],

@@ -29,8 +29,7 @@ Both files should contain valid JSON with the following optional properties:
 
 ```json
 {
-  "serverPort": 3100,
-  "selfEngine": { "port": 14566 },
+  "serverPort": 14566,
   "enableDynamoProxy": false,
   "dynamoProxyPort": 8000,
   "region": "us-east-1",
@@ -51,14 +50,23 @@ Both files should contain valid JSON with the following optional properties:
 
 ### Configuration Properties
 
-- **serverPort** (number, default: 3100)
-  - Port where the LSS server (dashboard + API) will run
-  - Used by both the web UI and REST API
-  - The Serverless Plugin connects to this server to register services
-  - Example: `3100`
+- **serverPort** (number, default: 14566)
+  - The one port the whole stack answers on: dashboard, REST API **and** the AWS
+    wire. The Serverless Plugin registers here; your handlers point `AWS_ENDPOINT`
+    here; you open the dashboard here.
+  - It shares a listener with the engine because the two traffic shapes are
+    distinguishable: a request carrying SigV4, `X-Amz-Target` or any `x-amz-*`
+    header goes to the engine, everything else to the API/SPA. A bucket named
+    `api` is therefore not a conflict — the SDK signs, the browser does not.
+  - **Two listeners instead of one**: give `selfEngine.port` a different value.
+    The orchestrator then binds `serverPort` and the engine binds its own, exactly
+    as before.
+  - Example: `14566`
 
 - **selfEngine** (object, optional)
-  - `port` (default 14566, env `LSS_ENGINE_PORT`), `dataDir` (default
+  - `port` (default 14566, env `LSS_ENGINE_PORT`) — **equal to `serverPort` by
+    default, which is what puts everything on one listener**; set it to a
+    different value to split them, `dataDir` (default
     `~/.lss/projects/<project-slug>-<hash>/engine`, or `<stateDir>/engine` when
     `stateDir` is set — the home fallback is scoped per project so two checkouts
     never share one set of tables), `account`,
@@ -355,7 +363,7 @@ Custom ports — remember to point the plugin at the new server port too:
 
 ```jsonc
 // lss.config.json
-{ "serverPort": 3200, "selfEngine": { "port": 14766 } }
+{ "serverPort": 14766 }
 ```
 
 ```yaml
@@ -375,7 +383,7 @@ Environment variables can be used instead of — or to override — a configurat
 
 - `LSS_CONFIG` - Explicit config file path for the CLI (equivalent to `--config <path>`; also honored by `LssClient`)
 - `LSS_CONFIG_PATH` - Explicit config file path for the server (the CLI sets it from `--config` when spawning)
-- `PORT` or `LSS_DASHBOARD_PORT` - Server port
+- `PORT` or `LSS_DASHBOARD_PORT` - The stack's port (dashboard + API + AWS wire)
 - `LSS_ENABLE_DYNAMO_PROXY` - Enable DynamoDB proxy (true/false or 1/0; the legacy unprefixed `ENABLE_DYNAMO_PROXY` is still honored as a fallback, deprecated)
 - `LSS_DYNAMO_PROXY_PORT` - DynamoDB proxy port
 - `AWS_REGION` - AWS region
@@ -411,7 +419,8 @@ export LSS_DASHBOARD_PORT=3200
 # Enable DynamoDB proxy
 export LSS_ENABLE_DYNAMO_PROXY=true
 
-# Move the engine off its default port
+# Move the whole stack off its default port
+export LSS_DASHBOARD_PORT=14766
 export LSS_ENGINE_PORT=14766
 
 # Start the orchestrator
@@ -504,8 +513,7 @@ If a port is already in use, change it in the configuration file:
 
 ```json
 {
-  "serverPort": 3200,
-  "selfEngine": { "port": 14766 }
+  "serverPort": 14766
 }
 ```
 

@@ -163,7 +163,7 @@ describe('loadConfig file precedence', () => {
     const cm = freshConfigManager();
     // Parse failed: no config loaded, configPath stays empty, defaults apply.
     expect(cm.getConfigPath()).toBe('');
-    expect(cm.getServerPort()).toBe(3100);
+    expect(cm.getServerPort()).toBe(14566);
     expect(console.warn).toHaveBeenCalled();
   });
 
@@ -301,7 +301,7 @@ describe('getters: defaults (no file, no env)', () => {
   });
 
   it('getServerPort defaults to 3100', () => {
-    expect(cm.getServerPort()).toBe(3100);
+    expect(cm.getServerPort()).toBe(14566);
   });
 
   it('getServerPort reads PORT env at call time when config unset', () => {
@@ -310,7 +310,7 @@ describe('getters: defaults (no file, no env)', () => {
   });
 
   it('getDashboardPort aliases getServerPort', () => {
-    expect(cm.getDashboardPort()).toBe(3100);
+    expect(cm.getDashboardPort()).toBe(14566);
   });
 
   it('isEnableDynamoProxy defaults to false', () => {
@@ -363,7 +363,7 @@ describe('getters: defaults (no file, no env)', () => {
   });
 
   it('getOrchestratorUrl uses the server port', () => {
-    expect(cm.getOrchestratorUrl()).toBe('http://localhost:3100');
+    expect(cm.getOrchestratorUrl()).toBe('http://localhost:14566');
   });
 });
 
@@ -1066,10 +1066,10 @@ describe('reloadFromDisk', () => {
 
   it('picks up file changes; boot-materialized keys land in restartRequired, lazy keys do not', () => {
     fs.existsSync.mockImplementation((p) => p === cwdFile);
-    let content = JSON.stringify({ serverPort: 3100, seedsDir: './seeds' });
+    let content = JSON.stringify({ serverPort: 14566, seedsDir: './seeds' });
     fs.readFileSync.mockImplementation(() => content);
     const cm = freshConfigManager();
-    expect(cm.getServerPort()).toBe(3100);
+    expect(cm.getServerPort()).toBe(14566);
 
     content = JSON.stringify({ serverPort: 3200, seedsDir: './other-seeds' });
     const result = cm.reloadFromDisk();
@@ -1098,7 +1098,7 @@ describe('reloadFromDisk', () => {
     fs.existsSync.mockReturnValue(false);
     const result = cm.reloadFromDisk();
     expect(result.path).toBe('');
-    expect(cm.getServerPort()).toBe(3100);
+    expect(cm.getServerPort()).toBe(14566);
     expect(result.restartRequired).toEqual(['serverPort']);
   });
 
@@ -1383,7 +1383,7 @@ describe('updateConfig', () => {
     const result = cm.updateConfig({ serverPort: 4100 });
     expect(result.path).toBe(cwdFile);
     // Nothing was loaded back, so the resolved value kept its default.
-    expect(cm.getServerPort()).toBe(3100);
+    expect(cm.getServerPort()).toBe(14566);
     expect(result.restartRequired).toEqual([]);
   });
 

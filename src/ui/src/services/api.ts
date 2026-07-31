@@ -1,6 +1,8 @@
 import { currentRegion } from './region';
 
-const API_BASE = import.meta.env.DEV ? 'http://localhost:3100' : '';
+// In dev the SPA runs on the Vite server, so it needs the orchestrator's
+// absolute URL; in a build it is served by the orchestrator itself.
+const API_BASE = import.meta.env.DEV ? 'http://localhost:14566' : '';
 
 // Absolute URL for orchestrator-served paths (e.g. branding assets), so they
 // also resolve under `vite dev` where the UI runs on a different port.

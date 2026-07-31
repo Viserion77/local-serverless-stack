@@ -34,9 +34,9 @@
     },
     {
       "label": "dev @ example self-hosted (watch, sem build)",
-      "detail": "npm run dev lendo examples/self-hosted/lss.config.json — orquestrador forçado em :3100 (a UI dev espera essa porta); registre com LSS_DASHBOARD_PORT=3100 npm run register:all. UI em :3101",
+      "detail": "npm run dev lendo examples/self-hosted/lss.config.json — LSS em :14566 (dashboard, API e AWS wire), UI Vite em :3101",
       "type": "shell",
-      "command": "LSS_DASHBOARD_PORT=3100 LSS_CONFIG_PATH=examples/self-hosted/lss.config.json npm run dev",
+      "command": "LSS_CONFIG_PATH=examples/self-hosted/lss.config.json npm run dev",
       "isBackground": true,
       "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
       "problemMatcher": []
@@ -129,7 +129,7 @@
     },
     {
       "label": "example self-hosted: start (no Docker)",
-      "detail": "Sobe o LSS com a engine própria na porta 14566",
+      "detail": "Sobe o LSS na 14566 — dashboard, REST API e AWS wire no mesmo listener",
       "type": "shell",
       "command": "npm run lss:start",
       "options": { "cwd": "${workspaceFolder}/examples/self-hosted" },
