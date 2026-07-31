@@ -4,7 +4,7 @@ This document describes the release and publishing process for Local Serverless 
 
 ## Overview
 
-LSS uses GitHub Actions to automatically publish to NPM when the version number changes in `package.json` on `main`. The current version lives in `package.json` and on npm — this document does not track it. (The `serverless-lss` plugin package was retired in v2 and is no longer published.)
+LSS uses GitHub Actions to automatically publish to NPM when the version number changes in `package.json` on `main`. The current version lives in `package.json` and on npm — this document does not track it. (The `serverless-lss` plugin package was retired in 1.0 and is no longer published.)
 
 ## Quick Release
 

@@ -33,9 +33,9 @@ jobs:
     name: Integration Tests (self engine)
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    # v2 removed the LocalStack backend: the engine runs in the orchestrator
+    # 1.0 removed the LocalStack backend: the engine runs in the orchestrator
     # process, so this job needs no Docker, no service container and no secret.
-    # It is therefore unconditional — under v1 it skipped itself whenever the
+    # It is therefore unconditional — under 0.x it skipped itself whenever the
     # LocalStack auth token was absent, which was most of the time.
     steps:
       - name: Checkout code
