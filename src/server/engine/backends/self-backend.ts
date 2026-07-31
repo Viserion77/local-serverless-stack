@@ -10,6 +10,7 @@ import path from 'path';
 import type { Socket } from 'net';
 import type { AddressInfo } from 'net';
 import { ConfigManager, type ResolvedSelfEngineConfig } from '../../services/config-manager.js';
+import { getBindHost } from '../../services/bind-host.js';
 import type { DispatcherApi, EngineContext } from '../types.js';
 import { EngineBus } from '../bus.js';
 import { createEngineStore } from '../store/engine-store.js';
@@ -161,7 +162,18 @@ export class SelfEngineBackend {
       };
       server.once('error', onError);
       server.once('listening', onListening);
-      server.listen(config.port, '0.0.0.0');
+      // Split-listener mode only: `startEmbedded()` returns above and the
+      // orchestrator's own socket carries the wire instead.
+      //
+      // This asked for '0.0.0.0' outright, which put the *entire* AWS data
+      // plane — Scan/PutItem on any table, ReceiveMessage on any queue,
+      // GetObject on any bucket, GetSecretValue on any secret, all
+      // unauthenticated, since SigV4 here is parsed for the region and never
+      // verified — on every interface the moment `serverPort` and
+      // `selfEngine.port` were given different values, even while the dashboard
+      // sat on loopback. It reads the same bind host as every other listener
+      // now, so splitting the ports splits nothing else.
+      server.listen(config.port, getBindHost());
     });
     this.boundPort = (server.address() as AddressInfo).port;
     this.running = true;

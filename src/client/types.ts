@@ -225,11 +225,18 @@ export interface RegisterServiceInput {
   apiPort?: number;
   region?: string;
 }
+// The body of POST /api/services/:name/start. It only *selects* what runs — the
+// server decides the rest: the cwd is always the registered service root and the
+// argv is always `run start[:stage]`.
+//
+// `cwd`, `args` and `env` used to live here and went straight into spawn() on
+// the server, which made the endpoint a general command runner for anything able
+// to reach the port. The server ignores them now, so advertising them here would
+// promise a capability it refuses.
 export interface StartServiceInput {
-  cwd?: string;
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
+  /** Package manager that runs the script. Anything else is rejected with 400. */
+  command?: 'npm' | 'yarn' | 'pnpm';
+  /** Selects the npm script `start:${stage}`; `[A-Za-z0-9._-]+` only. Default `start`. */
   stage?: string;
 }
 

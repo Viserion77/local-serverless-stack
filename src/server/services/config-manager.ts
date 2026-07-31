@@ -50,6 +50,9 @@ export interface ResolvedSelfEngineConfig {
 
 // Per-service packaging overrides. Keyed in `servicePackaging` by the service
 // directory name (basename) OR its path relative to the config file's directory.
+// `packageCommand`/`packageArgs`/`packageEnv` carry the same PUT /api/config
+// fences as their global counterparts (see PACKAGE_RUNNER_VERBS /
+// BLOCKED_PACKAGE_FLAGS / BLOCKED_PACKAGE_ENV_KEYS).
 export interface ServicePackageConfig {
   packageCommand?: string;
   packageArgs?: string[];
@@ -216,13 +219,24 @@ export interface LSSConfig {
 
   // Command to run when autoPackage is enabled and the template is missing.
   // Parsed as shell-style args; runs in the servicePath as CWD.
+  //
+  // Written through PUT /api/config it must match the package-command grammar
+  // (see PACKAGE_RUNNER_VERBS) — that endpoint is unauthenticated and this
+  // string is spawned. The fence sits on the API on purpose and not on the read
+  // path: a hand-edited config file and LSS_PACKAGE_COMMAND are the operator's
+  // own shell, and anyone who can write either already runs code on this host.
   packageCommand?: string;
 
   // Extra args appended to every auto-package command (passed as discrete argv
   // elements, so no shell parsing). E.g. ["--param=custom-stage=offline"].
+  // Written through PUT /api/config they are screened against
+  // BLOCKED_PACKAGE_FLAGS: they land in the same argv as the command, one
+  // tokenizer earlier, so an unchecked arg list is an unchecked command.
   packageArgs?: string[];
 
   // Extra env vars merged over the orchestrator's env for every package child.
+  // Loader/interpreter hooks (NODE_OPTIONS, LD_PRELOAD, …) are rejected by
+  // PUT /api/config — see BLOCKED_PACKAGE_ENV_KEYS.
   packageEnv?: Record<string, string>;
 
   // Per-service packaging overrides, keyed by the service directory name
@@ -257,7 +271,10 @@ export interface LSSConfig {
 // subkey) so a partial edit never drops sibling settings like `branding.logo`;
 // every other kind replaces the key wholesale. A top-level null deletes the key.
 interface ConfigKeySpec {
-  kind: 'port' | 'positiveInt' | 'nonNegativeInt' | 'boolean' | 'string' | 'stringArray' | 'stringRecord' | 'object';
+  // There is no plain `stringArray`: `packageArgs` is the only array-valued key
+  // and it is spawned, so the shape check and the flag screen travel together.
+  kind: 'port' | 'positiveInt' | 'nonNegativeInt' | 'boolean' | 'string'
+    | 'stringRecord' | 'envRecord' | 'packageCommand' | 'packageArgs' | 'object';
   enum?: readonly string[];
   // Fixed-shape object blocks: every subkey is validated against its own spec
   // and unknown subkeys are rejected — a garbage nested value would otherwise
@@ -273,6 +290,193 @@ interface ConfigKeySpec {
 // payload that crosses the dashboard API.
 const BLOCKED_CONFIG_KEYS: ReadonlySet<string> = new Set(['secrets']);
 
+// ---------------------------------------------------------------------------
+// What a package command written through PUT /api/config may become
+// ---------------------------------------------------------------------------
+//
+// A package command is handed to serverless-packager.ts, which tokenizes it and
+// calls spawn(firstToken, restTokens) with `packageArgs` appended to the argv.
+// PUT /api/config is unauthenticated, so an unconstrained command — or an
+// unconstrained arg list — is arbitrary code execution on this host:
+// `PUT /api/config {"packageCommand":"/bin/sh","packageArgs":["-c","…"]}`
+// followed by `POST /api/services/package` runs whatever the caller wrote. That
+// is the same class the /start and /install runner allowlists already close;
+// this is the third door into it.
+//
+// Fencing only the command's FIRST token does NOT close it, and that version of
+// this check was walked straight through: every package manager on the list is
+// itself an interpreter, one subcommand in.
+//
+//   npm exec -c '<shell string>'   spawn('npm', ['exec','-c',…]) runs the string
+//   npx -c '<shell string>'        as a shell command — no shell:true required,
+//                                  the payload is read straight off the argv
+//   npx -y <pkg> · npm exec -p <pkg> · yarn dlx · pnpm dlx   fetch and run any package
+//   yarn node -e '<js>' · yarn exec · pnpm exec              run an interpreter
+//   npm i <pkg> · yarn add <pkg>   run a fetched package's install scripts
+//
+// Each of those satisfies "the first token names a package manager". So the
+// fence is a grammar over the WHOLE command instead of a check on one token —
+// the shapes below and nothing else:
+//
+//   npm | yarn | pnpm     run | run-script   [script] [args…]
+//   serverless | sls | osls   package                 [args…]
+//   npx [-y|--yes]…   serverless|sls|osls[@version]   package   [args…]
+//
+// plus BLOCKED_PACKAGE_FLAGS applied to every token of the command AND to every
+// `packageArgs` element, since those reach the same argv without passing
+// through the tokenizer at all.
+//
+// RESIDUAL, stated plainly rather than papered over. `npm run <script>` still
+// runs whatever the service's own package.json declares, and `serverless
+// package` still reads the service's own serverless.yml (plugins included).
+// Both are the project's own code, which the operator already trusts by
+// pointing LSS at the directory; and forbidding them would mean the dashboard
+// could not set a package command at all, which is what the onboarding flow is
+// built on. What is gone is the part that made the /start and /install
+// allowlists worthless: through this API a caller can no longer choose the
+// program, only ask the project's own build to run.
+//
+// The fence is on the API and deliberately NOT on the read path — a
+// hand-edited lss.config.json and LSS_PACKAGE_COMMAND are the operator's own
+// shell, and anyone who can write either already runs code on this host.
+
+/**
+ * Runner names accepted as a command's first token, in the order the error
+ * message lists them. No entry contains a path separator, so membership alone
+ * rejects `/bin/sh`, `/usr/bin/env`, `./tool` and `..\x.exe`.
+ */
+const ALLOWED_PACKAGE_RUNNERS: readonly string[] = [
+  'npm', 'npx', 'yarn', 'pnpm', 'serverless', 'sls', 'osls',
+];
+
+/**
+ * The subcommands each runner may be followed by — the wall the first-token
+ * check was missing. `run`/`run-script` execute a script the project declared;
+ * every other verb these CLIs expose either takes a command off the argv
+ * (`exec`, `x`, `node`, `dlx`) or fetches a package and runs its code (`add`,
+ * `install`, `create`, `plugin install`). The Serverless CLIs get `package` for
+ * the same reason: `serverless plugin install <pkg>` is a fetch-and-run, and
+ * packaging is the only thing this setting exists to do.
+ *
+ * A bare `yarn package` (yarn 1's implicit `run`) is rejected on purpose: the
+ * implicit form is exactly what makes `yarn node -e '<js>'` and `yarn dlx <pkg>`
+ * indistinguishable from a script name, so the explicit `yarn run package` is
+ * required instead. `npx` is absent because it is a launcher rather than a
+ * program — validatePackageCommand() strips it and validates what it launches.
+ */
+const PACKAGE_RUNNER_VERBS: Record<string, readonly string[]> = {
+  npm: ['run', 'run-script'],
+  yarn: ['run'],
+  pnpm: ['run'],
+  serverless: ['package'],
+  sls: ['package'],
+  osls: ['package'],
+};
+
+/**
+ * The packages `npx` may fetch and run. Restricted to the Serverless CLIs
+ * because that is the entire reason npx appears here — LSS's own default is
+ * `npx serverless package`, i.e. "run the Serverless CLI without a global
+ * install". Anything else npx can reach is a package of the caller's choosing.
+ */
+const NPX_PACKAGES: readonly string[] = ['serverless', 'sls', 'osls'];
+
+/**
+ * The only flags tolerated between `npx` and the package name. `-y` suppresses
+ * the "install it?" prompt and does nothing else; every other npx flag either
+ * names a different package to run (`-p`/`--package`) or takes a command string
+ * (`-c`/`--call`), which is the bypass itself.
+ */
+const NPX_PREFIX_FLAGS: readonly string[] = ['-y', '--yes'];
+
+/**
+ * Flags that make an otherwise-allowed command run something other than the
+ * project's own build, whichever runner is in front of them. The grammar above
+ * pins the program; these pin what that program is allowed to be pointed at:
+ *
+ *   --node-options      npm/yarn/pnpm/npx set NODE_OPTIONS on the child, which
+ *                       is `--require <file>` under another name (the same hole
+ *                       BLOCKED_PACKAGE_ENV_KEYS closes on the env side)
+ *   --script-shell      npm chooses the binary that interprets the script;
+ *                       --shell/--shell-mode are the yarn/pnpm spellings
+ *   --call              npm exec's inline command string
+ *   --userconfig/--globalconfig/--use-yarnrc
+ *                       point the manager at another rc file, which can itself
+ *                       set script-shell, node-options or yarn 1's `yarn-path`
+ *   --registry          `npx serverless package` fetches `serverless` when the
+ *                       service has no local copy, and npm's arg parser reads
+ *                       its own config flags from anywhere in the argv — so a
+ *                       registry named after the package name still decides
+ *                       which code that fetch runs
+ *   --prefix/--cwd/--dir   run the scripts of a package.json somewhere else
+ *   --eval/--print/--require/--import/--loader/--experimental-loader/--input-type
+ *                       node's own code-loading flags, refused in case any
+ *                       runner forwards its argv to node
+ *
+ * Deliberately absent: `--package` (npm exec's package selector) and every
+ * short flag. Both are already unreachable — `npm exec` is not an allowed verb
+ * and npx accepts no flag but `-y` — while `-c`, `-p` and `-r` are `--config`,
+ * `--package` and `--region` to the Serverless CLI, so blocking them would
+ * break `sls package -c custom.yml` for nothing.
+ *
+ * Compared with dashes and underscores stripped, so `--nodeOptions` and
+ * `--node_options` cannot spell their way past the set.
+ */
+const BLOCKED_PACKAGE_FLAGS: ReadonlySet<string> = new Set([
+  'nodeoptions',
+  'scriptshell',
+  'shell',
+  'shellmode',
+  'call',
+  'userconfig',
+  'globalconfig',
+  'useyarnrc',
+  'registry',
+  'prefix',
+  'cwd',
+  'dir',
+  'eval',
+  'print',
+  'require',
+  'import',
+  'loader',
+  'experimentalloader',
+  'inputtype',
+]);
+
+// Env vars that make the spawned child load attacker-chosen code no matter
+// WHICH binary runs, so they walk straight around the runner allowlist above:
+//   NODE_OPTIONS               `--require /tmp/x.js` into every node process
+//   NODE_REPL_EXTERNAL_MODULE  loads a module into node ahead of the program
+//   LD_PRELOAD / LD_AUDIT      inject a shared object into the dynamic linker
+//   LD_LIBRARY_PATH            re-points the linker at attacker libraries
+//   DYLD_INSERT_LIBRARIES / DYLD_LIBRARY_PATH   the macOS spellings of both
+//   PATH                       decides WHICH `npm` runs at all — see below
+//   NODE_PATH                  prepends a module search root for every require
+// Stored lowercase and compared case-insensitively: env lookup is
+// case-insensitive on Windows, so `node_options` would otherwise be the same
+// bypass one keystroke away.
+//
+// PATH is the one that looks harmless and is not. `runServerlessPackage` spawns
+// WITHOUT a shell, but a shell was never what resolved the binary: libuv runs
+// execvp(3) after installing the child's environment, so the child's PATH — not
+// the orchestrator's — decides which file named `npm` executes. Verified by
+// spawning `npm` with a prepended directory: the planted binary ran. That makes
+// PATH equivalent to naming an arbitrary command, which is exactly what
+// ALLOWED_PACKAGE_RUNNERS exists to prevent. The packaging child inherits the
+// orchestrator's PATH and no caller may replace it.
+const BLOCKED_PACKAGE_ENV_KEYS: ReadonlySet<string> = new Set([
+  'node_options',
+  'node_repl_external_module',
+  'ld_preload',
+  'ld_audit',
+  'ld_library_path',
+  'dyld_insert_libraries',
+  'dyld_library_path',
+  'path',
+  'node_path',
+]);
+
 const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
   serverPort: { kind: 'port' },
   enableDynamoProxy: { kind: 'boolean' },
@@ -283,15 +487,18 @@ const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
   seedsDir: { kind: 'string' },
   stateDir: { kind: 'string' },
   autoPackage: { kind: 'boolean' },
-  packageCommand: { kind: 'string' },
-  packageArgs: { kind: 'stringArray' },
-  packageEnv: { kind: 'stringRecord' },
+  packageCommand: { kind: 'packageCommand' },
+  packageArgs: { kind: 'packageArgs' },
+  packageEnv: { kind: 'envRecord' },
   servicePackaging: {
     kind: 'object',
     entrySubKeys: {
-      packageCommand: { kind: 'string' },
-      packageArgs: { kind: 'stringArray' },
-      packageEnv: { kind: 'stringRecord' },
+      // Same fences as the global keys above — a per-service override is spawned
+      // by the exact same code path, so validating only the global copy would
+      // leave the door open one nesting level down.
+      packageCommand: { kind: 'packageCommand' },
+      packageArgs: { kind: 'packageArgs' },
+      packageEnv: { kind: 'envRecord' },
       packageTimeoutMs: { kind: 'positiveInt' },
     },
   },
@@ -378,6 +585,98 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
+/**
+ * The argv a package command would actually spawn, tokenized EXACTLY the way
+ * parseCommand() in serverless-packager.ts does (same regex, same
+ * per-quoted-segment stripping). Mirroring it is the whole point — the tokens
+ * validated here must be the tokens handed to spawn(), or the check and the
+ * execution disagree and the grammar means nothing. `"/bin/sh"` resolves to
+ * `/bin/sh` (rejected) and `'npm'` to `npm` (accepted), in both places.
+ * Keep the two in step if the packager's tokenizer ever changes.
+ */
+function packageCommandTokens(raw: string): string[] {
+  const tokens = raw.match(/(?:[^\s"']+|"[^"]*"|'[^']*')+/g) ?? [];
+  return tokens.map(token => token.replace(/"([^"]*)"|'([^']*)'/g, '$1$2'));
+}
+
+/**
+ * Comparable spelling of a flag token: the name before any `=value`, lowercased
+ * with dashes and underscores removed (`--Node-Options=--require x` →
+ * `nodeoptions`). Only the name is compared — the value is what the flag would
+ * point at, and every value is dangerous once the name is.
+ */
+function normalizeFlagName(token: string): string {
+  return token.split('=')[0].toLowerCase().replace(/[-_]/g, '');
+}
+
+/**
+ * A token that redirects the command at a program, shell or rc file of the
+ * caller's choosing. Only tokens that look like flags are screened, so a script
+ * or file name that happens to collide (`npm run print`) is untouched.
+ */
+function isBlockedPackageFlag(token: string): boolean {
+  return token.startsWith('-') && BLOCKED_PACKAGE_FLAGS.has(normalizeFlagName(token));
+}
+
+function blockedFlagError(label: string, token: string): string {
+  return `"${label}" cannot contain "${token}" — that flag points the package command at a program, shell or config file of the caller's choosing`;
+}
+
+/** `"run" or "run-script"` — verbs quoted the way the error message reads best. */
+function quotedList(values: readonly string[]): string {
+  const quoted = values.map(value => `"${value}"`);
+  return quoted.length === 1 ? quoted[0] : `${quoted.slice(0, -1).join(', ')} or ${quoted[quoted.length - 1]}`;
+}
+
+/**
+ * Validate a `packageCommand` against the grammar documented above:
+ * runner → subcommand → free arguments, with `npx` stripped down to the
+ * Serverless CLI it launches, and no blocked flag anywhere in the argv.
+ */
+function validatePackageCommand(key: string, raw: string): string | null {
+  const tokens = packageCommandTokens(raw);
+  // Two cursors because `npx serverless package` has two layers: `rest` is the
+  // slice the grammar is currently reading (it loses the `npx …` prefix), while
+  // `runner` names the program that will finally execute and therefore whose
+  // subcommand list applies.
+  let rest = tokens;
+  let runner = rest[0] ?? '';
+
+  if (runner === 'npx') {
+    rest = rest.slice(1);
+    while (NPX_PREFIX_FLAGS.includes(rest[0])) {
+      rest = rest.slice(1);
+    }
+    const spec = rest[0] ?? '';
+    if (spec.startsWith('-')) {
+      return `"${key}": npx may carry only ${quotedList(NPX_PREFIX_FLAGS)} before the package name — "${spec}" can name another package to run, or a command string to run as a shell`;
+    }
+    // `serverless@3.38.0` is the same program with a version pin. The `@` at
+    // index 0 belongs to a scope (`@scope/pkg`), which is never in the list.
+    const at = spec.lastIndexOf('@');
+    runner = at > 0 ? spec.slice(0, at) : spec;
+    if (!NPX_PACKAGES.includes(runner)) {
+      return `"${key}": npx may only run the Serverless CLI (${NPX_PACKAGES.join(', ')}) — "${spec}" is a package of the caller's choosing`;
+    }
+  } else if (!ALLOWED_PACKAGE_RUNNERS.includes(runner)) {
+    return `"${key}" must start with one of: ${ALLOWED_PACKAGE_RUNNERS.join(', ')} — "${runner}" is not an allowed package runner`;
+  }
+
+  const verbs = PACKAGE_RUNNER_VERBS[runner];
+  const verb = rest[1] ?? '';
+  if (!verbs.includes(verb)) {
+    return `"${key}": "${runner}" may only be followed by ${quotedList(verbs)} — `
+      + (verb
+        ? `"${verb}" can run a program the caller chose instead of the project's build`
+        : 'the command names no subcommand at all');
+  }
+
+  // Screens the whole argv, not just the tail: a blocked flag is blocked
+  // wherever it sits, and the runner/verb tokens never start with a dash.
+  const blocked = tokens.find(isBlockedPackageFlag);
+  return blocked === undefined ? null : blockedFlagError(key, blocked);
+}
+
 function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string | null {
   switch (spec.kind) {
     case 'port':
@@ -402,14 +701,46 @@ function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string
       return spec.enum && !spec.enum.includes(value)
         ? `"${key}" must be one of: ${spec.enum.join(', ')}`
         : null;
-    case 'stringArray':
-      return Array.isArray(value) && value.every(v => typeof v === 'string')
-        ? null
-        : `"${key}" must be an array of strings`;
+    // A command that is spawned, not just stored: on top of the non-empty string
+    // check it must match the package-command grammar. See PACKAGE_RUNNER_VERBS
+    // for why an unfenced string — or a first-token-only check — is remote code
+    // execution here, and for the residual the grammar does not close.
+    case 'packageCommand': {
+      if (typeof value !== 'string' || value.length === 0) {
+        return `"${key}" must be a non-empty string`;
+      }
+      return validatePackageCommand(key, value);
+    }
+    // Appended to the spawned argv verbatim, with no tokenizer in between, so
+    // `packageCommand:"npm"` + `packageArgs:["exec","-c","<shell>"]` would be
+    // the identical bypass one key across. The grammar above already pins the
+    // program and its subcommand; the flag screen is what stops an arg from
+    // re-pointing that program somewhere else.
+    case 'packageArgs': {
+      if (!Array.isArray(value) || !value.every(v => typeof v === 'string')) {
+        return `"${key}" must be an array of strings`;
+      }
+      const index = (value as string[]).findIndex(isBlockedPackageFlag);
+      return index === -1 ? null : blockedFlagError(`${key}[${index}]`, (value as string[])[index]);
+    }
     case 'stringRecord':
-      return isPlainObject(value) && Object.values(value).every(v => typeof v === 'string')
-        ? null
-        : `"${key}" must be an object of string values`;
+    case 'envRecord': {
+      if (!isPlainObject(value) || !Object.values(value).every(v => typeof v === 'string')) {
+        return `"${key}" must be an object of string values`;
+      }
+      // An env map is merged into the packaging child's environment, where a
+      // handful of names are loader/interpreter hooks: they run code in the
+      // child whatever program the command grammar let through, which would
+      // make that grammar decorative.
+      if (spec.kind === 'envRecord') {
+        for (const envKey of Object.keys(value)) {
+          if (BLOCKED_PACKAGE_ENV_KEYS.has(envKey.toLowerCase())) {
+            return `"${key}.${envKey}" cannot be set — it injects code into the packaging process`;
+          }
+        }
+      }
+      return null;
+    }
     case 'object': {
       if (!isPlainObject(value)) {
         return `"${key}" must be an object`;

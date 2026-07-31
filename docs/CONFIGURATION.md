@@ -61,7 +61,146 @@ Both files should contain valid JSON with the following optional properties:
   - **Two listeners instead of one**: give `selfEngine.port` a different value.
     The orchestrator then binds `serverPort` and the engine binds its own, exactly
     as before.
+  - Which **interface** that port is bound to, and which browser origins may call
+    it, are separate knobs — see [`LSS_BIND_HOST`](#lss_bind_host-network-exposure)
+    and [`LSS_CORS_ORIGINS`](#lss_cors_origins-browser-origins) below; the defaults
+    are loopback only.
   - Example: `14566`
+
+- <a id="lss_bind_host-network-exposure"></a>**LSS_BIND_HOST** (env var, default: `"127.0.0.1"` — no config-file equivalent)
+  - The interface **every listener in the process** binds. **Loopback by default**: the
+    dashboard, the REST API, the AWS wire, each service's API and Lambda-invoke port,
+    and the optional DynamoDB proxy all accept only connections that originate on this
+    machine.
+  - **One switch, every listener.** LSS opens four kinds of listener and this variable
+    governs all of them: the orchestrator (`index.ts`); every registered service's API
+    Gateway port and **Lambda Invoke API** port (`services/gateway-manager.ts`); the
+    engine's own front door when `selfEngine.port` differs from `serverPort`
+    (`engine/backends/self-backend.ts`); and the optional DynamoDB proxy
+    (`dev/dynamo-proxy.ts`). Through **0.17.2** the last three ignored it — a bare
+    `server.listen(port)` binds the `::` wildcard, and `self-backend.ts` asked for
+    `0.0.0.0` outright — so a loopback dashboard sat in front of gateways, invoke ports
+    and (in split-listener mode) a whole AWS data plane that were open to the LAN
+    anyway. That is fixed: the value is resolved once in
+    `src/server/services/bind-host.ts` and every listener reads it from there, so
+    "LSS listens on loopback" is now a statement about the **process**, not about one
+    file. It also means you never have to widen listeners one at a time.
+  - **Why loopback is the default.** The REST API has no authentication. Every table,
+    queue, topic, bucket and **secret value** in the stack is readable through it, and
+    writable — so on a shared network, the default of "not offered at all" is the only
+    honest one for a tool that ships to every developer.
+  - <a id="the-container-recipe"></a>**The container recipe** (the common case — LSS in a
+    container, browser on the host). One line turns the whole stack on for the network:
+    ```bash
+    LSS_BIND_HOST=0.0.0.0 LSS_CORS_ORIGINS='*' npx lss start
+    ```
+    `LSS_BIND_HOST=0.0.0.0` is what makes a published port work at all: with
+    `docker run -p 14566:14566` the forwarded connection arrives on the container's
+    **external** interface, which a `127.0.0.1` listener refuses. `LSS_CORS_ORIGINS`
+    is the browser half — see [below](#lss_cors_origins-browser-origins); without it a
+    frontend served from anything other than `localhost` gets no CORS headers and its
+    calls fail in the browser even though the port is reachable. Set both, or set
+    neither; setting only the bind gets you a stack that curl can use and your app
+    cannot. Prefer naming your real origins over `*` when you know them:
+    ```bash
+    LSS_BIND_HOST=0.0.0.0 \
+      LSS_CORS_ORIGINS=http://localhost:5173,http://192.168.1.20:5173 \
+      npx lss start
+    ```
+    In `docker-compose.yml` the same thing is two `environment:` entries. Publish the
+    service ports you actually use alongside `14566` (`3010`, `13010`, …) — the bind
+    covers them, but Docker still has to forward them.
+  - **VS Code devcontainer forwarding needs none of this.** The forwarder attaches from
+    *inside* the container, where loopback is the same network stack, so the safe
+    default already works and the browser sees `http://localhost:<port>` — an origin the
+    default CORS allowlist already grants.
+  - **What you are accepting when you widen it.** Everyone who can reach those ports
+    gets an unauthenticated API: they can list and read your local tables, queues and
+    buckets, write to them, invoke any registered Lambda, and read **secret values**
+    out of the emulated Secrets Manager. Since 1.0 the endpoints that spawn processes no
+    longer take a caller-chosen binary: `/start` derives argv, cwd and env server-side,
+    `/install` is shape- and flag-allowlisted, and `packageCommand`/`packageArgs` must
+    match the packaging grammar (see [`packageCommand`](#packagecommand-allowlist)). So
+    what you are mainly exposing is your **local dev data** rather than a shell on the
+    host — a real but bounded thing. Bounded is not zero: a caller who reaches the API
+    can still ask the project's own build to run, so "a network you trust" is the actual
+    precondition. Keep production credentials out of `packageEnv` and the `secrets`
+    seed map, and when you only need remote access *for yourself*, a tunnel
+    (`ssh -L 14566:127.0.0.1:14566 <host>`) beats publishing the port.
+  - Boot prints a one-line warning whenever the bind is **not** loopback, so a widened
+    stack is never silent:
+    ```
+    ⚠️  LSS_BIND_HOST=0.0.0.0 — the dashboard, the REST API, the AWS wire and every
+    service's API/invoke port are reachable from the network. This API has no
+    authentication and can run commands on this host … — use it only where you trust
+    every caller, and unset LSS_BIND_HOST to go back to the default (127.0.0.1,
+    loopback origins only).
+    ```
+    One warning covers the process, because one value does; widening `LSS_CORS_ORIGINS`
+    to `*` adds its own clause to the same line. ("Can run commands" means LSS's own
+    commands — an `npm start`, a `serverless package` — not a caller-chosen one; see
+    [`packageCommand`](#packagecommand-allowlist).) An address that is not one of this
+    machine's own fails the boot with a named error (`EADDRNOTAVAIL`) instead of a stack
+    trace.
+  - It is deliberately **environment-only**: there is no `lss.config.json` key and it is
+    not editable through `PUT /api/config`, because widening the bind through the very
+    API it protects would hand the exposure back to any caller that already reached it.
+  - **Interaction with `lambdaRuntime.invokeHost`.** That setting only *names* the host
+    in the callback URL the engine records for a Lambda proxy; it never binds anything.
+    Pointing it at a non-loopback address (the container case above) therefore also
+    needs `LSS_BIND_HOST` set to an address that covers it, or the URL will name a port
+    nothing is offering there.
+
+- <a id="lss_cors_origins-browser-origins"></a>**LSS_CORS_ORIGINS** (env var, default: loopback origins only — no config-file equivalent)
+  - Which **browser origins** may call the REST API cross-origin. Comma-separated list
+    of exact origins (`scheme://host[:port]`), or a single `*` to allow any.
+  - **Unset** means the built-in loopback allowlist: `http://localhost`,
+    `http://127.0.0.1` and `http://[::1]` on any port. That covers the dashboard —
+    same-origin when served by this process, and `http://localhost:3101` under
+    `npm run dev` — and nothing else, so a random page the developer happens to open
+    cannot make their own browser drive the stack.
+  - **Setting it replaces that list**, it does not extend it. Include your loopback
+    origins if you still want them:
+    ```bash
+    LSS_CORS_ORIGINS=http://localhost:3101,http://localhost:5173,http://10.0.0.5:5173
+    ```
+    Values are matched **exactly** against the request's `Origin` — scheme, host and
+    port all count, so `http://localhost:5173` does not grant `https://localhost:5173`
+    and `http://10.0.0.5` does not grant `http://10.0.0.5:5173`. Case and a trailing
+    slash are forgiven on both sides (`https://App.Example.com/` matches
+    `https://app.example.com`), because a hand-typed env var that silently matches
+    nothing is the worst failure mode for a knob whose whole job is to unblock a
+    frontend. There are no wildcards *inside* an entry; `*` is the only wildcard and it
+    is all-or-nothing. An empty value is treated as unset, not as "deny everything".
+  - **Why this exists.** LSS is routinely called *directly from a browser* — your own
+    frontend listing a queue's messages, invoking a Lambda, reading a table through
+    `/api/*` — and when the stack runs in a container that frontend is rarely on
+    `localhost` from the API's point of view. A loopback-only allowlist would break
+    exactly the workflow LSS is for. This is the supported way to say "these pages are
+    mine". (A frontend calling a *service's* emulated API Gateway on its 30xx port is a
+    separate matter: that listener answers from the route's own `cors:` declaration, as
+    AWS does, and does not read this variable — though it does obey `LSS_BIND_HOST`.)
+  - **What `*` means.** Any page in any tab of any browser that can route to the port
+    may read and write your local emulator data — including secret values — through the
+    user's own browser. Paired with a loopback bind that is only reachable from this
+    machine, so the practical exposure is "a site I visit could talk to my dev stack".
+    Paired with `LSS_BIND_HOST=0.0.0.0` it is the full network exposure described above.
+    Name your origins when you can; reach for `*` when you can't (rotating container
+    IPs, teammates on unpredictable hosts) and treat it as a trusted-network setting.
+  - Boot warns about `*`, and about a non-loopback `LSS_BIND_HOST`, in the **same**
+    one-line banner — it names each knob you widened and how to go back. An explicit
+    named origin list prints nothing: you told LSS exactly who, which is the outcome
+    this variable is trying to encourage.
+  - Like `LSS_BIND_HOST` it is **environment-only** — no config key, no `PUT /api/config`
+    spelling — for the same reason: the origin allowlist is half of the boundary, and a
+    boundary that can be widened through the API it guards is not one.
+  - Non-browser callers are untouched: curl, the CLI, `LssClient`, the MCP server and
+    the AWS SDKs send no `Origin`, so no CORS decision is ever made for them. AWS wire
+    traffic never reaches the middleware at all — `isAwsRequest()` hands it to the
+    engine ahead of Express.
+  - The two knobs are independent on purpose: the bind decides **who can open a
+    socket**, CORS decides **which web pages the browser will let read the answer**.
+    The container recipe needs both.
 
 - **selfEngine** (object, optional)
   - `port` (default 14566, env `LSS_ENGINE_PORT`) — **equal to `serverPort` by
@@ -142,9 +281,68 @@ Both files should contain valid JSON with the following optional properties:
   - Useful when integrating new microservices without manually running `serverless package` first.
   - Example: `true`
 
-- **packageCommand** (string, default: `"npx serverless package"`)
-  - Command executed in the service directory when `autoPackage` is enabled and the template is missing.
+- <a id="packagecommand-allowlist"></a>**packageCommand** (string, default: `"npx serverless package"`)
+  - Command executed in the service directory when `autoPackage` is enabled and the
+    template is missing, and by `POST /api/services/package`.
   - Parsed as shell-style tokens (quoted args supported); not run through a shell.
+  - **Set through `PUT /api/config`, it must match the packaging grammar** — tokenized
+    exactly the way the packager tokenizes it before `spawn()`, so the checked string is
+    the executed one:
+
+    ```
+    npm | yarn | pnpm        run | run-script   [script] [args…]
+    serverless | sls | osls  package                     [args…]
+    npx [-y|--yes]…   serverless|sls|osls[@version]   package   [args…]
+    ```
+
+    Every documented form still works: `"npx serverless package"`, `"npm run package"`,
+    `"npm run package:local"`, `"yarn run package"`, `"serverless package --stage dev"`,
+    `"sls package -c custom.yml"`, `"npx -y serverless@3.38.0 package"`. Anything else
+    answers `400` naming the offending token and writes nothing.
+  - **Why a grammar and not a runner allowlist.** The value becomes
+    `spawn(firstToken, restTokens)` with `packageArgs` appended, and `PUT /api/config`
+    has no authentication, so
+    `PUT /api/config {"packageCommand":"/bin/sh","packageArgs":["-c","…"]}` followed by
+    one `POST /api/services/package` ran an arbitrary binary with arbitrary argv as the
+    user running the orchestrator — the same class as the `/start` and `/install`
+    defects, through a third door. Checking only the **first token** did not close it:
+    every package manager is an interpreter one subcommand in, and
+    `spawn('npm', ['exec','-c','<shell string>'])` executes that string with no
+    `shell: true` anywhere. `npm exec -c …`, `npx -c …`, `npm x`, `yarn dlx`,
+    `pnpm dlx`, `yarn exec`, `yarn node -e …`, `yarn create`, `npm i <pkg>` and
+    `yarn add <pkg>` (install scripts run as you) all named an allowed runner and all
+    ran caller-chosen code. Pinning the **subcommand** is what removes them.
+  - **A bare `yarn package` is rejected; write `yarn run package`.** yarn 1's implicit
+    `run` is exactly what makes `yarn node -e '<js>'` and `yarn dlx <pkg>`
+    indistinguishable from a script name, so the explicit form is required. The same
+    goes for `pnpm package` → `pnpm run package`.
+  - **Flags are screened too**, on every token of the command *and* every `packageArgs`
+    element, because a flag can re-point an allowed program without changing a single
+    positional token: `--node-options` (NODE_OPTIONS under another name),
+    `--script-shell`/`--shell`/`--shell-mode` (which binary interprets the script),
+    `--call`, `--userconfig`/`--globalconfig`/`--use-yarnrc` (an rc file that can set
+    all of the above), `--registry` (npx fetches the Serverless CLI when the service has
+    no local copy, and npm reads its own config flags from anywhere in the argv),
+    `--prefix`/`--cwd`/`--dir` (run another package.json's scripts)
+    and node's own `--require`/`--eval`/`--print`/`--import`/`--loader`/
+    `--experimental-loader`/`--input-type`. Compared with dashes and underscores
+    stripped, so `--nodeOptions` and `--node_options` are the same flag. Serverless's
+    short flags are deliberately **not** screened — `-c`, `-p`, `-r` are `--config`,
+    `--package` and `--region` there, and the grammar already makes them unreachable as
+    npm/npx options — so `sls package -c custom.yml -p .build` keeps working.
+  - **What stays expressible, stated plainly.** `npm run <script>` runs whatever the
+    service's own `package.json` declares, and `serverless package` reads the service's
+    own `serverless.yml`, plugins included. Both are the project's code, which you
+    already trust by pointing LSS at the directory; forbidding them would mean the
+    dashboard could not set a package command at all, which is what the onboarding flow
+    is built on. What is gone is the choice of *program*: through this API a caller can
+    only ask the project's own build to run.
+  - **The fence is on the API, deliberately not on the read path.** A hand-edited
+    `lss.config.json` and `LSS_PACKAGE_COMMAND` are *not* checked, because they are the
+    operator's own shell — anyone who can write either already runs code on this host,
+    and refusing their `packageCommand` would buy nothing while breaking legitimate
+    local setups. The check exists for the one path a remote caller can reach.
+  - The same rule applies to a per-service `servicePackaging[*].packageCommand`.
   - Example: `"npm run package"` or `"npx serverless package --stage dev"`
 
 - **packageTimeoutMs** (number, default: 300000)
@@ -157,12 +355,35 @@ Both files should contain valid JSON with the following optional properties:
     contain `=` or spaces — e.g. `--param=custom-stage=offline` — are delivered intact.
   - Prefer this over embedding flags in `packageCommand`, which goes through a
     simple tokenizer.
+  - **Written through `PUT /api/config` it is screened for the same redirecting flags
+    as the command** (`--node-options`, `--script-shell`, `--prefix`, …; see
+    [`packageCommand`](#packagecommand-allowlist)). It lands in the same argv one
+    tokenizer earlier, so an unchecked arg list is an unchecked command — before this,
+    `{"packageCommand":"npm","packageArgs":["exec","-c","<shell>"]}` was the identical
+    bypass one key across. The error names the offending element by index
+    (`"packageArgs[1]" cannot contain …`). The same applies to a per-service
+    `servicePackaging[*].packageArgs`.
   - Example: `["--param=custom-stage=offline"]`
 
 - **packageEnv** (object, default: `{}`)
   - Extra environment variables merged over the orchestrator's env for every package
     child process (per-service `packageEnv` wins on key collisions). Useful to inject
     dummy credentials for offline packaging, e.g. `{ "AWS_ACCESS_KEY_ID": "test" }`.
+  - **Code-injection keys are rejected by `PUT /api/config`.** A handful of variables are
+    read by the runtime or the dynamic linker *before* the program gets control, so
+    setting them chooses the binary no matter which runner the
+    [`packageCommand` allowlist](#packagecommand-allowlist) let through — which would
+    make that allowlist decorative. Refused with a `400` naming the key:
+    `NODE_OPTIONS` (`--require /tmp/x.js`), `NODE_REPL_EXTERNAL_MODULE`,
+    `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES` and
+    `DYLD_LIBRARY_PATH`. Matching is case-insensitive, because env lookup is
+    case-insensitive on Windows and `node_options` would otherwise be the same bypass
+    one keystroke away. The same check applies to a per-service `packageEnv` under
+    `servicePackaging`. Everything a build legitimately needs — credentials, `AWS_*`,
+    `SLS_*`, `NODE_ENV`, your own flags — is untouched, and like `packageCommand` the
+    check guards the API rather than a hand-edited file.
+  - `GET /api/config` still reports only the **key names** of both maps; values never
+    leave the process.
 
 - **servicePackaging** (object, default: `{}`)
   - Per-service packaging overrides. Each key identifies a service by its **directory
@@ -173,6 +394,10 @@ Both files should contain valid JSON with the following optional properties:
     Resolution against the globals: per-service `packageCommand`/`packageTimeoutMs`
     **replace** the global value; `packageArgs` are **appended after** the global args;
     `packageEnv` is **merged over** the global env (per-service wins).
+  - A per-service `packageCommand` is held to the **same packaging grammar** as the
+    global one, a per-service `packageArgs` to the same flag screen, and a per-service
+    `packageEnv` to the same rejected-key list — an override is a different value for
+    the same setting, not a way around its validation.
   - `packageArgs`/`packageEnv`/`servicePackaging` are file-only (no environment-variable
     equivalents). `LSS_PACKAGE_COMMAND`/`LSS_PACKAGE_TIMEOUT_MS` still apply as the global
     baseline that a per-service `packageCommand`/`packageTimeoutMs` can override.
@@ -367,6 +592,8 @@ Environment variables can be used instead of — or to override — a configurat
 - `LSS_CONFIG` - Explicit config file path for the CLI (equivalent to `--config <path>`; also honored by `LssClient`)
 - `LSS_CONFIG_PATH` - Explicit config file path for the server (the CLI sets it from `--config` when spawning)
 - `PORT` or `LSS_DASHBOARD_PORT` - The stack's port (dashboard + API + AWS wire)
+- `LSS_BIND_HOST` - Interface **every** listener binds — orchestrator, per-service API and invoke ports, the split-listener engine, the DynamoDB proxy (default `127.0.0.1`, loopback only). Set `0.0.0.0` when the ports must be reachable from outside this machine — e.g. `docker run -p`; see [LSS_BIND_HOST](#lss_bind_host-network-exposure)
+- `LSS_CORS_ORIGINS` - Browser origins allowed to call the REST API cross-origin: comma-separated exact origins, or `*` for any. Unset = loopback origins only. Pair it with `LSS_BIND_HOST` when a frontend outside this machine calls LSS directly; see [LSS_CORS_ORIGINS](#lss_cors_origins-browser-origins)
 - `LSS_ENABLE_DYNAMO_PROXY` - Enable DynamoDB proxy (true/false or 1/0; the legacy unprefixed `ENABLE_DYNAMO_PROXY` is still honored as a fallback, deprecated)
 - `LSS_DYNAMO_PROXY_PORT` - DynamoDB proxy port
 - `AWS_REGION` - AWS region
@@ -406,6 +633,15 @@ export LSS_ENABLE_DYNAMO_PROXY=true
 # Move the whole stack off its default port
 export LSS_DASHBOARD_PORT=14766
 export LSS_ENGINE_PORT=14766
+
+# LSS in a container, browser and frontends on the host (the common container setup).
+# Both halves: the bind opens every listener to the network, the origin list lets a
+# non-loopback page read the answer. Unauthenticated — trusted networks only.
+export LSS_BIND_HOST=0.0.0.0
+export LSS_CORS_ORIGINS='*'
+
+# …or, better, name the pages you actually run
+export LSS_CORS_ORIGINS=http://localhost:5173,http://192.168.1.20:5173
 
 # Start the orchestrator
 npx lss start
@@ -453,12 +689,15 @@ The HTTP surface behind it:
 | Endpoint | What it does |
 |---|---|
 | `GET /api/config` | Full public-safe snapshot: engine kind + endpoint, self-engine block, lambda runtime (with the resolved residency policy), packaging, branding, `configPath`/`projectRoot`, and `envOverrides` (keys currently masked by env vars). Secret **values** never appear: `packageEnv` maps collapse to key names and the `secrets` seed map collapses to a count. |
-| `PUT /api/config` | Persist a partial patch. Scalar/array keys replace; `null` deletes the key (the default returns). Object blocks (`lambdaRuntime`, `selfEngine`, `aossSidecar`, `branding`, …) merge **one level deep** — a partial edit never drops sibling settings like `branding.logo` — and a `null` subkey deletes just that subkey. Nested keys are validated too (`selfEngine.port` must be a port, `lambdaRuntime.execution` must be a known mode, unknown subkeys are rejected). Invalid patches answer `400` with every problem listed in `details` and nothing touches the file. |
+| `PUT /api/config` | Persist a partial patch. Scalar/array keys replace; `null` deletes the key (the default returns). Object blocks (`lambdaRuntime`, `selfEngine`, `aossSidecar`, `branding`, …) merge **one level deep** — a partial edit never drops sibling settings like `branding.logo` — and a `null` subkey deletes just that subkey. Nested keys are validated too (`selfEngine.port` must be a port, `lambdaRuntime.execution` must be a known mode, unknown subkeys are rejected). `packageCommand` — global and per-service — must match the [packaging grammar](#packagecommand-allowlist) (runner **and** subcommand, so `npm exec -c '<shell>'` is rejected alongside `/bin/sh`), `packageArgs` is screened for the same runner-redirecting flags, and `packageEnv` must carry no code-injection key, because all three end up as arguments to `spawn()` and this endpoint is unauthenticated. Invalid patches answer `400` with every problem listed in `details` and nothing touches the file. |
 | `POST /api/config/reload` | Re-read the config file from disk after a hand edit, without restarting the orchestrator. A file that no longer parses answers `400` and the working in-memory config stays untouched. |
 | `GET /api/config/ports` | Every local port the stack exposes: orchestrator, engine, DynamoDB proxy, plus each registered service's HTTP API and Lambda invoke listeners. Shown on the dashboard Overview. |
 
 One key is **never editable via the API**: `secrets` (seed material — edit the file
-directly).
+directly). Two settings are not config keys at all and therefore have no `PUT` spelling
+either — `LSS_BIND_HOST` and `LSS_CORS_ORIGINS` are environment-only, because they *are*
+the boundary around this unauthenticated API and a boundary that can be widened through
+the API it guards is not one.
 
 Both `PUT` and `reload` classify what changed:
 
@@ -504,6 +743,60 @@ If a port is already in use, change it in the configuration file:
 The CLI honours the same override as an env var (`LSS_DASHBOARD_PORT`/`PORT`),
 so `lss status`/`stop` keep finding the instance.
 
+### Dashboard unreachable from outside the machine (or from the Docker host)
+
+LSS binds `127.0.0.1` by default, so nothing outside this machine can connect —
+that is intentional (the API is unauthenticated and every table, queue, bucket and
+secret in the stack is readable through it).
+
+1. Inside a **devcontainer**, use VS Code's port forwarding: it connects from inside
+   the container, so the loopback bind is enough and nothing needs to change.
+2. When the container publishes the port itself (`docker run -p 14566:14566`), start
+   the stack with `LSS_BIND_HOST=0.0.0.0` — the published connection arrives on the
+   container's external interface, which a loopback listener refuses. Boot then warns
+   that the API is network-reachable; only do it on a network you trust.
+3. One value covers the whole process — the dashboard/REST/AWS listener, every
+   service's API and invoke port, the split-listener engine and the DynamoDB proxy —
+   so there is no second knob to find when a **service** port is the one you cannot
+   reach. Docker still has to `-p` each port you want forwarded.
+4. If the browser can now *reach* the port but the page's calls fail, that is CORS, not
+   the bind — see the next entry.
+5. For remote access to your own machine, prefer a tunnel:
+   `ssh -L 14566:127.0.0.1:14566 <host>`, leaving the bind on loopback.
+6. `❌ Orchestrator could not bind <host>:<port> … does not belong to this host` means
+   `LSS_BIND_HOST` names an address this machine does not own — use `127.0.0.1`,
+   `0.0.0.0`, or one of its own addresses.
+
+### The browser console says the request was blocked by CORS
+
+The port answered, but the page's origin is not on the allowlist, so the response
+carries no `Access-Control-Allow-Origin` and the browser refuses to hand it to your
+code. With `LSS_CORS_ORIGINS` unset, only `http://localhost`, `http://127.0.0.1` and
+`http://[::1]` (any port) are granted.
+
+1. Add the origin the browser actually sent — copy it verbatim from the console error
+   or from the failing request's `Origin` header, scheme and port included:
+   ```bash
+   export LSS_CORS_ORIGINS=http://localhost:3101,http://192.168.1.20:5173
+   ```
+   Setting the variable **replaces** the loopback default, so list your loopback
+   origins too if you still open the dashboard that way.
+2. `http` and `https`, and two different ports, are two different origins. A frontend on
+   `https://` calling `http://` LSS is a mixed-content block in most browsers, not a
+   CORS one — the console message says so.
+3. When origins are unpredictable (rotating container IPs, teammates), `LSS_CORS_ORIGINS='*'`
+   allows any page; boot warns while it is set.
+4. This is a **browser-only** boundary. `curl`, `lss`, `LssClient`, the MCP server and
+   the AWS SDKs send no `Origin` and were never affected — if those work and only the
+   browser fails, you are in the right place.
+5. `LSS_CORS_ORIGINS` governs the orchestrator's **REST API** (`/api/*`) and nothing
+   else. Two neighbours look the same and are not: the **emulated API Gateway** on a
+   service's `apiPort` answers CORS from that service's own `cors:` declaration in
+   `serverless.yml`, exactly as AWS does — if your frontend is blocked calling a
+   30xx port, declare CORS on the route; and an **S3 bucket** answers from its own
+   `CorsConfiguration` (the engine falls back to a dev-permissive echo on a bucket with
+   no rules). Neither reads this variable.
+
 ### Registration can't find the server
 
 1. Verify the server is running: `npx lss status`
@@ -517,6 +810,6 @@ Use environment variables instead:
 
 ```bash
 export LSS_DASHBOARD_PORT=3100
-export LSS_LOCALSTACK_PORT=4566
+export LSS_ENGINE_PORT=14566
 npx lss start
 ```

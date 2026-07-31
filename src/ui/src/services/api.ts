@@ -748,7 +748,14 @@ export const api = {
     }),
 
   // Process control
-  startService: (name: string, payload?: { stage?: string; cwd?: string; command?: string; args?: string[] }) =>
+  //
+  // The payload only *selects* what runs: which start script (`stage`, which the
+  // server interpolates into `start:${stage}`) and which package manager runs it.
+  // `cwd`, `args` and `env` used to be advertised here and were handed straight
+  // to spawn() on the server; the endpoint ignores them now — it derives the cwd
+  // from the registered service root and the argv from `stage` — so the type no
+  // longer offers a capability the server refuses.
+  startService: (name: string, payload?: { stage?: string; command?: 'npm' | 'yarn' | 'pnpm' }) =>
     request<any>(`/api/services/${name}/start`, {
       method: 'POST',
       body: JSON.stringify(payload || {}),
