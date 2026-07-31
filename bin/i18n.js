@@ -78,11 +78,6 @@ const MESSAGES = {
     'logs.missing': '⚠️  No log file at {path}',
     'logs.from': '📝 Logs from: {path}',
 
-    // --- v1 leftovers ------------------------------------------------------
-    // v2 ships one engine; a stale flag/config key must fail loudly, never be
-    // quietly ignored.
-    'legacy.removed': '❌ {flags} — LSS v2 removed the LocalStack backend; the self engine is the only engine.',
-    'legacy.hint': '   Drop the flag and any localstack* keys from lss.config.json. See docs/MIGRATION-v2.md.',
 
     // --- errors ------------------------------------------------------------
     'error.notRunning': '❌ LSS Orchestrator is not running. Start it with: npx lss start',
@@ -232,8 +227,6 @@ const MESSAGES = {
     'logs.missing': '⚠️  Nenhum arquivo de log em {path}',
     'logs.from': '📝 Logs de: {path}',
 
-    'legacy.removed': '❌ {flags} — o LSS v2 removeu o backend LocalStack; o self engine é o único engine.',
-    'legacy.hint': '   Tire a flag e qualquer chave localstack* do lss.config.json. Veja docs/MIGRATION-v2.md.',
 
     'error.notRunning': '❌ O orquestrador LSS não está rodando. Suba com: npx lss start',
     'error.unknown': 'erro desconhecido (sem detalhes)',
@@ -373,8 +366,6 @@ const MESSAGES = {
     'logs.missing': '⚠️  No hay archivo de registro en {path}',
     'logs.from': '📝 Registros de: {path}',
 
-    'legacy.removed': '❌ {flags} — LSS v2 eliminó el backend de LocalStack; el self engine es el único engine.',
-    'legacy.hint': '   Quita la bandera y cualquier clave localstack* de lss.config.json. Mira docs/MIGRATION-v2.md.',
 
     'error.notRunning': '❌ El orquestador LSS no está en marcha. Inícialo con: npx lss start',
     'error.unknown': 'error desconocido (sin detalles)',

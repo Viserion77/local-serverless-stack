@@ -217,6 +217,53 @@ export interface ScanWarning {
   params?: Record<string, string>;
 }
 
+// GET /api/lambdas/activity — what the runtime has actually been doing, and
+// what it is costing the host.
+export interface InvocationSpan {
+  service: string;
+  functionName: string;
+  startedAt: number;
+  durationMs: number;
+  ok: boolean;
+  coldStart: boolean;
+}
+
+export interface ActivitySnapshot {
+  windowMs: number;
+  spans: InvocationSpan[];
+  buckets: { at: number; peak: number; started: number }[];
+  totals: {
+    invocations: number;
+    errors: number;
+    coldStarts: number;
+    peakConcurrency: number;
+    activeNow: number;
+    avgDurationMs: number;
+  };
+  workers: {
+    service: string;
+    status: string;
+    warm: boolean;
+    pid?: number;
+    startedAt?: number;
+    lastInvokedAt?: number;
+    invocations: number;
+    errors: number;
+    functions: number;
+    executionMode?: string;
+  }[];
+  residency: { warm: number; maxWarmWorkers: number; lazy: boolean; idleTimeoutMs: number };
+  host: {
+    rssBytes: number;
+    heapUsedBytes: number;
+    totalMemBytes: number;
+    freeMemBytes: number;
+    cpuCount: number;
+    loadAvg1m: number;
+    uptimeMs: number;
+  };
+}
+
 // Result of POST /api/services/install and /api/services/package.
 export interface PrepareServiceResult {
   success: boolean;
@@ -691,6 +738,8 @@ export const api = {
   getServiceLogs: (name: string) => request<any>(`/api/services/${name}/logs`),
 
   // Lambdas
+  getActivity: (windowMs?: number) =>
+    request<ActivitySnapshot>(`/api/lambdas/activity${windowMs ? `?windowMs=${windowMs}` : ''}`),
   listLambdas: () => request<LambdaSummary[]>('/api/lambdas'),
   getLambda: (name: string) =>
     request<LambdaDetailInfo>(`/api/lambdas/${encodeURIComponent(name)}`),

@@ -15,6 +15,7 @@ import { projectCacheSegment } from './cache-manager.js';
 import { FunctionRegistry, ServiceEntry } from './function-registry.js';
 import { resolveArtifacts } from './artifact-resolver.js';
 import type { RegisteredFunction } from './serverless-state-parser.js';
+import { InvocationActivity } from './invocation-activity.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -290,6 +291,7 @@ export class LambdaRuntimeManager {
 
     // Lazy runtime, first invocation (or first after an idle unload): this is
     // the cold start the deferred fork trades the resident memory for.
+    const coldStart = runtime.status === 'idle';
     if (runtime.status === 'idle') {
       this.startWorker(runtime);
       if ((runtime.status as RuntimeStatus) === 'error') {
@@ -359,6 +361,16 @@ export class LambdaRuntimeManager {
     if (runtime.history.length > HISTORY_LIMIT) {
       runtime.history.splice(0, runtime.history.length - HISTORY_LIMIT);
     }
+    // Stack-wide, log-free copy for the Overview activity panel: the per-service
+    // history above cannot answer "what ran in parallel across services".
+    InvocationActivity.getInstance().record({
+      service: serviceName,
+      functionName: fn.name,
+      startedAt,
+      durationMs: result.durationMs,
+      ok: result.ok,
+      coldStart,
+    });
     return result;
   }
 

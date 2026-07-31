@@ -3,6 +3,7 @@
 // space and files never collide.
 import type { Locale } from '../index';
 import { common } from './common';
+import { activity } from './activity';
 import { nav } from './nav';
 import { onboarding } from './onboarding';
 import { overview } from './overview';
@@ -23,6 +24,7 @@ export type AreaMessages = Record<Locale, Catalogue>;
 
 const AREAS: Record<string, AreaMessages> = {
   common,
+  activity,
   nav,
   onboarding,
   overview,

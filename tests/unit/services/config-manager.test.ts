@@ -847,29 +847,6 @@ describe('printSummary', () => {
   });
 });
 
-// v1 chose a backend with `engine` / LSS_ENGINE. v2 has one engine, so a
-// leftover "localstack" must fail loudly rather than be silently ignored — a
-// silent no-op would run the stack against something the user did not ask for.
-describe('v1 engine migration guard', () => {
-  it('rejects engine: "localstack" from the config file', () => {
-    const cwdFile = path.join(process.cwd(), 'lss.config.json');
-    fs.existsSync.mockImplementation((p) => p === cwdFile);
-    fs.readFileSync.mockReturnValue(JSON.stringify({ engine: 'localstack' }));
-    expect(() => freshConfigManager()).toThrow(/no longer supports.*self engine is the only engine/s);
-  });
-
-  it('rejects LSS_ENGINE=localstack, case-insensitively', () => {
-    process.env.LSS_ENGINE = 'LocalStack';
-    expect(() => freshConfigManager()).toThrow(/LSS_ENGINE is set to "localstack"/);
-  });
-
-  it('accepts "self" and an absent value', () => {
-    process.env.LSS_ENGINE = 'self';
-    expect(() => freshConfigManager()).not.toThrow();
-    delete process.env.LSS_ENGINE;
-    expect(() => freshConfigManager()).not.toThrow();
-  });
-});
 
 describe('self engine configuration', () => {
   function cmWith(config: Record<string, unknown>): CM {

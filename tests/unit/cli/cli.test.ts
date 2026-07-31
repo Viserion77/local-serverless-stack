@@ -838,31 +838,6 @@ describe('bin/cli.js helpers', () => {
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Self Engine: http://localhost:15000'));
     });
 
-    // A v1 flag or config value must fail loudly, never be silently ignored.
-    it.each([
-      ['--self-engine'],
-      ['--external'],
-      ['--pro'],
-      ['--localstack-token'],
-    ])('rejects the removed flag %s', async (flag) => {
-      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
-      const cli = loadCli(['node', 'cli.js', 'start', flag]);
-      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('removed the LocalStack backend'));
-      expect(mockSpawn).not.toHaveBeenCalled();
-    });
-
-    it('rejects a leftover engine: "localstack" in the config file', async () => {
-      mockFs.existsSync.mockImplementation((p: any) => {
-        const s = String(p);
-        return s.endsWith('index.js') || s.endsWith('lss.config.json');
-      });
-      mockFs.readFileSync.mockReturnValue(JSON.stringify({ engine: 'localstack' }));
-      const cli = loadCli(['node', 'cli.js', 'start']);
-      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('engine: "localstack"'));
-    });
-
     it('reports already running with the Self Engine line when engine is self', () => {
       mockFs.existsSync.mockImplementation((p: any) => {
         const s = String(p);

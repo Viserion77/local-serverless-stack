@@ -138,22 +138,6 @@ const EXPLICIT_CONFIG = (() => {
   return v ? path.resolve(v) : undefined;
 })();
 
-// v1 shipped a LocalStack backend selected by flags and config keys. v2 ships
-// one engine, so anything left over from that world must fail loudly here
-// rather than be quietly ignored.
-function assertNoLocalStackFlags() {
-  const legacy = ['--external', '--pro', '--self-engine', '--localstack-token']
-    .filter(flag => process.argv.includes(flag) || process.argv.some(a => a.startsWith(`${flag}=`)));
-  const cfg = loadConfig();
-  if (String(cfg.engine || '').toLowerCase() === 'localstack') {
-    legacy.push('engine: "localstack"');
-  }
-  if (legacy.length === 0) return;
-  console.error(t('legacy.removed', { flags: legacy.join(', ') }));
-  console.error(t('legacy.hint'));
-  process.exit(1);
-}
-
 // Resolve orchestrator path - works both in development and when installed via npm
 function getOrchestratorPath() {
   // Try to find the orchestrator relative to this script
@@ -179,7 +163,6 @@ function startOrchestrator() {
   // Before anything else — including the already-running short-circuit — so a
   // stale v1 flag or config value always fails loudly instead of looking like
   // a successful no-op.
-  assertNoLocalStackFlags();
 
   const { pidFile, logFile } = runtimePaths();
 
@@ -895,7 +878,7 @@ function firstPositional() {
 // Every non-flag argument after the command, skipping flag VALUES too
 // (`--config <path>` consumes the next token).
 function allPositionals() {
-  const flagsWithValue = new Set(['--config', '--localstack-token']);
+  const flagsWithValue = new Set(['--config']);
   const out = [];
   for (let i = 3; i < process.argv.length; i++) {
     const arg = process.argv[i];

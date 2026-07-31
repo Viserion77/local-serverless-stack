@@ -241,10 +241,6 @@ export interface LSSConfig {
   // Per-service runtime overrides (ports, execution mode, watch).
   serviceRuntime?: Record<string, ServiceRuntimeConfig>;
 
-  // Accepted only so a v1 file fails loudly instead of silently: the only
-  // value LSS v2 tolerates is "self". See assertNoLocalStackEngine.
-  engine?: string;
-
   // Self-engine settings.
   selfEngine?: SelfEngineConfig;
 
@@ -375,7 +371,6 @@ const CONFIG_ENV_OVERRIDES: Record<string, string[]> = {
   packageCommand: ['LSS_PACKAGE_COMMAND'],
   packageTimeoutMs: ['LSS_PACKAGE_TIMEOUT_MS'],
   lambdaRuntime: ['LSS_LAMBDA_RUNTIME', 'LSS_LAMBDA_EXECUTION', 'LSS_LAMBDA_WATCH', 'LSS_INVOKE_HOST'],
-  engine: ['LSS_ENGINE'],
   selfEngine: ['LSS_ENGINE_PORT', 'LSS_ENGINE_DATA_DIR'],
 };
 
@@ -480,20 +475,6 @@ export interface ConfigUpdateResult extends ConfigReloadResult {
   envOverridden: string[];
 }
 
-// v1 shipped two engines. v2 ships one, so `engine: "localstack"` (from a file
-// or from LSS_ENGINE) cannot be honoured and must not be ignored either.
-export function assertNoLocalStackEngine(value: string | undefined, source: string): void {
-  if (!value) return;
-  const kind = value.toLowerCase();
-  if (kind === 'localstack') {
-    throw new Error(
-      `${source} is set to "localstack", which LSS v2 no longer supports — the self engine is the only engine. `
-      + 'Remove the setting (and any localstack* keys) from your configuration. '
-      + 'See docs/MIGRATION-v2.md.',
-    );
-  }
-}
-
 export class ConfigManager {
   private static instance: ConfigManager;
   private config: LSSConfig = {};
@@ -538,9 +519,6 @@ export class ConfigManager {
           console.warn(`⚠️  Failed to parse config file ${candidate}:`, error instanceof Error ? error.message : 'Unknown error');
           continue;
         }
-        // Outside the try: a v1 `engine` value is a migration error the user
-        // must see, not a parse warning to swallow.
-        assertNoLocalStackEngine(this.config.engine, `"engine" in ${candidate}`);
         break;
       }
     }
@@ -610,10 +588,6 @@ export class ConfigManager {
         invokeHost: process.env.LSS_INVOKE_HOST,
       };
     }
-    // v1 chose a backend with LSS_ENGINE / `engine`. v2 has one engine, so a
-    // leftover "localstack" is a loud, actionable error rather than a silent
-    // no-op that would quietly run against the wrong thing.
-    assertNoLocalStackEngine(process.env.LSS_ENGINE, 'LSS_ENGINE');
     if (process.env.LSS_ENGINE_PORT) {
       this.config.selfEngine = {
         ...this.config.selfEngine,

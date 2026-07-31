@@ -6,6 +6,7 @@ import {
   TDescriptionList, TDescriptionItem,
 } from '@treeui/vue';
 import { RouterLink } from 'vue-router';
+import ActivityPanel from '../components/ActivityPanel.vue';
 import { api } from '../services/api';
 import { isOnboardingDone } from '../services/onboarding';
 import { useI18n } from '../i18n';
@@ -172,6 +173,8 @@ onBeforeUnmount(() => {
         </TStack>
       </TStack>
     </TCard>
+
+    <ActivityPanel />
 
     <TStack v-if="loading && !health" direction="horizontal" justify="center" align="center">
       <TSpinner :label="t('overview.loading')" />
