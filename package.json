@@ -1,7 +1,7 @@
 {
   "name": "local-serverless-stack",
-  "version": "2.0.0",
-  "description": "Local control plane for serverless development with LocalStack orchestration",
+  "version": "1.0.0",
+  "description": "Local control plane for serverless development — an in-process AWS emulator, no Docker required",
   "author": "LSS Contributors",
   "license": "MIT",
   "bin": {

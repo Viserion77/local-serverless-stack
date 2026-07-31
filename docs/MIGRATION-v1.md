@@ -1,6 +1,6 @@
-# Migrating to LSS v2
+# Migrating to LSS 1.0 (from 0.x)
 
-**v2 removes the LocalStack backend.** The self engine — the in-process AWS
+**1.0 removes the LocalStack backend.** The self engine — the in-process AWS
 emulator LSS has shipped since v0.10 — is now the only engine. No Docker, no
 container image, no `LOCALSTACK_AUTH_TOKEN`, no Pro plan.
 
@@ -26,7 +26,7 @@ Secrets Manager and OpenSearch Serverless. Keeping a second backend meant:
 - two code paths for every explorer, every config key and every dashboard
   screen — and the dashboard told self-engine users they were running LocalStack.
 
-v2's integration suite runs **on every machine and in every CI job**: no Docker,
+1.0's integration suite runs **on every machine and in every CI job**: no Docker,
 no token, ~20 seconds.
 
 ---
@@ -126,7 +126,7 @@ have one.
 
 ### 6. The `serverless-lss` plugin is retired
 
-v2 removes the Serverless Framework plugin entirely — services no longer
+1.0 removes the Serverless Framework plugin entirely — services no longer
 announce themselves from inside `sls package`. Migration:
 
 1. Delete `serverless-lss` from each service's `devDependencies`.
@@ -147,7 +147,7 @@ announce themselves from inside `sls package`. Migration:
 
 `serverless-offline` compatibility went with it: `custom.serverless-offline`
 ports are no longer read (declare `custom.lss.apiPort`/`invokePort` instead),
-and registration no longer fires on `sls offline` — v1's plugin was the only
+and registration no longer fires on `sls offline` — the 0.x plugin was the only
 piece that ever did.
 
 ### 7. Examples

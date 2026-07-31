@@ -40,7 +40,7 @@ places to look):
 | --- | --- |
 | self-engine-sample | [self-hosted](self-hosted/) (orders → billing → notifications pipeline) |
 | opensearch-sample | [self-hosted](self-hosted/) (catalog-service) |
-| localstack-free, localstack-ultimate | removed in v2 with the LocalStack backend — see [MIGRATION-v2.md](../docs/MIGRATION-v2.md). Their raw `AWS::ApiGatewayV2::*` cross-stack topology moved to `tests/integration/fixtures/apigw-raw/`, where its end-to-end test still runs. |
+| localstack-free, localstack-ultimate | removed in 1.0 with the LocalStack backend — see [MIGRATION-v1.md](../docs/MIGRATION-v1.md). Their raw `AWS::ApiGatewayV2::*` cross-stack topology moved to `tests/integration/fixtures/apigw-raw/`, where its end-to-end test still runs. |
 
 The integration suite no longer boots from `examples/`: the old sample-microservice
 test rig now lives at `tests/integration/fixtures/sample-microservice`.

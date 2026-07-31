@@ -5,11 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [2.0.0] - 2026-07-31
+## [1.0.0] - 2026-07-31
 
 **LSS runs on one engine.** The LocalStack backend is gone — not deprecated, removed. The self
 engine, an in-process AWS emulator with no Docker, no container and no auth token, is what LSS is.
-Migration guide: [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md); for a project already on
+Migration guide: [docs/MIGRATION-v1.md](docs/MIGRATION-v1.md); for a project already on
 `engine: "self"` it is a matter of deleting a few config keys.
 
 The trigger was evidence, not preference. Both shipped LocalStack examples were run end to end
@@ -22,14 +22,14 @@ httpApi v2 simple-response authorizer written in TypeScript, and a cross-service
 resolved by ARN. Nothing the project supported on LocalStack needed LocalStack.
 
 ### Removed
-- **The v1 migration guards.** `engine: "localstack"` (file or `LSS_ENGINE`) and the retired
+- **The 0.x migration guards.** `engine: "localstack"` (file or `LSS_ENGINE`) and the retired
   `--external` / `--pro` / `--self-engine` / `--localstack-token` flags no longer raise a dedicated
-  migration error — v2 has shipped, so an unknown key or flag is simply an unknown key or flag.
-  [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md) still documents the move.
+  migration error — 1.0 has shipped, so an unknown key or flag is simply an unknown key or flag.
+  [docs/MIGRATION-v1.md](docs/MIGRATION-v1.md) still documents the move.
 - **The LocalStack backend**: `src/server/engine/backends/localstack-backend.ts`,
   `src/server/services/localstack-manager.ts`, `src/server/engine/aoss-sidecar.ts` and the
   `EngineBackend` interface. `EngineManager` now owns the one engine.
-- **Config keys**: `engine` (accepted only to reject a v1 `"localstack"` with a migration error),
+- **Config keys**: `engine` (accepted only to reject a 0.x `"localstack"` with a migration error),
   `mode`, `localstackPort`, `localstackEndpoint`, `localstackEdition`, `localstackVersion`,
   `localstackImage`, `localstackAuthToken`, `services`, `aossSidecar`. Editing any of them through
   `PUT /api/config` now answers `unknown config key`.
@@ -127,7 +127,7 @@ resolved by ARN. Nothing the project supported on LocalStack needed LocalStack.
 ### Changed
 - **The integration suite runs everywhere.** It boots an isolated orchestrator on the self engine
   instead of a LocalStack container, so it needs no Docker and no secret: **19 end-to-end
-  assertions in ~20 s**, unconditional locally and in CI. Under v1 the same suite skipped itself
+  assertions in ~20 s**, unconditional locally and in CI. Under 0.x the same suite skipped itself
   whenever the LocalStack auth token was absent — which was most of the time, meaning the project's
   only end-to-end coverage usually did not run.
 - OpenSearch Serverless is served natively by the engine on its own endpoint; the sidecar that

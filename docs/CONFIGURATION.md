@@ -299,7 +299,7 @@ Both files should contain valid JSON with the following optional properties:
 
 ## Registering services (no plugin)
 
-Since v2 there is no Serverless Framework plugin: services never announce
+Since 1.0 there is no Serverless Framework plugin: services never announce
 themselves. You bring them in through the orchestrator —
 
 ```bash

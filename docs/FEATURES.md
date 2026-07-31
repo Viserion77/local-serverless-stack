@@ -27,7 +27,7 @@ by the live integration suite (`npm run test:integration`).
 | `lss seed [table]` | Applies `{table}.json` seed files from `seedsDir` into DynamoDB (all matching tables, or one). | unit (`cli-seed`) + integration |
 | `lss seed:clear [table]` | Deletes seeded items after an interactive `confirmar` prompt (or `--yes`); refuses any non-local endpoint. | unit (`cli-seed`, `seed-manager-guard`) |
 | `--config <path>` | Loads config from an explicit file, taking precedence over the cwd/home search; also via `LSS_CONFIG`. | unit (`cli`) + integration |
-| v1 flag guard | `--self-engine` / `--external` / `--pro` / `--localstack-token`, and `engine: "localstack"` in a config file, exit 1 naming `docs/MIGRATION-v2.md` — a stale script fails visibly instead of quietly starting the wrong thing. | unit (`cli`, `config-manager`) |
+| 0.x flag guard | `--self-engine` / `--external` / `--pro` / `--localstack-token`, and `engine: "localstack"` in a config file, exit 1 naming `docs/MIGRATION-v1.md` — a stale script fails visibly instead of quietly starting the wrong thing. | unit (`cli`, `config-manager`) |
 
 ## 2. Configuration & instance isolation
 
@@ -132,7 +132,7 @@ port. Asserted by: unit (`dev/dynamo-proxy`).
 
 `GET /api/health` reports orchestrator + engine + dynamo-proxy status. Liveness of the **active** engine
 is `engineRunning`; `engine.kind` is always `"self"`, and `engine.services` lists what the engine answers for.
-(v1's `localstack` boolean is gone — see [MIGRATION-v2.md](MIGRATION-v2.md).)
+(The 0.x `localstack` boolean is gone — see [MIGRATION-v1.md](MIGRATION-v1.md).)
 
 Any `/api/*` path no router claims answers **404 with a JSON body**, not the SPA's `200 text/html` — a mistyped
 API path used to read as success to curl, to the `LssClient` and to any test asserting on the response. The Vue dashboard
@@ -258,7 +258,7 @@ Opt-in via `engine: "self"` / `lss start --self-engine`: the orchestrator serves
 itself on one port (default 14566) — no Docker, no auth token. The provisioner, explorers, seeds and
 application SDKs work unchanged (the endpoint is the seam); events are delivered in-process to the
 LSS Lambda runtime. Coverage matrix and storage model: `docs/SELF_ENGINE.md`; design:
-`docs/PRD_SELF_ENGINE.md`. Status: the only engine as of v2 — the integration suite is
+`docs/PRD_SELF_ENGINE.md`. Status: the only engine as of 1.0 — the integration suite is
 the next milestone and rows below will gain integration assertions with it.
 
 | Feature | Promise | Asserted by |
@@ -286,5 +286,5 @@ the next milestone and rows below will gain integration assertions with it.
 `persistence: false`, `autoPackage`), runs `npx lss start --config <fixture>`, registers
 the `tests/integration/fixtures/sample-microservice` rig, asserts the rows above via the HTTP API, then
 `npx lss stop --config <fixture>` and removes the state dir — there is no container or volume to reap.
-It runs **unconditionally**, locally and in CI: no Docker, no secret, ~20 seconds. (Under v1 the same
+It runs **unconditionally**, locally and in CI: no Docker, no secret, ~20 seconds. (Under 0.x the same
 suite skipped itself whenever the LocalStack auth token was absent, which was most of the time.)

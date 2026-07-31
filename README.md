@@ -45,7 +45,7 @@ want it running.
 <details>
 <summary><b>Background orchestrator lifecycle</b> — <code>lss start</code> / <code>stop</code> / <code>status</code> run the whole stack as a detached process you can forget about</summary>
 
-**How it works.** `start` first rejects any leftover v1 flag, then checks the PID file: if the recorded PID answers `kill(pid, 0)` it just reprints the URLs and returns; a dead PID file is deleted and boot continues. It resolves `dist/server/index.js`, opens the log file in append mode and `spawn`s `node` detached with stdio piped to that file, `unref`s the child and writes its PID. Ports come from config plus env (`serverPort` and the self engine both default to **14566**; the DynamoDB proxy is off, port **8000** when enabled), and they are passed down as `PORT`, `LSS_ENABLE_DYNAMO_PROXY`, `LSS_DYNAMO_PROXY_PORT`. Two seconds later it re-probes the PID and prints either "Service is running" or a failure pointing at the log. `stop` sends `SIGTERM` and then polls `kill(pid, 0)` every **200 ms for up to 10 s** before deleting the PID file — without that wait an immediate `lss start` would race the dying process for the port and die with `EADDRINUSE`. `status` prints PID, server URL, self engine URL, proxy URL (only when enabled) and log path, and self-heals a stale PID file.
+**How it works.** `start` first rejects any leftover 0.x flag, then checks the PID file: if the recorded PID answers `kill(pid, 0)` it just reprints the URLs and returns; a dead PID file is deleted and boot continues. It resolves `dist/server/index.js`, opens the log file in append mode and `spawn`s `node` detached with stdio piped to that file, `unref`s the child and writes its PID. Ports come from config plus env (`serverPort` and the self engine both default to **14566**; the DynamoDB proxy is off, port **8000** when enabled), and they are passed down as `PORT`, `LSS_ENABLE_DYNAMO_PROXY`, `LSS_DYNAMO_PROXY_PORT`. Two seconds later it re-probes the PID and prints either "Service is running" or a failure pointing at the log. `stop` sends `SIGTERM` and then polls `kill(pid, 0)` every **200 ms for up to 10 s** before deleting the PID file — without that wait an immediate `lss start` would race the dying process for the port and die with `EADDRINUSE`. `status` prints PID, server URL, self engine URL, proxy URL (only when enabled) and log path, and self-heals a stale PID file.
 
 **Where it lives.** `bin/cli.js` — `startOrchestrator()`, `stopOrchestrator()`, `waitForExit()`, `showStatus()`, `runtimePaths()`. `src/server/index.ts` — the orchestrator entry point that gets spawned.
 
@@ -60,7 +60,7 @@ want it running.
 
 **Where it lives.** `bin/cli.js` — `registerServices()`, `postJson()`, `allPositionals()`. `src/server/routes/services.ts` — `POST /register`, which validates the path and delegates to the registrar.
 
-**Why it exists.** v1 shipped a `serverless-lss` plugin that hooked into deploys; it was retired in v2. Registration is now a plain HTTP call, so a service joins the stack from any shell, a Makefile or CI without adding a dependency to its `serverless.yml`.
+**Why it exists.** 0.x shipped a `serverless-lss` plugin that hooked into deploys; it was retired in 1.0. Registration is now a plain HTTP call, so a service joins the stack from any shell, a Makefile or CI without adding a dependency to its `serverless.yml`.
 
 </details>
 
@@ -142,9 +142,9 @@ want it running.
 </details>
 
 <details>
-<summary><b>Legacy LocalStack guard</b> — v1 flags fail loudly instead of being silently ignored</summary>
+<summary><b>Legacy LocalStack guard</b> — 0.x flags fail loudly instead of being silently ignored</summary>
 
-**How it works.** `start` runs the check before anything else, including the already-running short-circuit. If `--external`, `--pro`, `--self-engine` or `--localstack-token` appear in argv (bare or as `flag=value`), or the resolved config sets `engine: "localstack"`, it names every offender, explains that v2 removed the LocalStack backend and that the self engine is the only engine, points at `docs/MIGRATION-v2.md`, and exits 1.
+**How it works.** `start` runs the check before anything else, including the already-running short-circuit. If `--external`, `--pro`, `--self-engine` or `--localstack-token` appear in argv (bare or as `flag=value`), or the resolved config sets `engine: "localstack"`, it names every offender, explains that 1.0 removed the LocalStack backend and that the self engine is the only engine, points at `docs/MIGRATION-v1.md`, and exits 1.
 
 **Where it lives.** `bin/cli.js` — `assertNoLocalStackFlags()`.
 
@@ -161,7 +161,7 @@ want it running.
 
 **Where it lives.** `src/server/services/service-registrar.ts` — the whole read → parse → cache → provision → activate pipeline. `src/server/routes/services.ts` — `POST /register` input validation and the response shape. `src/server/services/cloudformation-parser.ts` — template → typed resources + `templateHash`. `bin/cli.js` — `lss register`.
 
-**Why it exists.** In v1 each service had to carry the `serverless-lss` plugin and announce itself from inside `sls package`. That package was retired in v2: services join the stack from the outside, so onboarding a 40-service monorepo means 40 paths, not 40 edits to 40 `serverless.yml` files.
+**Why it exists.** In 0.x each service had to carry the `serverless-lss` plugin and announce itself from inside `sls package`. That package was retired in 1.0: services join the stack from the outside, so onboarding a 40-service monorepo means 40 paths, not 40 edits to 40 `serverless.yml` files.
 
 </details>
 
@@ -708,7 +708,7 @@ want it running.
 
 **Where it lives.** `src/server/services/opensearch-explorer.ts` — control-plane client, data-plane fetch, `OpenSearchDataPlaneError`. `src/server/routes/opensearch.ts` — `/api/opensearch/*` and the status-code translation. `src/mcp/tools.ts` — `lss_opensearch_search`.
 
-**Why it exists.** No LocalStack edition provides OpenSearch Serverless at all, so v1 needed a sidecar container just to have something to point at; the self engine serves both planes itself. Being able to check what a service indexed — without installing OpenSearch Dashboards — is the difference between debugging a search bug locally and only finding it in staging.
+**Why it exists.** No LocalStack edition provides OpenSearch Serverless at all, so 0.x needed a sidecar container just to have something to point at; the self engine serves both planes itself. Being able to check what a service indexed — without installing OpenSearch Dashboards — is the difference between debugging a search bug locally and only finding it in staging.
 
 </details>
 
@@ -990,7 +990,7 @@ red/green are 4.4 ΔE apart under deuteranopia.
 <details>
 <summary><b>One config file, one env-var layer</b> — `lss.config.json` (or `.lssrc`), with every key overridable by an `LSS_*` variable</summary>
 
-**How it works.** `ConfigManager` is a singleton that searches, in order: `$LSS_CONFIG_PATH` (exported by the CLI from `lss <cmd> --config <path>`), `./lss.config.json`, `./.lssrc`, `~/lss.config.json`, `~/.lssrc`. The first file that exists is parsed and wins; a file that fails to parse logs a warning and the search continues to the next candidate. Environment variables are then applied *over* the file — `LSS_DASHBOARD_PORT`/`PORT`, `AWS_REGION`, `LSS_PERSISTENCE`, `LSS_DEBUG`, `LSS_SEEDS_DIR`, `LSS_ENABLE_DYNAMO_PROXY`, `LSS_DYNAMO_PROXY_PORT`, `LSS_AUTO_PACKAGE`, `LSS_PACKAGE_COMMAND`, `LSS_PACKAGE_TIMEOUT_MS`, `LSS_LAMBDA_RUNTIME`, `LSS_LAMBDA_EXECUTION`, `LSS_LAMBDA_WATCH`, `LSS_INVOKE_HOST`, `LSS_ENGINE_PORT`, `LSS_ENGINE_DATA_DIR`. Every key is optional; the resolved defaults are `serverPort` 14566, `selfEngine.port` 14566 (same value, which is what puts the API, the dashboard and the AWS wire on **one** listener — give them different values to split them), `region` `us-east-1`, `persistence` true, `debug` false, `seedsDir` `./seeds`, `dynamoProxyPort` 8000, `autoPackage` false, `packageCommand` `npx serverless package`, `packageTimeoutMs` 300000, `selfEngine.account` `000000000000`, `idleUnloadMs` 300000, `memoryBudgetMb` 128, `fsync` false, `fallbackEndpoint` null. A leftover v1 `engine: "localstack"` (from the file or `LSS_ENGINE`) throws a migration error instead of being silently ignored.
+**How it works.** `ConfigManager` is a singleton that searches, in order: `$LSS_CONFIG_PATH` (exported by the CLI from `lss <cmd> --config <path>`), `./lss.config.json`, `./.lssrc`, `~/lss.config.json`, `~/.lssrc`. The first file that exists is parsed and wins; a file that fails to parse logs a warning and the search continues to the next candidate. Environment variables are then applied *over* the file — `LSS_DASHBOARD_PORT`/`PORT`, `AWS_REGION`, `LSS_PERSISTENCE`, `LSS_DEBUG`, `LSS_SEEDS_DIR`, `LSS_ENABLE_DYNAMO_PROXY`, `LSS_DYNAMO_PROXY_PORT`, `LSS_AUTO_PACKAGE`, `LSS_PACKAGE_COMMAND`, `LSS_PACKAGE_TIMEOUT_MS`, `LSS_LAMBDA_RUNTIME`, `LSS_LAMBDA_EXECUTION`, `LSS_LAMBDA_WATCH`, `LSS_INVOKE_HOST`, `LSS_ENGINE_PORT`, `LSS_ENGINE_DATA_DIR`. Every key is optional; the resolved defaults are `serverPort` 14566, `selfEngine.port` 14566 (same value, which is what puts the API, the dashboard and the AWS wire on **one** listener — give them different values to split them), `region` `us-east-1`, `persistence` true, `debug` false, `seedsDir` `./seeds`, `dynamoProxyPort` 8000, `autoPackage` false, `packageCommand` `npx serverless package`, `packageTimeoutMs` 300000, `selfEngine.account` `000000000000`, `idleUnloadMs` 300000, `memoryBudgetMb` 128, `fsync` false, `fallbackEndpoint` null. A leftover 0.x `engine: "localstack"` (from the file or `LSS_ENGINE`) throws a migration error instead of being silently ignored.
 
 **Where it lives.** `src/server/services/config-manager.ts` — the `LSSConfig` shape, the file search, `loadFromEnv()` and every typed getter with its default. `bin/cli.js` — the CLI's own copy of the search plus the same env overrides, so `lss start`/`stop` and the server always agree on the port. `docs/CONFIGURATION.md` — the full key reference.
 
@@ -1060,8 +1060,8 @@ The LSS engine replaces them for the serverless dev loop: the orchestrator itsel
 the real AWS wire protocols on one port, so your application code, the AWS SDK, the
 dashboard and `lss seed` all work unchanged — there is simply no container underneath.
 
-> **Upgrading from v1?** v2 removed the LocalStack backend. See
-> [docs/MIGRATION-v2.md](docs/MIGRATION-v2.md) — for a project already on `engine: "self"`
+> **Upgrading from 0.x?** 1.0 removed the LocalStack backend. See
+> [docs/MIGRATION-v1.md](docs/MIGRATION-v1.md) — for a project already on `engine: "self"`
 > it is a matter of deleting a few config keys.
 
 ```bash

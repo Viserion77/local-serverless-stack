@@ -11,14 +11,14 @@
 LSS is a **local control plane for serverless development**. One orchestrator provisions and serves
 every AWS resource your services declare, so a monorepo of 15+ microservices needs a single local
 stack instead of one emulator per service. The AWS provider is the **self engine**: an in-process
-emulator — no Docker, no container, no auth token — and since v2 the only engine LSS ships. It also
+emulator — no Docker, no container, no auth token — and since 1.0 the only engine LSS ships. It also
 replaces `serverless-offline` with its own Lambda runtime
 and API Gateway emulation.
 
 Published as the single npm package `local-serverless-stack` (CLI: `lss`). Services join the stack
 through the orchestrator itself — `lss scan` / `lss register`, the dashboard onboarding or
 `POST /api/services/register` — there is no Serverless Framework plugin anymore (the `serverless-lss`
-package was retired in v2). Node **>= 20**, CommonJS, npm workspaces (`src/ui`).
+package was retired in 1.0). Node **>= 20**, CommonJS, npm workspaces (`src/ui`).
 
 ---
 
