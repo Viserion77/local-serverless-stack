@@ -11,7 +11,9 @@ import {
 import { api } from '../services/api';
 import type { LssConfigSnapshot, LssConfigUpdate } from '../services/api';
 import { regionOptions } from '../services/region';
+import { useI18n } from '../i18n';
 
+const { t } = useI18n();
 const toast = useToast();
 const snapshot = ref<LssConfigSnapshot | null>(null);
 const loading = ref(true);
@@ -21,32 +23,22 @@ const error = ref<string | null>(null);
 const restartKeys = ref<string[]>([]);
 const envMasked = ref<string[]>([]);
 
-const engineOptions = [
-  { value: 'localstack', label: 'LocalStack' },
-  { value: 'self', label: 'Self engine' },
-];
-const modeOptions = [
-  { value: 'managed', label: 'Managed' },
-  { value: 'external', label: 'External' },
-];
-const editionOptions = [
-  { value: 'community', label: 'Community' },
-  { value: 'pro', label: 'Pro' },
-];
-const executionOptions = [
-  { value: 'auto', label: 'Auto' },
-  { value: 'artifact', label: 'Artifact' },
-  { value: 'source', label: 'Source' },
-];
-const watchOptions = [
-  { value: 'default', label: 'Mode default (source → on, artifact → off)' },
-  { value: 'on', label: 'On' },
-  { value: 'off', label: 'Off' },
-];
-const themeOptions = [
-  { value: 'dark', label: 'Dark' },
-  { value: 'light', label: 'Light' },
-];
+// Computed rather than module consts: the labels must go through t() on every
+// render so a language switch re-labels the options without a reload.
+const executionOptions = computed(() => [
+  { value: 'auto', label: t('settings.executionAuto') },
+  { value: 'artifact', label: t('settings.executionArtifact') },
+  { value: 'source', label: t('settings.executionSource') },
+]);
+const watchOptions = computed(() => [
+  { value: 'default', label: t('settings.watchDefault') },
+  { value: 'on', label: t('settings.watchOn') },
+  { value: 'off', label: t('settings.watchOff') },
+]);
+const themeOptions = computed(() => [
+  { value: 'dark', label: t('settings.themeDark') },
+  { value: 'light', label: t('settings.themeLight') },
+]);
 
 // Flat form model — every field scalar so dirty tracking is a plain compare.
 const form = reactive({
@@ -54,15 +46,6 @@ const form = reactive({
   region: 'us-east-1',
   persistence: true,
   debug: false,
-  engine: 'localstack',
-  mode: 'managed',
-  edition: 'community',
-  version: '',
-  image: '',
-  endpoint: '',
-  localstackPort: 4566,
-  aossEnabled: true,
-  aossPort: 14567,
   sePort: 14566,
   seAccount: '000000000000',
   seMemoryBudgetMb: 128,
@@ -80,7 +63,6 @@ const form = reactive({
   packageCommand: '',
   packageTimeoutMs: 300000,
   seedsDir: '',
-  servicesCsv: '',
   brTitle: '',
   brSubtitle: '',
   brTheme: 'dark',
@@ -99,15 +81,6 @@ function applySnapshot(s: LssConfigSnapshot) {
   form.region = s.region;
   form.persistence = s.persistence;
   form.debug = s.debug;
-  form.engine = s.engine.kind;
-  form.mode = s.localstack.mode;
-  form.edition = s.localstack.edition;
-  form.version = s.localstack.version;
-  form.image = s.localstack.image;
-  form.endpoint = s.localstack.endpoint;
-  form.localstackPort = s.localstack.port;
-  form.aossEnabled = s.aossSidecar.enabled;
-  form.aossPort = s.aossSidecar.port;
   form.sePort = s.selfEngine.port;
   form.seAccount = s.selfEngine.account;
   form.seMemoryBudgetMb = s.selfEngine.memoryBudgetMb;
@@ -125,7 +98,6 @@ function applySnapshot(s: LssConfigSnapshot) {
   form.packageCommand = s.packageCommand;
   form.packageTimeoutMs = s.packageTimeoutMs;
   form.seedsDir = s.seedsDir;
-  form.servicesCsv = s.services.join(', ');
   form.brTitle = s.branding.title;
   form.brSubtitle = s.branding.subtitle;
   form.brTheme = s.branding.defaultTheme;
@@ -144,9 +116,7 @@ function isEnvMasked(configKey: string): boolean {
 }
 
 function envHint(configKey: string, normal: string): string {
-  return isEnvMasked(configKey)
-    ? 'Masked by an environment variable — the saved file value will not take effect until it is unset'
-    : normal;
+  return isEnvMasked(configKey) ? t('settings.maskedByEnv') : normal;
 }
 
 // Only the fields the user touched go into the patch; a blank optional string
@@ -159,56 +129,38 @@ function buildPatch(): { patch: LssConfigUpdate; errors: string[] } {
   const asPort = (value: unknown, label: string): number => {
     const n = Number(value);
     if (!Number.isInteger(n) || n < 1 || n > 65535) {
-      errors.push(`${label} must be an integer port between 1 and 65535`);
+      errors.push(t('settings.errorPort', { label }));
     }
     return n;
   };
   const asPositive = (value: unknown, label: string): number => {
     const n = Number(value);
     if (!Number.isInteger(n) || n <= 0) {
-      errors.push(`${label} must be a positive integer`);
+      errors.push(t('settings.errorPositive', { label }));
     }
     return n;
   };
   const orNull = (value: string): string | null => value.trim() || null;
 
-  if (dirty.has('serverPort')) patch.serverPort = asPort(form.serverPort, 'Server port');
+  if (dirty.has('serverPort')) patch.serverPort = asPort(form.serverPort, t('settings.serverPort'));
   if (dirty.has('region')) patch.region = form.region;
   if (dirty.has('persistence')) patch.persistence = form.persistence;
   if (dirty.has('debug')) patch.debug = form.debug;
-  if (dirty.has('engine')) patch.engine = form.engine as 'localstack' | 'self';
-  if (dirty.has('mode')) patch.mode = form.mode as 'managed' | 'external';
-  if (dirty.has('edition')) patch.localstackEdition = form.edition as 'community' | 'pro';
-  if (dirty.has('version')) patch.localstackVersion = orNull(form.version);
-  if (dirty.has('image')) patch.localstackImage = orNull(form.image);
-  if (dirty.has('endpoint')) patch.localstackEndpoint = orNull(form.endpoint);
-  if (dirty.has('localstackPort')) patch.localstackPort = asPort(form.localstackPort, 'LocalStack port');
   if (dirty.has('proxyEnabled')) patch.enableDynamoProxy = form.proxyEnabled;
-  if (dirty.has('proxyPort')) patch.dynamoProxyPort = asPort(form.proxyPort, 'Dynamo proxy port');
+  if (dirty.has('proxyPort')) patch.dynamoProxyPort = asPort(form.proxyPort, t('settings.proxyPort'));
   if (dirty.has('autoPackage')) patch.autoPackage = form.autoPackage;
   if (dirty.has('packageCommand')) patch.packageCommand = orNull(form.packageCommand);
-  if (dirty.has('packageTimeoutMs')) patch.packageTimeoutMs = asPositive(form.packageTimeoutMs, 'Package timeout');
+  if (dirty.has('packageTimeoutMs')) patch.packageTimeoutMs = asPositive(form.packageTimeoutMs, t('settings.packageTimeout'));
   if (dirty.has('seedsDir')) patch.seedsDir = orNull(form.seedsDir);
-  if (dirty.has('servicesCsv')) {
-    const list = form.servicesCsv.split(',').map(s => s.trim()).filter(Boolean);
-    patch.services = list.length ? list : null;
-  }
-
-  if (dirty.has('aossEnabled') || dirty.has('aossPort')) {
-    patch.aossSidecar = {
-      ...(dirty.has('aossEnabled') ? { enabled: form.aossEnabled } : {}),
-      ...(dirty.has('aossPort') ? { port: asPort(form.aossPort, 'aoss sidecar port') } : {}),
-    };
-  }
 
   const selfEngine: NonNullable<LssConfigUpdate['selfEngine']> = {};
-  if (dirty.has('sePort')) selfEngine.port = asPort(form.sePort, 'Self engine port');
+  if (dirty.has('sePort')) selfEngine.port = asPort(form.sePort, t('settings.selfEnginePort'));
   if (dirty.has('seAccount')) {
-    if (!form.seAccount.trim()) errors.push('Self engine account cannot be empty');
+    if (!form.seAccount.trim()) errors.push(t('settings.errorAccountEmpty'));
     selfEngine.account = form.seAccount.trim();
   }
-  if (dirty.has('seMemoryBudgetMb')) selfEngine.memoryBudgetMb = asPositive(form.seMemoryBudgetMb, 'Memory budget');
-  if (dirty.has('seIdleUnloadMs')) selfEngine.idleUnloadMs = asPositive(form.seIdleUnloadMs, 'Idle unload');
+  if (dirty.has('seMemoryBudgetMb')) selfEngine.memoryBudgetMb = asPositive(form.seMemoryBudgetMb, t('settings.memoryBudget'));
+  if (dirty.has('seIdleUnloadMs')) selfEngine.idleUnloadMs = asPositive(form.seIdleUnloadMs, t('settings.idleUnload'));
   if (dirty.has('seFsync')) selfEngine.fsync = form.seFsync;
   if (dirty.has('seFallback')) selfEngine.fallbackEndpoint = orNull(form.seFallback);
   if (Object.keys(selfEngine).length) patch.selfEngine = selfEngine;
@@ -217,7 +169,7 @@ function buildPatch(): { patch: LssConfigUpdate; errors: string[] } {
   if (dirty.has('lrEnabled')) lambdaRuntime.enabled = form.lrEnabled;
   if (dirty.has('lrExecution')) lambdaRuntime.execution = form.lrExecution as 'auto' | 'artifact' | 'source';
   if (dirty.has('lrWatch')) lambdaRuntime.watch = form.lrWatch === 'default' ? null : form.lrWatch === 'on';
-  if (dirty.has('lrInvokePortOffset')) lambdaRuntime.invokePortOffset = asPositive(form.lrInvokePortOffset, 'Invoke port offset');
+  if (dirty.has('lrInvokePortOffset')) lambdaRuntime.invokePortOffset = asPositive(form.lrInvokePortOffset, t('settings.invokePortOffset'));
   if (dirty.has('lrInvokeHost')) lambdaRuntime.invokeHost = orNull(form.lrInvokeHost);
   if (Object.keys(lambdaRuntime).length) patch.lambdaRuntime = lambdaRuntime;
 
@@ -234,7 +186,7 @@ async function load() {
   try {
     applySnapshot(await api.getConfig());
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to load configuration';
+    error.value = err instanceof Error ? err.message : t('settings.loadFailed');
   } finally {
     loading.value = false;
   }
@@ -264,12 +216,12 @@ async function save() {
     restartKeys.value = res.restartRequired;
     envMasked.value = res.envOverridden;
     toast.add({
-      title: 'Configuration saved',
-      description: `Written to ${res.configPath} — review and commit the diff`,
+      title: t('settings.savedTitle'),
+      description: t('settings.savedDescription', { path: res.configPath }),
       variant: 'success',
     });
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to save configuration';
+    error.value = err instanceof Error ? err.message : t('settings.saveFailed');
   } finally {
     saving.value = false;
   }
@@ -284,12 +236,12 @@ async function reloadFromDisk() {
     restartKeys.value = res.restartRequired;
     envMasked.value = [];
     toast.add({
-      title: 'Configuration reloaded from disk',
-      description: res.configPath || 'No config file found — defaults applied',
+      title: t('settings.reloadedTitle'),
+      description: res.configPath || t('settings.reloadedNoFile'),
       variant: 'success',
     });
   } catch (err) {
-    error.value = err instanceof Error ? err.message : 'Failed to reload configuration';
+    error.value = err instanceof Error ? err.message : t('settings.reloadFailed');
   } finally {
     reloading.value = false;
   }
@@ -310,30 +262,36 @@ onMounted(load);
           <TStack direction="horizontal" gap="0.75rem" align="center">
             <TIcon name="settings" />
             <TStack direction="vertical" gap="0.125rem">
-              <TText size="xl" weight="semibold">Settings</TText>
+              <TText size="xl" weight="semibold">{{ t('settings.title') }}</TText>
               <TText tone="muted" size="sm">
-                Saved straight into the config file — review and commit the diff yourself.
+                {{ t('settings.subtitle') }}
               </TText>
             </TStack>
           </TStack>
           <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
             <TBadge v-if="dirtyCount" tone="warning" variant="soft">
-              {{ dirtyCount }} unsaved change{{ dirtyCount > 1 ? 's' : '' }}
+              {{ dirtyCount > 1
+                ? t('settings.unsavedChanges', { count: dirtyCount })
+                : t('settings.unsavedChange', { count: dirtyCount }) }}
             </TBadge>
+            <TButton size="sm" variant="ghost" @click="$router.push('/onboarding')">
+              {{ t('settings.reopenOnboarding') }}
+            </TButton>
             <TButton size="sm" variant="outline" :loading="reloading" @click="reloadFromDisk">
               <template #icon><TIcon name="refresh-cw" /></template>
-              Reload from disk
+              {{ t('settings.reloadFromDisk') }}
             </TButton>
             <TButton size="sm" variant="ghost" :disabled="!dirtyCount || saving" @click="discard">
-              Discard
+              {{ t('settings.discard') }}
             </TButton>
             <TButton size="sm" variant="solid" :loading="saving" :disabled="!dirtyCount" @click="save">
-              Save changes
+              {{ t('settings.saveChanges') }}
             </TButton>
           </TStack>
         </TStack>
         <TText tone="muted" size="xs" family="mono">
-          {{ snapshot?.configPath || `No config file loaded — saving creates lss.config.json in ${snapshot?.projectRoot || 'the project root'}` }}
+          {{ snapshot?.configPath
+            || t('settings.noConfigFile', { root: snapshot?.projectRoot || t('settings.projectRoot') }) }}
         </TText>
       </TStack>
     </TCard>
@@ -343,39 +301,39 @@ onMounted(load);
     </TAlert>
 
     <TAlert v-if="restartKeys.length" variant="warning" dismissible @dismiss="restartKeys = []">
-      Restart required to apply: {{ restartKeys.join(', ') }} — these values are locked in at boot.
-      Run <TText family="mono">lss stop &amp;&amp; lss start</TText> (or the "restart (rebuild local)" VSCode task).
+      {{ t('settings.restartRequired', { keys: restartKeys.join(', ') }) }}
+      {{ t('settings.restartRun') }} <TText family="mono">lss stop &amp;&amp; lss start</TText>
+      {{ t('settings.restartTask') }}
     </TAlert>
 
     <TAlert v-if="envMasked.length" variant="info" dismissible @dismiss="envMasked = []">
-      Saved to the file, but masked by environment variables right now: {{ envMasked.join(', ') }}.
-      The env value keeps winning until it is unset.
+      {{ t('settings.envMaskedAlert', { keys: envMasked.join(', ') }) }}
     </TAlert>
 
     <TStack v-if="loading" direction="horizontal" justify="center" align="center">
-      <TSpinner label="Loading configuration..." />
+      <TSpinner :label="t('settings.loadingConfig')" />
     </TStack>
 
     <template v-else-if="snapshot">
       <TGrid :columns="2" gap="1rem">
         <TCard variant="outline">
           <template #header>
-            <TText weight="semibold">Server</TText>
+            <TText weight="semibold">{{ t('settings.serverCard') }}</TText>
           </template>
           <TStack direction="vertical" gap="0.75rem">
-            <TFormField label="Server port" :hint="envHint('serverPort', 'Dashboard + REST API (default 3100)')">
+            <TFormField :label="t('settings.serverPort')" :hint="envHint('serverPort', t('settings.serverPortHint'))">
               <TInput v-model.number="form.serverPort" type="number" min="1" max="65535" />
             </TFormField>
-            <TFormField label="Default region" :hint="envHint('region', 'Used by provisioning, seeds and the explorers')">
+            <TFormField :label="t('settings.defaultRegion')" :hint="envHint('region', t('settings.defaultRegionHint'))">
               <TSelect v-model="form.region" :options="regionOptions" />
             </TFormField>
-            <TFormField label="Persistence" :hint="envHint('persistence', 'Keep engine data between restarts')">
+            <TFormField :label="t('settings.persistence')" :hint="envHint('persistence', t('settings.persistenceHint'))">
               <TSwitch v-model="form.persistence" />
             </TFormField>
-            <TFormField label="Debug" :hint="envHint('debug', 'Verbose engine logging')">
+            <TFormField :label="t('settings.debug')" :hint="envHint('debug', t('settings.debugHint'))">
               <TSwitch v-model="form.debug" />
             </TFormField>
-            <TFormField label="Seeds directory" :hint="envHint('seedsDir', 'DynamoDB seed files — blank restores ./seeds')">
+            <TFormField :label="t('settings.seedsDir')" :hint="envHint('seedsDir', t('settings.seedsDirHint'))">
               <TInput v-model="form.seedsDir" placeholder="./seeds" />
             </TFormField>
           </TStack>
@@ -384,92 +342,59 @@ onMounted(load);
         <TCard variant="outline">
           <template #header>
             <TStack direction="horizontal" justify="space-between" align="center">
-              <TText weight="semibold">Engine</TText>
-              <TBadge tone="info" variant="soft">{{ snapshot.engine.kind }}</TBadge>
+              <TText weight="semibold">{{ t('settings.engineCard') }}</TText>
+              <TBadge tone="info" variant="soft">{{ t('settings.engineBadge') }}</TBadge>
             </TStack>
           </template>
           <TStack direction="vertical" gap="0.75rem">
-            <TFormField label="Engine" :hint="envHint('engine', 'Self engine needs no Docker; LocalStack needs it')">
-              <TToggleGroup v-model="form.engine" :options="engineOptions" size="md" />
+            <TGrid :columns="2" gap="0.75rem">
+              <TFormField :label="t('common.port')" :hint="envHint('selfEngine', t('settings.enginePortHint'))">
+                <TInput v-model.number="form.sePort" type="number" min="1" max="65535" />
+              </TFormField>
+              <TFormField :label="t('settings.accountId')" :hint="t('settings.accountIdHint')">
+                <TInput v-model="form.seAccount" placeholder="000000000000" />
+              </TFormField>
+              <TFormField :label="t('settings.memoryBudget')" :hint="t('settings.memoryBudgetHint')">
+                <TInput v-model.number="form.seMemoryBudgetMb" type="number" min="1" />
+              </TFormField>
+              <TFormField :label="t('settings.idleUnload')" :hint="t('settings.idleUnloadHint')">
+                <TInput v-model.number="form.seIdleUnloadMs" type="number" min="1" />
+              </TFormField>
+            </TGrid>
+            <TFormField :label="t('settings.fsync')" :hint="t('settings.fsyncHint')">
+              <TSwitch v-model="form.seFsync" />
             </TFormField>
-            <template v-if="form.engine === 'self'">
-              <TGrid :columns="2" gap="0.75rem">
-                <TFormField label="Port" :hint="envHint('selfEngine', 'Default 14566')">
-                  <TInput v-model.number="form.sePort" type="number" min="1" max="65535" />
-                </TFormField>
-                <TFormField label="Account id" hint="Used in every ARN">
-                  <TInput v-model="form.seAccount" placeholder="000000000000" />
-                </TFormField>
-                <TFormField label="Memory budget (MB)" hint="LRU cap for hydrated data">
-                  <TInput v-model.number="form.seMemoryBudgetMb" type="number" min="1" />
-                </TFormField>
-                <TFormField label="Idle unload (ms)" hint="Dehydrate idle stores after">
-                  <TInput v-model.number="form.seIdleUnloadMs" type="number" min="1" />
-                </TFormField>
-              </TGrid>
-              <TFormField label="fsync every WAL flush" hint="Paranoid durability — slower writes">
-                <TSwitch v-model="form.seFsync" />
-              </TFormField>
-              <TFormField label="Fallback endpoint" hint="Proxy unimplemented AWS calls here — blank disables">
-                <TInput v-model="form.seFallback" placeholder="http://localhost:4566" />
-              </TFormField>
-              <TText tone="muted" size="xs" family="mono">Data dir: {{ snapshot.selfEngine.dataDir }}</TText>
-            </template>
-            <template v-else>
-              <TFormField label="Mode" :hint="envHint('mode', 'Managed: LSS runs the container; external: you do')">
-                <TToggleGroup v-model="form.mode" :options="modeOptions" size="md" />
-              </TFormField>
-              <TGrid :columns="2" gap="0.75rem">
-                <TFormField label="Edition" :hint="envHint('localstackEdition', 'Pro requires an auth token')">
-                  <TToggleGroup v-model="form.edition" :options="editionOptions" size="md" />
-                </TFormField>
-                <TFormField label="Version" :hint="envHint('localstackVersion', 'Image tag — blank restores latest')">
-                  <TInput v-model="form.version" placeholder="latest" />
-                </TFormField>
-                <TFormField label="Edge port" :hint="envHint('localstackPort', 'Default 4566')">
-                  <TInput v-model.number="form.localstackPort" type="number" min="1" max="65535" />
-                </TFormField>
-                <TFormField label="Endpoint override" :hint="envHint('localstackEndpoint', 'Blank derives from the port')">
-                  <TInput v-model="form.endpoint" placeholder="http://localhost:4566" />
-                </TFormField>
-              </TGrid>
-              <TFormField label="Image override" :hint="envHint('localstackImage', 'Wins over edition + version — blank derives')">
-                <TInput v-model="form.image" placeholder="localstack/localstack:latest" />
-              </TFormField>
-              <TFormField label="LocalStack services" :hint="envHint('services', 'Comma-separated SERVICES env — blank restores the default list')">
-                <TInput v-model="form.servicesCsv" placeholder="dynamodb, sqs, sns, s3, lambda, events" />
-              </TFormField>
-              <TStack direction="horizontal" gap="0.5rem" align="center">
-                <TBadge :tone="snapshot.localstack.hasAuthToken ? 'success' : 'neutral'" variant="soft">
-                  Auth token {{ snapshot.localstack.hasAuthToken ? 'set' : 'not set' }}
-                </TBadge>
-                <TText tone="muted" size="xs">
-                  Set via the LOCALSTACK_AUTH_TOKEN env var — never editable here.
-                </TText>
-              </TStack>
-            </template>
+            <TFormField :label="t('settings.fallbackEndpoint')" :hint="t('settings.fallbackEndpointHint')">
+              <TInput v-model="form.seFallback" placeholder="" />
+            </TFormField>
+            <TText tone="muted" size="xs" family="mono">
+              {{ t('settings.dataDir', { path: snapshot.selfEngine.dataDir }) }}
+            </TText>
           </TStack>
         </TCard>
 
         <TCard variant="outline">
           <template #header>
-            <TText weight="semibold">Lambda runtime</TText>
+            <TText weight="semibold">{{ t('settings.lambdaRuntimeCard') }}</TText>
           </template>
           <TStack direction="vertical" gap="0.75rem">
-            <TFormField label="Enabled" :hint="envHint('lambdaRuntime', 'Runtime + gateway/invoke listeners (serverless-offline replacement)')">
+            <TFormField
+              :label="t('settings.lambdaRuntimeEnabled')"
+              :hint="envHint('lambdaRuntime', t('settings.lambdaRuntimeEnabledHint'))"
+            >
               <TSwitch v-model="form.lrEnabled" />
             </TFormField>
-            <TFormField label="Execution" hint="How handler code is loaded">
+            <TFormField :label="t('settings.execution')" :hint="t('settings.executionHint')">
               <TToggleGroup v-model="form.lrExecution" :options="executionOptions" size="md" />
             </TFormField>
-            <TFormField label="Watch &amp; hot reload" hint="Restart workers on source changes">
+            <TFormField :label="t('settings.watch')" :hint="t('settings.watchHint')">
               <TSelect v-model="form.lrWatch" :options="watchOptions" />
             </TFormField>
             <TGrid :columns="2" gap="0.75rem">
-              <TFormField label="Invoke port offset" hint="apiPort + offset = invoke port">
+              <TFormField :label="t('settings.invokePortOffset')" :hint="t('settings.invokePortOffsetHint')">
                 <TInput v-model.number="form.lrInvokePortOffset" type="number" min="1" />
               </TFormField>
-              <TFormField label="Invoke host" hint="Blank restores the engine default">
+              <TFormField :label="t('settings.invokeHost')" :hint="t('settings.invokeHostHint')">
                 <TInput v-model="form.lrInvokeHost" placeholder="host.docker.internal" />
               </TFormField>
             </TGrid>
@@ -478,19 +403,16 @@ onMounted(load);
 
         <TCard variant="outline">
           <template #header>
-            <TText weight="semibold">Sidecars &amp; proxy</TText>
+            <TText weight="semibold">{{ t('settings.dynamoProxy') }}</TText>
           </template>
           <TStack direction="vertical" gap="0.75rem">
-            <TFormField label="OpenSearch Serverless sidecar" hint="aoss served in-process on LocalStack engines">
-              <TSwitch v-model="form.aossEnabled" />
-            </TFormField>
-            <TFormField label="Sidecar port" hint="Default 14567">
-              <TInput v-model.number="form.aossPort" type="number" min="1" max="65535" :disabled="!form.aossEnabled" />
-            </TFormField>
-            <TFormField label="DynamoDB proxy" :hint="envHint('enableDynamoProxy', 'For tools that expect DynamoDB on a fixed port')">
+            <TFormField
+              :label="t('settings.dynamoProxy')"
+              :hint="envHint('enableDynamoProxy', t('settings.dynamoProxyHint'))"
+            >
               <TSwitch v-model="form.proxyEnabled" />
             </TFormField>
-            <TFormField label="Proxy port" :hint="envHint('dynamoProxyPort', 'Default 8000')">
+            <TFormField :label="t('settings.proxyPort')" :hint="envHint('dynamoProxyPort', t('settings.proxyPortHint'))">
               <TInput v-model.number="form.proxyPort" type="number" min="1" max="65535" :disabled="!form.proxyEnabled" />
             </TFormField>
           </TStack>
@@ -498,40 +420,46 @@ onMounted(load);
 
         <TCard variant="outline">
           <template #header>
-            <TText weight="semibold">Packaging</TText>
+            <TText weight="semibold">{{ t('settings.packagingCard') }}</TText>
           </template>
           <TStack direction="vertical" gap="0.75rem">
-            <TFormField label="Auto-package" :hint="envHint('autoPackage', 'Run the package command when a template is missing at /register')">
+            <TFormField :label="t('settings.autoPackage')" :hint="envHint('autoPackage', t('settings.autoPackageHint'))">
               <TSwitch v-model="form.autoPackage" />
             </TFormField>
-            <TFormField label="Package command" :hint="envHint('packageCommand', 'Blank restores npx serverless package')">
+            <TFormField
+              :label="t('settings.packageCommand')"
+              :hint="envHint('packageCommand', t('settings.packageCommandHint'))"
+            >
               <TInput v-model="form.packageCommand" placeholder="npx serverless package" />
             </TFormField>
-            <TFormField label="Package timeout (ms)" :hint="envHint('packageTimeoutMs', 'Default 300000 (5 min)')">
+            <TFormField
+              :label="t('settings.packageTimeout')"
+              :hint="envHint('packageTimeoutMs', t('settings.packageTimeoutHint'))"
+            >
               <TInput v-model.number="form.packageTimeoutMs" type="number" min="1" />
             </TFormField>
             <TText v-if="Object.keys(snapshot.servicePackaging).length" tone="muted" size="xs">
-              Per-service overrides ({{ Object.keys(snapshot.servicePackaging).join(', ') }}) are file-only — edit servicePackaging in the config.
+              {{ t('settings.packagingOverrides', { services: Object.keys(snapshot.servicePackaging).join(', ') }) }}
             </TText>
           </TStack>
         </TCard>
 
         <TCard variant="outline">
           <template #header>
-            <TText weight="semibold">Branding</TText>
+            <TText weight="semibold">{{ t('settings.brandingCard') }}</TText>
           </template>
           <TStack direction="vertical" gap="0.75rem">
-            <TFormField label="Title" hint="Navbar + browser tab — blank restores the default">
+            <TFormField :label="t('settings.brandingTitle')" :hint="t('settings.brandingTitleHint')">
               <TInput v-model="form.brTitle" placeholder="Local Serverless Stack" />
             </TFormField>
-            <TFormField label="Subtitle" hint="Line under the title — blank restores the default">
+            <TFormField :label="t('settings.brandingSubtitle')" :hint="t('settings.brandingSubtitleHint')">
               <TInput v-model="form.brSubtitle" placeholder="Local development control plane" />
             </TFormField>
-            <TFormField label="Default theme" hint="Until the user picks one in the UI">
+            <TFormField :label="t('settings.defaultTheme')" :hint="t('settings.defaultThemeHint')">
               <TToggleGroup v-model="form.brTheme" :options="themeOptions" size="md" />
             </TFormField>
             <TText tone="muted" size="xs">
-              Logo, favicon and color tokens are file-only — edit the branding block in the config.
+              {{ t('settings.brandingFileOnly') }}
             </TText>
           </TStack>
         </TCard>

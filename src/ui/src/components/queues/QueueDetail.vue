@@ -3,13 +3,15 @@ import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import {
   TButton, TBadge, TStack, TTabs, TTabList, TTab, TTabPanel, TSpinner, TAlert,
-  TCard, TTag, TEmptyState, TGrid, TStat, TProgress, TDivider,
+  TCard, TTag, TEmptyState, TGrid, TStat, TProgress,
   TText, TIcon, TDescriptionList, TDescriptionItem, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { QueueSnapshot } from '../../services/api';
 import QueueSendReceivePanel from './QueueSendReceivePanel.vue';
+import { useI18n } from '../../i18n';
 
+const { t } = useI18n();
 const props = defineProps<{ queueName: string }>();
 const emit = defineEmits<{ (e: 'back'): void }>();
 
@@ -51,7 +53,7 @@ async function load(showSpinner = true) {
     queue.value = await api.getQueue(props.queueName);
     error.value = null;
   } catch (err: any) {
-    error.value = err.message || 'Failed to load queue';
+    error.value = err.message || t('queues.loadDetailError');
     queue.value = null;
   } finally {
     loading.value = false;
@@ -62,11 +64,11 @@ async function resetProcessed() {
   if (!queue.value) return;
   try {
     await api.resetQueueProcessed(queue.value.name);
-    toast.add({ title: 'Processed counter reset', variant: 'info' });
+    toast.add({ title: t('queues.processedCounterReset'), variant: 'info' });
     await load(false);
   } catch (err: any) {
     toast.add({
-      title: 'Failed to reset counter',
+      title: t('queues.resetCounterFailed'),
       description: err.message,
       variant: 'danger',
     });
@@ -102,11 +104,18 @@ watch(() => props.queueName, () => load());
   <TStack direction="vertical" gap="1rem">
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
-        <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> Queues</TButton>
+        <TButton size="sm" variant="ghost" @click="emit('back')">
+          <TIcon name="arrow-left" /> {{ t('queues.backToQueues') }}
+        </TButton>
+        <!-- Detail-screen identity, decorative: the back link above already
+             says these are queues. -->
+        <TIcon name="aws-sqs" />
         <TText weight="semibold" size="lg">{{ queueName }}</TText>
         <TBadge v-if="queue?.fifo" tone="info" variant="soft">FIFO</TBadge>
       </TStack>
-      <TButton size="sm" variant="ghost" :loading="loading" @click="load()">Refresh</TButton>
+      <TButton size="sm" variant="ghost" :loading="loading" @click="load()">
+        {{ t('common.refresh') }}
+      </TButton>
     </TStack>
 
     <TAlert v-if="error" variant="danger" dismissible @dismiss="error = null">
@@ -114,22 +123,22 @@ watch(() => props.queueName, () => load());
     </TAlert>
 
     <TStack v-if="loading && !queue" direction="horizontal" justify="center" align="center">
-      <TSpinner label="Loading queue..." />
+      <TSpinner :label="t('queues.loadingDetail')" />
     </TStack>
 
     <template v-else-if="queue">
       <TGrid :columns="4" gap="0.75rem">
-        <TStat label="Available" :value="queue.available" tone="warning" />
-        <TStat label="In flight" :value="queue.inFlight" tone="info" />
-        <TStat label="Delayed" :value="queue.delayed" tone="neutral" />
-        <TStat label="Processed (session)" :value="queue.processed" tone="success" />
+        <TStat :label="t('queues.colAvailable')" :value="queue.available" tone="warning" />
+        <TStat :label="t('queues.colInFlight')" :value="queue.inFlight" tone="info" />
+        <TStat :label="t('queues.statDelayed')" :value="queue.delayed" tone="neutral" />
+        <TStat :label="t('queues.statProcessedSession')" :value="queue.processed" tone="success" />
       </TGrid>
 
       <TTabs v-model="activeTab">
         <TTabList>
-          <TTab value="send-receive">Send &amp; receive</TTab>
-          <TTab value="consumers">Consumers</TTab>
-          <TTab value="attributes">Attributes</TTab>
+          <TTab value="send-receive">{{ t('queues.tabSendReceive') }}</TTab>
+          <TTab value="consumers">{{ t('queues.tabConsumers') }}</TTab>
+          <TTab value="attributes">{{ t('queues.tabAttributes') }}</TTab>
         </TTabList>
 
         <TTabPanel value="send-receive">
@@ -142,7 +151,14 @@ watch(() => props.queueName, () => load());
           <div style="padding-top: 1rem;">
             <TCard variant="outline">
               <template #header>
-                <TText weight="semibold">Lambda event-source mappings</TText>
+                <!-- AWS::Lambda::EventSourceMapping resources, and every entry
+                     below is a Lambda function — a different service from the
+                     SQS queue that owns the page. The mark stays on the header
+                     rather than repeating on each consumer card. -->
+                <TStack direction="horizontal" gap="0.5rem" align="center">
+                  <TIcon name="aws-lambda" />
+                  <TText weight="semibold">{{ t('queues.eventSourceMappings') }}</TText>
+                </TStack>
               </template>
               <TStack
                 v-if="queue.consumers.length"
@@ -158,19 +174,22 @@ watch(() => props.queueName, () => load());
                     <TStack direction="vertical" gap="0.125rem">
                       <TText family="mono">{{ c.functionName }}</TText>
                       <TText tone="muted" size="xs">
-                        UUID: {{ c.uuid || '—' }} · batch size {{ c.batchSize ?? '—' }}
+                        {{ t('queues.consumerMeta', {
+                          uuid: c.uuid || '—',
+                          batchSize: c.batchSize ?? '—',
+                        }) }}
                       </TText>
                     </TStack>
                     <TBadge :tone="c.enabled ? 'success' : 'neutral'" variant="soft">
-                      {{ c.state || (c.enabled ? 'Enabled' : 'Disabled') }}
+                      {{ c.state || (c.enabled ? t('queues.enabled') : t('queues.disabled')) }}
                     </TBadge>
                   </TStack>
                 </TCard>
               </TStack>
               <TEmptyState
                 v-else
-                title="No consumers attached"
-                description="No Lambda event-source mapping currently points at this queue."
+                :title="t('queues.noConsumersTitle')"
+                :description="t('queues.noConsumersDescription')"
               />
             </TCard>
           </div>
@@ -181,10 +200,10 @@ watch(() => props.queueName, () => load());
             <TStack direction="vertical" gap="1rem">
               <TCard variant="outline">
                 <template #header>
-                  <TText weight="semibold">Identity</TText>
+                  <TText weight="semibold">{{ t('queues.identity') }}</TText>
                 </template>
                 <TDescriptionList>
-                  <TDescriptionItem label="Queue URL">
+                  <TDescriptionItem :label="t('queues.queueUrl')">
                     <TText family="mono" size="sm">{{ queue.url }}</TText>
                   </TDescriptionItem>
                   <TDescriptionItem label="ARN">
@@ -195,37 +214,39 @@ watch(() => props.queueName, () => load());
 
               <TCard variant="outline">
                 <template #header>
-                  <TText weight="semibold">Configuration</TText>
+                  <TText weight="semibold">{{ t('queues.configuration') }}</TText>
                 </template>
                 <TStack direction="horizontal" gap="0.5rem" wrap>
                   <TTag size="sm" variant="soft">
-                    FIFO: {{ queue.fifo ? 'yes' : 'no' }}
+                    FIFO: {{ queue.fifo ? t('common.yes') : t('common.no') }}
                   </TTag>
                   <TTag size="sm" variant="soft">
-                    Visibility timeout: {{ formatSeconds(queue.visibilityTimeout) }}
+                    {{ t('queues.visibilityTimeout') }}: {{ formatSeconds(queue.visibilityTimeout) }}
                   </TTag>
                   <TTag size="sm" variant="soft">
-                    Retention: {{ formatSeconds(queue.messageRetentionPeriod) }}
+                    {{ t('queues.retention') }}: {{ formatSeconds(queue.messageRetentionPeriod) }}
                   </TTag>
                   <TTag size="sm" variant="soft">
-                    Delayed: {{ queue.delayed }}
+                    {{ t('queues.delayed') }}: {{ queue.delayed }}
                   </TTag>
                 </TStack>
                 <template #footer>
                   <TText tone="muted" size="xs">
-                    Created {{ formatDate(queue.createdAt) }} · last polled
-                    {{ formatDate(queue.lastPolledAt) }}
+                    {{ t('queues.createdPolled', {
+                      created: formatDate(queue.createdAt),
+                      polled: formatDate(queue.lastPolledAt),
+                    }) }}
                   </TText>
                 </template>
               </TCard>
 
               <TCard variant="outline">
                 <template #header>
-                  <TText weight="semibold">Throughput</TText>
+                  <TText weight="semibold">{{ t('queues.throughput') }}</TText>
                 </template>
                 <TStack direction="vertical" gap="0.5rem">
                   <TDescriptionList>
-                    <TDescriptionItem label="Processed share (this session)">
+                    <TDescriptionItem :label="t('queues.processedShare')">
                       <TText family="mono">{{ depthRatio }}%</TText>
                     </TDescriptionItem>
                   </TDescriptionList>
@@ -234,7 +255,7 @@ watch(() => props.queueName, () => load());
                 <template #footer>
                   <TStack direction="horizontal" justify="flex-end">
                     <TButton size="sm" variant="ghost" @click="resetProcessed">
-                      Reset processed counter
+                      {{ t('queues.resetProcessed') }}
                     </TButton>
                   </TStack>
                 </template>

@@ -225,17 +225,34 @@ export interface RegisterServiceInput {
   apiPort?: number;
   region?: string;
 }
+// The body of POST /api/services/:name/start. It only *selects* what runs — the
+// server decides the rest: the cwd is always the registered service root and the
+// argv is always `run start[:stage]`.
+//
+// `cwd`, `args` and `env` used to live here and went straight into spawn() on
+// the server, which made the endpoint a general command runner for anything able
+// to reach the port. The server ignores them now, so advertising them here would
+// promise a capability it refuses.
 export interface StartServiceInput {
-  cwd?: string;
-  command?: string;
-  args?: string[];
-  env?: Record<string, string>;
+  /** Package manager that runs the script. Anything else is rejected with 400. */
+  command?: 'npm' | 'yarn' | 'pnpm';
+  /** Selects the npm script `start:${stage}`; `[A-Za-z0-9._-]+` only. Default `start`. */
   stage?: string;
 }
 
 // ── Health ────────────────────────────────────────────────────────────────────
 export interface HealthStatus {
   status: string;
-  localstack: boolean;
+  /** True once the in-process AWS engine is serving. */
+  engineRunning: boolean;
+  engine: {
+    kind: 'self';
+    running: boolean;
+    endpoint: string;
+    /** Emulated AWS services the engine answers for. */
+    services?: string[];
+    eventSourceLoops?: { sqs: number; streams: number };
+    scheduleRules?: number;
+  };
   dynamoProxy: { enabled: boolean; running: boolean; port: number };
 }

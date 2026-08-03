@@ -3,14 +3,20 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TBadge, TStack, TGrid, TStat, TEmptyState,
-  TSpinner, TAlert, TTag, TTable, TInput, TText,
+  TSpinner, TAlert, TTag, TTable, TInput, TText, TIcon,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { DynamoTableSummary, SeedFileEntry } from '../../services/api';
+import { useI18n } from '../../i18n';
+
+const { t } = useI18n();
 
 const emit = defineEmits<{ (e: 'open', name: string): void }>();
 
+// TTable's `rows` prop is Record<string, unknown>[]; the index signature keeps
+// the concrete row type usable there without casting at every call site.
 interface TableRow {
+  [key: string]: unknown;
   name: string;
   status?: string;
   itemCount: number;
@@ -33,15 +39,17 @@ const error = ref<string | null>(null);
 const search = ref('');
 let timer: number | null = null;
 
-const columns = [
-  { key: 'name', label: 'Table' },
-  { key: 'service', label: 'Service' },
-  { key: 'status', label: 'Status' },
-  { key: 'itemCount', label: 'Items', align: 'right' as const },
-  { key: 'seed', label: 'Seed' },
-  { key: 'features', label: 'Features' },
+// Computed, not a module-level const: the header labels have to be re-read
+// through t() so a language switch relabels the table without a reload.
+const columns = computed(() => [
+  { key: 'name', label: t('dynamo.colTable') },
+  { key: 'service', label: t('common.service') },
+  { key: 'status', label: t('common.status') },
+  { key: 'itemCount', label: t('dynamo.items'), align: 'right' as const },
+  { key: 'seed', label: t('dynamo.seed') },
+  { key: 'features', label: t('dynamo.features') },
   { key: 'actions', label: '', align: 'right' as const },
-];
+]);
 
 const rows = computed<TableRow[]>(() => {
   const merged: TableRow[] = tables.value.map(t => {
@@ -117,7 +125,7 @@ async function load() {
     ownersByTable.value = map;
     error.value = null;
   } catch (err: any) {
-    error.value = err.message || 'Failed to load DynamoDB tables';
+    error.value = err.message || t('dynamo.loadTablesFailed');
   } finally {
     loading.value = false;
   }
@@ -126,6 +134,14 @@ async function load() {
 function openRow(row: TableRow) {
   if (!row.exists) return;
   emit('open', row.name);
+}
+
+// Called from the template so t() runs on every render — the badge follows a
+// language switch and picks the singular/plural form for the count.
+function seededItemsLabel(count: number): string {
+  return count === 1
+    ? t('dynamo.seededItemOne', { count })
+    : t('dynamo.seededItemOther', { count });
 }
 
 onMounted(() => {
@@ -141,16 +157,16 @@ onBeforeUnmount(() => {
 <template>
   <TStack direction="vertical" gap="1.25rem">
     <TGrid :columns="4" gap="1rem">
-      <TStat label="Tables" :value="totals.tables" tone="info" :loading="loading" />
-      <TStat label="Total items" :value="totals.items" tone="success" :loading="loading" />
+      <TStat :label="t('dynamo.statTables')" :value="totals.tables" tone="info" :loading="loading" />
+      <TStat :label="t('dynamo.statTotalItems')" :value="totals.items" tone="success" :loading="loading" />
       <TStat
-        label="Seeds pending"
+        :label="t('dynamo.statSeedsPending')"
         :value="totals.seedsPending"
         :tone="totals.seedsPending > 0 ? 'warning' : 'neutral'"
         :loading="loading"
       />
       <TStat
-        label="Warnings"
+        :label="t('dynamo.statWarnings')"
         :value="totals.warnings"
         :tone="totals.warnings > 0 ? 'warning' : 'neutral'"
         :loading="loading"
@@ -164,35 +180,51 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
-          <TText weight="semibold">DynamoDB tables</TText>
+          <!-- One brand per list-card header, never per row: the scale target
+               is ~10 tables per service across 40 services. -->
+          <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TIcon name="aws-dynamodb" />
+            <TText weight="semibold">{{ t('dynamo.tablesTitle') }}</TText>
+          </TStack>
           <TStack direction="horizontal" align="center" gap="1rem">
             <TInput
               v-model="search"
-              placeholder="Filter tables..."
+              :placeholder="t('dynamo.filterTablesPlaceholder')"
               style="min-width: 16rem;"
             />
             <TText tone="muted" size="xs">
-              Rows with reduced opacity exist only as a seed file
+              {{ t('dynamo.seedOnlyHint') }}
             </TText>
           </TStack>
         </TStack>
       </template>
 
       <TStack v-if="loading" direction="horizontal" justify="center" align="center">
-        <TSpinner label="Loading tables..." />
+        <TSpinner :label="t('dynamo.loadingTables')" />
       </TStack>
 
       <TEmptyState
         v-else-if="!rows.length"
-        title="No DynamoDB tables"
-        description="Register a microservice with DynamoDB resources or drop a seed file into the seeds directory."
-      />
+        :title="t('dynamo.emptyTablesTitle')"
+        :description="t('dynamo.emptyTablesDesc')"
+      >
+        <template #icon>
+          <TIcon name="aws-dynamodb" />
+        </template>
+      </TEmptyState>
 
+      <!-- Deliberately NOT branded: this state is about the filter, not about
+           DynamoDB. The tables exist, the query matched none — so it keeps a
+           TreeUI functional icon. -->
       <TEmptyState
         v-else-if="!filteredRows.length"
-        title="No matching tables"
-        :description="`No tables match &quot;${search}&quot;.`"
-      />
+        :title="t('dynamo.noMatchTitle')"
+        :description="t('dynamo.noMatchDesc', { query: search })"
+      >
+        <template #icon>
+          <TIcon name="search-x" />
+        </template>
+      </TEmptyState>
 
       <TTable
         v-else
@@ -200,7 +232,7 @@ onBeforeUnmount(() => {
         :rows="filteredRows"
         row-key="name"
         :row-state="(row: any) => row.exists ? 'default' : 'muted'"
-        aria-label="DynamoDB tables"
+        :aria-label="t('dynamo.tablesTitle')"
       >
         <template #cell-name="{ row }">
           <TStack direction="vertical" gap="0.125rem">
@@ -214,7 +246,7 @@ onBeforeUnmount(() => {
             </TText>
             <TStack v-else direction="horizontal" gap="0.375rem" align="center">
               <TText weight="semibold">{{ row.name }}</TText>
-              <TTag size="sm" variant="soft">seed only</TTag>
+              <TTag size="sm" variant="soft">{{ t('dynamo.seedOnly') }}</TTag>
             </TStack>
             <TText tone="muted" family="mono" size="xs">
               {{ row.keyDescriptor }}
@@ -241,7 +273,7 @@ onBeforeUnmount(() => {
           >
             {{ row.status || 'UNKNOWN' }}
           </TBadge>
-          <TBadge v-else tone="warning" variant="outline">Not created</TBadge>
+          <TBadge v-else tone="warning" variant="outline">{{ t('dynamo.notCreated') }}</TBadge>
         </template>
 
         <template #cell-itemCount="{ row }">
@@ -254,9 +286,9 @@ onBeforeUnmount(() => {
             :tone="row.exists ? 'info' : 'warning'"
             variant="soft"
           >
-            {{ row.seedItemCount }} seeded item{{ row.seedItemCount === 1 ? '' : 's' }}
+            {{ seededItemsLabel(Number(row.seedItemCount)) }}
           </TBadge>
-          <TText v-else tone="muted" size="xs">no seed</TText>
+          <TText v-else tone="muted" size="xs">{{ t('dynamo.noSeed') }}</TText>
         </template>
 
         <template #cell-features="{ row }">
@@ -278,10 +310,10 @@ onBeforeUnmount(() => {
             variant="soft"
             @click="openRow(row as any)"
           >
-            Explore
+            {{ t('dynamo.explore') }}
           </TButton>
           <TText v-else tone="muted" size="xs">
-            Register service to provision
+            {{ t('dynamo.registerToProvision') }}
           </TText>
         </template>
       </TTable>

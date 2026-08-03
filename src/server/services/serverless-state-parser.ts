@@ -67,6 +67,12 @@ export interface AuthorizerConfig {
 export interface ParsedServerlessState {
   serviceName?: string;
   stage: string;
+  // provider.region, when the service declares one.
+  region?: string;
+  // Port hints read straight from the packaged state's `custom.lss` block —
+  // what the retired 0.x plugin used to POST alongside the registration.
+  apiPort?: number;
+  invokePort?: number;
   functions: RegisteredFunction[];
   routes: HttpRoute[];
   authorizers: AuthorizerConfig[];
@@ -88,8 +94,12 @@ interface StateFunctionDef {
 interface ServerlessState {
   service?: {
     service?: string;
+    custom?: {
+      lss?: { apiPort?: unknown; invokePort?: unknown };
+    };
     provider?: {
       stage?: string;
+      region?: string;
       runtime?: string;
       memorySize?: number;
       timeout?: number;
@@ -129,6 +139,13 @@ export function sanitizeEnvironmentValues(env: Record<string, unknown>): Record<
   return result;
 }
 
+// A usable port or nothing — the state file is user-authored, so a string "3010"
+// is accepted but garbage never propagates into a listen() call.
+function asPort(value: unknown): number | undefined {
+  const n = typeof value === 'string' ? Number(value) : value;
+  return typeof n === 'number' && Number.isInteger(n) && n >= 1 && n <= 65535 ? n : undefined;
+}
+
 export class ServerlessStateParser {
   parse(state: ServerlessState): ParsedServerlessState {
     const warnings: string[] = [];
@@ -136,6 +153,10 @@ export class ServerlessStateParser {
     const stage = provider.stage || 'dev';
     const serviceName = state.service?.service;
     const httpApiCors = Boolean(provider.httpApi?.cors);
+
+    const lss = state.service?.custom?.lss || {};
+    const apiPort = asPort(lss.apiPort);
+    const invokePort = asPort(lss.invokePort);
 
     const authorizers = this.parseHttpApiAuthorizers(provider.httpApi?.authorizers || {}, warnings);
     const functions: RegisteredFunction[] = [];
@@ -179,7 +200,17 @@ export class ServerlessStateParser {
       });
     }
 
-    return { serviceName, stage, functions, routes, authorizers, warnings };
+    return {
+      serviceName,
+      stage,
+      region: typeof provider.region === 'string' && provider.region ? provider.region : undefined,
+      apiPort,
+      invokePort,
+      functions,
+      routes,
+      authorizers,
+      warnings,
+    };
   }
 
   private normalizeTriggerName(eventType: string): string {

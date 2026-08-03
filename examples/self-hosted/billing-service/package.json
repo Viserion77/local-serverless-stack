@@ -4,8 +4,7 @@
   "private": true,
   "description": "SQS consumer that writes a receipt to S3 and publishes OrderBilled to the billing-events bus; GET /receipts lists receipts. Port 3632 (invoke 13632).",
   "scripts": {
-    "package": "serverless package",
-    "register": "serverless package"
+    "package": "serverless package"
   },
   "dependencies": {
     "@aws-sdk/client-eventbridge": "^3.0.0",
@@ -14,7 +13,6 @@
     "@aws-sdk/s3-presigned-post": "^3.0.0"
   },
   "devDependencies": {
-    "osls": "4.0.0",
-    "serverless-lss": "file:../../../packages/serverless-plugin"
+    "osls": "4.0.0"
   }
 }

@@ -488,3 +488,51 @@ describe('httpApi authorizers (provider.httpApi.authorizers)', () => {
     expect(warnings[0]).toContain('unsupported httpApi authorizer reference');
   });
 });
+
+// Registration is self-serving in 1.0: what the retired plugin used to POST —
+// provider.region and the custom.lss port hints — now comes out of the parsed
+// state itself.
+describe('region and custom.lss port hints', () => {
+  it('extracts provider.region and custom.lss ports', () => {
+    const parsed = parser.parse({
+      service: {
+        service: 'orders',
+        provider: { region: 'us-west-2' },
+        custom: { lss: { apiPort: 3631, invokePort: 13631 } },
+        functions: {},
+      },
+    } as never);
+    expect(parsed.region).toBe('us-west-2');
+    expect(parsed.apiPort).toBe(3631);
+    expect(parsed.invokePort).toBe(13631);
+  });
+
+  it('accepts string-typed ports (the state file is user-authored)', () => {
+    const parsed = parser.parse({
+      service: { service: 's', custom: { lss: { apiPort: '3631', invokePort: '13631' } }, functions: {} },
+    } as never);
+    expect(parsed.apiPort).toBe(3631);
+    expect(parsed.invokePort).toBe(13631);
+  });
+
+  it('rejects garbage ports and blank regions rather than propagating them', () => {
+    const parsed = parser.parse({
+      service: {
+        service: 's',
+        provider: { region: '' },
+        custom: { lss: { apiPort: 0, invokePort: 99999999 } },
+        functions: {},
+      },
+    } as never);
+    expect(parsed.region).toBeUndefined();
+    expect(parsed.apiPort).toBeUndefined();
+    expect(parsed.invokePort).toBeUndefined();
+  });
+
+  it('leaves every hint undefined when custom/provider are absent', () => {
+    const parsed = parser.parse({ service: { service: 's', functions: {} } } as never);
+    expect(parsed.region).toBeUndefined();
+    expect(parsed.apiPort).toBeUndefined();
+    expect(parsed.invokePort).toBeUndefined();
+  });
+});

@@ -14,6 +14,7 @@ jest.mock('../../../src/server/services/lambda-runtime-manager', () => {
 });
 
 import { GatewayManager } from '../../../src/server/services/gateway-manager';
+import { getBindHost } from '../../../src/server/services/bind-host';
 import type { ServiceEntry } from '../../../src/server/services/function-registry';
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
@@ -140,6 +141,44 @@ it('stopService cancels pending rebind attempts — a stopped service never grab
   await sleep(150);
   expect(await portIsFree(port)).toBe(true);
   expect(gm.getInfo('svc-stopped').api.status).not.toBe('online');
+});
+
+// Regression: both listeners must bind the process-wide host resolved in
+// services/bind-host.ts. They used to call `listen(port)` with no host at all,
+// which binds `::` — the dual-stack wildcard — so every service's API port AND
+// its invoke port answered on the LAN even while the orchestrator itself sat on
+// loopback. The invoke port is the sharper edge of the two: it is a raw
+// http.Server that never reaches Express (no CORS, no origin check) and its
+// handler runs a registered Lambda with the request body as the event.
+it('binds the API and invoke listeners to the process bind host, never the wildcard', async () => {
+  const apiPlaceholder = await occupy();
+  const invokePlaceholder = await occupy();
+  const apiPort = portOf(apiPlaceholder);
+  const invokePort = portOf(invokePlaceholder);
+  await closeServer(apiPlaceholder);
+  await closeServer(invokePlaceholder);
+
+  // Capture the real servers as they are created: the bound address is the
+  // only witness that says which interfaces actually answer.
+  const bound: http.Server[] = [];
+  const realCreateServer = http.createServer.bind(http);
+  jest.spyOn(http, 'createServer').mockImplementation(((...args: Parameters<typeof http.createServer>) => {
+    const server = realCreateServer(...args);
+    bound.push(server);
+    return server;
+  }) as typeof http.createServer);
+
+  await gm.syncService(entryFor('svc-bind', apiPort, invokePort), true);
+  expect(gm.getInfo('svc-bind')).toEqual({
+    api: { port: apiPort, status: 'online' },
+    invoke: { port: invokePort, status: 'online' },
+  });
+  expect(bound).toHaveLength(2);
+  for (const server of bound) {
+    expect((server.address() as AddressInfo).address).toBe(getBindHost());
+  }
+  // …and with LSS_BIND_HOST unset that host is loopback, not '::'/'0.0.0.0'.
+  expect(getBindHost()).toBe('127.0.0.1');
 });
 
 it('re-syncing a conflicted service replaces its retry timers with the new bind', async () => {

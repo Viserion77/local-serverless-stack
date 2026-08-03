@@ -17,6 +17,7 @@ jest.mock('../../../src/server/services/lambda-runtime-manager', () => {
 });
 
 import { SelfEngineBackend } from '../../../src/server/engine/backends/self-backend.js';
+import { getBindHost } from '../../../src/server/services/bind-host.js';
 import type { ResolvedSelfEngineConfig } from '../../../src/server/services/config-manager.js';
 
 interface HttpResult {
@@ -144,6 +145,33 @@ describe('SelfEngineBackend', () => {
     await expect(request(backend.getEndpoint(), 'GET', '/_lss/health')).rejects.toThrow();
     // Idempotent stop.
     await backend.stop();
+  });
+
+  // Regression: the split-listener front door — the one that carries the whole
+  // AWS wire when `serverPort` and `selfEngine.port` differ — asked for
+  // '0.0.0.0' outright. Scan/PutItem on any table, ReceiveMessage on any queue,
+  // GetSecretValue on any secret, all unauthenticated (SigV4 is parsed for the
+  // region, never verified), on every interface. It must bind the same host
+  // every other listener in the process does.
+  test('binds the split-listener front door to the process bind host, not 0.0.0.0', async () => {
+    const bound: http.Server[] = [];
+    const realCreateServer = http.createServer.bind(http);
+    const spy = jest.spyOn(http, 'createServer').mockImplementation(((...args: Parameters<typeof http.createServer>) => {
+      const server = realCreateServer(...args);
+      bound.push(server);
+      return server;
+    }) as typeof http.createServer);
+
+    const backend = new SelfEngineBackend(makeConfig(dataDir));
+    try {
+      await backend.start();
+      expect(bound).toHaveLength(1);
+      expect((bound[0].address() as AddressInfo).address).toBe(getBindHost());
+      expect(getBindHost()).toBe('127.0.0.1');
+    } finally {
+      spy.mockRestore();
+      await backend.stop();
+    }
   });
 
   test('EADDRINUSE fails fast naming the port and hinting at a real LocalStack', async () => {

@@ -141,6 +141,11 @@ describe('bin/cli.js helpers', () => {
     mockHttpRequest.mockReset();
     mockCreateInterface.mockReset();
 
+    // Pin the CLI's language: bin/i18n.js resolves the locale from the
+    // environment at require time, and a CI box exporting LANG=pt_BR would
+    // otherwise flip every string assertion below.
+    process.env.LSS_LANG = 'en';
+
     logSpy = jest.spyOn(console, 'log').mockImplementation(() => undefined);
     warnSpy = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
     errorSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
@@ -179,40 +184,64 @@ describe('bin/cli.js helpers', () => {
     it('applies defaults when the config is empty', () => {
       const cli = loadCli();
       expect(cli.getConfig({})).toEqual({
-        serverPort: 3100,
-        localstackPort: 4566,
+        serverPort: 14566,
         enableDynamoProxy: false,
         dynamoProxyPort: 8000,
         mode: 'managed',
-        localstackEdition: 'community',
-        localstackVersion: 'latest',
-        localstackImage: undefined,
-        localstackAuthToken: undefined,
         stateDir: undefined,
-        engine: 'localstack',
+        engine: undefined,
         selfEnginePort: 14566,
       });
+    });
+
+    // The server applies these overrides, so the CLI has to agree: it prints the
+    // ports AND derives the PID/log path from serverPort when no stateDir is set.
+    // Disagreeing meant `LSS_DASHBOARD_PORT=… lss start` and `lss stop`
+    // addressed two different files.
+    it('applies the same environment overrides the server does', () => {
+      const cli = loadCli(['node', 'cli.js'], {
+        LSS_DASHBOARD_PORT: '3250',
+        LSS_ENGINE_PORT: '14766',
+        LSS_DYNAMO_PROXY_PORT: '8123',
+        LSS_ENABLE_DYNAMO_PROXY: '1',
+      });
+      const out = cli.getConfig({ serverPort: 14566, selfEngine: { port: 14566 }, dynamoProxyPort: 8000 });
+      expect(out.serverPort).toBe(3250);
+      expect(out.selfEnginePort).toBe(14766);
+      expect(out.dynamoProxyPort).toBe(8123);
+      expect(out.enableDynamoProxy).toBe(true);
+    });
+
+    it('falls back to PORT, and to the file when an override is unset or garbage', () => {
+      expect(loadCli(['node', 'cli.js'], { PORT: '4200' }).getConfig({}).serverPort).toBe(4200);
+      const cli = loadCli(['node', 'cli.js'], {
+        LSS_DASHBOARD_PORT: 'not-a-port',
+        LSS_ENGINE_PORT: '0',
+        PORT: undefined,
+      });
+      const out = cli.getConfig({ serverPort: 3300, selfEngine: { port: 15000 } });
+      expect(out.serverPort).toBe(3300);
+      expect(out.selfEnginePort).toBe(15000);
+    });
+
+    it('LSS_ENABLE_DYNAMO_PROXY set to anything else disables the proxy', () => {
+      const cli = loadCli(['node', 'cli.js'], { LSS_ENABLE_DYNAMO_PROXY: 'no' });
+      expect(cli.getConfig({ enableDynamoProxy: true }).enableDynamoProxy).toBe(false);
     });
 
     it('passes through provided values', () => {
       const cli = loadCli();
       const out = cli.getConfig({
         serverPort: 4000,
-        localstackPort: 4600,
         enableDynamoProxy: true,
         dynamoProxyPort: 9000,
-        mode: 'external',
-        localstackEdition: 'pro',
-        localstackVersion: '3.0',
-        localstackImage: 'custom/image',
-        localstackAuthToken: 'tok',
         stateDir: '.lss',
         engine: 'self',
         selfEngine: { port: 15000 },
       });
       expect(out.serverPort).toBe(4000);
       expect(out.enableDynamoProxy).toBe(true);
-      expect(out.localstackImage).toBe('custom/image');
+      expect(out.dynamoProxyPort).toBe(9000);
       expect(out.stateDir).toBe('.lss');
       expect(out.engine).toBe('self');
       expect(out.selfEnginePort).toBe(15000);
@@ -360,7 +389,7 @@ describe('bin/cli.js helpers', () => {
   describe('getServerPort', () => {
     it('returns the default port when no config', () => {
       const cli = loadCli();
-      expect(cli.getServerPort()).toBe(3100);
+      expect(cli.getServerPort()).toBe(14566);
     });
   });
 
@@ -370,7 +399,7 @@ describe('bin/cli.js helpers', () => {
   describe('formatError', () => {
     it('handles null/undefined', () => {
       const cli = loadCli();
-      expect(cli.formatError(undefined)).toBe('erro desconhecido (sem detalhes)');
+      expect(cli.formatError(undefined)).toBe('unknown error (no details)');
     });
     it('trims a non-empty string', () => {
       const cli = loadCli();
@@ -378,7 +407,7 @@ describe('bin/cli.js helpers', () => {
     });
     it('returns fallback for an empty string', () => {
       const cli = loadCli();
-      expect(cli.formatError('   ')).toBe('erro desconhecido (sem detalhes)');
+      expect(cli.formatError('   ')).toBe('unknown error (no details)');
     });
     it('prefers a non-empty message', () => {
       const cli = loadCli();
@@ -386,7 +415,7 @@ describe('bin/cli.js helpers', () => {
     });
     it('falls back to the I/O code when message is empty', () => {
       const cli = loadCli();
-      expect(cli.formatError({ message: '   ', code: 'ECONNRESET' })).toBe('erro de I/O (ECONNRESET)');
+      expect(cli.formatError({ message: '   ', code: 'ECONNRESET' })).toBe('I/O error (ECONNRESET)');
     });
     it('falls back to the name when no message/code', () => {
       const cli = loadCli();
@@ -395,7 +424,7 @@ describe('bin/cli.js helpers', () => {
     it('stringifies an object with no useful fields', () => {
       const cli = loadCli();
       // String(obj) === '[object Object]' -> final fallback string
-      expect(cli.formatError({})).toBe('erro desconhecido (sem detalhes)');
+      expect(cli.formatError({})).toBe('unknown error (no details)');
     });
     it('uses a meaningful String() representation when available', () => {
       const cli = loadCli();
@@ -431,13 +460,13 @@ describe('bin/cli.js helpers', () => {
     it('reports an empty-body status when data is absent', () => {
       const cli = loadCli();
       const err = cli.buildHttpError({ statusCode: 500 } as any, '');
-      expect(err.message).toBe('HTTP 500 (sem corpo de erro)');
+      expect(err.message).toBe('HTTP 500 (no error body)');
     });
     it('ignores a body that is too long to be a snippet', () => {
       const cli = loadCli();
       const big = 'x'.repeat(400); // >= 300, not valid JSON -> parsed null, no snippet
       const err = cli.buildHttpError({ statusCode: 500 } as any, big);
-      expect(err.message).toBe('HTTP 500 (sem corpo de erro)');
+      expect(err.message).toBe('HTTP 500 (no error body)');
     });
     it('falls past an empty-after-trim JSON error field to the body snippet', () => {
       const cli = loadCli();
@@ -473,7 +502,7 @@ describe('bin/cli.js helpers', () => {
       const cli = loadCli();
       const out = cli.printSeedRunResults([
         { tableName: 'A', inserted: 3 },
-        { tableName: 'B', skipped: true, reason: 'B does not exist in LocalStack' },
+        { tableName: 'B', skipped: true, reason: 'B does not exist in the engine' },
         { tableName: 'C', skipped: true, reason: 'empty seed file' },
         { tableName: 'D', skipped: true },
       ]);
@@ -509,8 +538,8 @@ describe('bin/cli.js helpers', () => {
         liveTables: ['real-Users'],
         focusTable: 'Users',
       });
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Arquivo de seed inspecionado: Users.json'));
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Tabelas vivas no LocalStack'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Seed file inspected: Users.json'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Live tables in the engine'));
     });
 
     it('lists multiple seed files when no focusTable and no live tables', () => {
@@ -520,14 +549,14 @@ describe('bin/cli.js helpers', () => {
         liveTables: [],
         focusTable: undefined,
       });
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Arquivos de seed inspecionados'));
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Nenhuma tabela viva'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Seed files inspected'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No live tables in the engine'));
     });
 
     it('reports no seed files when entries are empty', () => {
       const cli = loadCli();
       cli.printSeedMismatchDiagnostic({ entries: [], liveTables: undefined, focusTable: undefined });
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Nenhum arquivo *.json encontrado'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No *.json file found in seedsDir'));
     });
   });
 
@@ -557,7 +586,7 @@ describe('bin/cli.js helpers', () => {
       mockFs.existsSync.mockReturnValue(false);
       const cli = loadCli();
       cli.showLogs();
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No logs found'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No log file at'));
     });
     it('prints the last 50 lines of the log file', () => {
       mockFs.existsSync.mockReturnValue(true);
@@ -593,7 +622,7 @@ describe('bin/cli.js helpers', () => {
       expect(killSpy).toHaveBeenCalledWith('12345', 'SIGTERM');
       expect(killSpy).toHaveBeenCalledWith('12345', 0);
       expect(mockFs.unlinkSync).toHaveBeenCalled();
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('stopped'), expect.anything());
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('stopped (PID: 12345)'));
     });
     it('reports a failure and removes a leftover pid file when SIGTERM throws', async () => {
       mockFs.existsSync.mockReturnValue(true);
@@ -603,7 +632,7 @@ describe('bin/cli.js helpers', () => {
       });
       const cli = loadCli();
       await cli.stopOrchestrator();
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to stop'), 'no such process');
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to stop the orchestrator: no such process'));
       expect(mockFs.unlinkSync).toHaveBeenCalled();
     });
     it('handles a SIGTERM failure when the pid file already vanished', async () => {
@@ -663,7 +692,7 @@ describe('bin/cli.js helpers', () => {
       const cli = loadCli();
       cli.showStatus();
       expect(killSpy).toHaveBeenCalledWith('4242', 0);
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('RUNNING'), expect.anything());
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('RUNNING (PID: 4242)'));
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('DynamoDB Proxy'));
     });
     it('reports RUNNING without a proxy line when the proxy is disabled', () => {
@@ -671,7 +700,7 @@ describe('bin/cli.js helpers', () => {
       mockFs.readFileSync.mockReturnValue('4242');
       const cli = loadCli();
       cli.showStatus();
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('RUNNING'), expect.anything());
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('RUNNING (PID: 4242)'));
       expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining('DynamoDB Proxy'));
     });
     it('reports a stale pid file when the process is dead', () => {
@@ -702,7 +731,7 @@ describe('bin/cli.js helpers', () => {
       const cli = loadCli();
       cli.startOrchestrator();
       expect(killSpy).toHaveBeenCalledWith('111', 0);
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('already running'), expect.anything());
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('already running (PID: 111)'));
       expect(mockSpawn).not.toHaveBeenCalled();
     });
 
@@ -739,7 +768,7 @@ describe('bin/cli.js helpers', () => {
       expect(mockFs.unlinkSync).toHaveBeenCalled();
       expect(mockSpawn).toHaveBeenCalled();
       expect(mockFs.writeFileSync).toHaveBeenCalledWith(expect.any(String), '4321');
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('started'), expect.anything());
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('started (PID: 4321)'));
     });
 
     it('errors and exits when the orchestrator is not built', async () => {
@@ -750,7 +779,7 @@ describe('bin/cli.js helpers', () => {
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Orchestrator not found'));
     });
 
-    it('threads config + CLI flags into the spawned env and prints the proxy line', () => {
+    it('threads config into the spawned env and prints the proxy line', () => {
       jest.useFakeTimers();
       mockFs.existsSync.mockImplementation((p: any) => {
         const s = String(p);
@@ -761,92 +790,52 @@ describe('bin/cli.js helpers', () => {
         return false;
       });
       mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({
-          serverPort: 3300,
-          localstackPort: 4600,
-          dynamoProxyPort: 8123,
-          localstackVersion: '3.0',
-          localstackImage: 'my/img',
-        }),
+        JSON.stringify({ serverPort: 3300, dynamoProxyPort: 8123 }),
       );
       mockSpawn.mockReturnValue(makeChild() as any);
       const cli = loadCli([
-        'node',
-        'cli.js',
-        'start',
-        '--enable-dynamo-proxy',
-        '--external',
-        '--pro',
-        '--localstack-token',
-        'TKN',
-        '--config',
-        '/abs/lss.config.json',
+        'node', 'cli.js', 'start', '--enable-dynamo-proxy', '--config', '/abs/lss.config.json',
       ]);
       cli.startOrchestrator();
       expect(mockSpawn).toHaveBeenCalledTimes(1);
       const [, , opts] = mockSpawn.mock.calls[0];
       const env = (opts as any).env;
       expect(env.PORT).toBe(3300);
-      expect(env.LSS_LOCALSTACK_PORT).toBe(4600);
       expect(env.LSS_ENABLE_DYNAMO_PROXY).toBe('true');
       expect(env.LSS_DYNAMO_PROXY_PORT).toBe(8123);
-      expect(env.LSS_LOCALSTACK_MODE).toBe('external');
-      expect(env.LSS_LOCALSTACK_EDITION).toBe('pro');
-      expect(env.LSS_LOCALSTACK_VERSION).toBe('3.0');
-      expect(env.LSS_LOCALSTACK_IMAGE).toBe('my/img');
-      expect(env.LOCALSTACK_AUTH_TOKEN).toBe('TKN');
       expect(env.LSS_CONFIG_PATH).toBe('/abs/lss.config.json');
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('DynamoDB Proxy'));
     });
 
-    it('--self-engine sets LSS_ENGINE=self in the spawned env and prints the Self Engine line', () => {
+    // 1.0 has one engine, so not one LocalStack variable reaches the child (and
+    // therefore every forked worker). Each one exported would also be reported
+    // by GET /api/config as env-overridden, greying out a Settings field for a
+    // value the user never set.
+    it('exports no LocalStack env var', () => {
       jest.useFakeTimers();
       mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
       mockSpawn.mockReturnValue(makeChild() as any);
-      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine']);
+      const cli = loadCli(['node', 'cli.js', 'start']);
       cli.startOrchestrator();
       const [, , opts] = mockSpawn.mock.calls[0];
-      expect((opts as any).env.LSS_ENGINE).toBe('self');
+      const env = (opts as any).env;
+      for (const key of Object.keys(env)) {
+        expect(key).not.toMatch(/LOCALSTACK/);
+      }
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Self Engine: http://localhost:14566'));
     });
 
-    it('engine "self" from the config file selects the self engine with its configured port', () => {
+    it('prints the configured self engine port', () => {
       jest.useFakeTimers();
       mockFs.existsSync.mockImplementation((p: any) => {
         const s = String(p);
         return s.endsWith('index.js') || s.endsWith('lss.config.json');
       });
-      mockFs.readFileSync.mockReturnValue(
-        JSON.stringify({ engine: 'self', selfEngine: { port: 15000 } }),
-      );
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ selfEngine: { port: 15000 } }));
       mockSpawn.mockReturnValue(makeChild() as any);
       const cli = loadCli(['node', 'cli.js', 'start']);
       cli.startOrchestrator();
-      const [, , opts] = mockSpawn.mock.calls[0];
-      expect((opts as any).env.LSS_ENGINE).toBe('self');
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Self Engine: http://localhost:15000'));
-    });
-
-    it('rejects --self-engine combined with --external', async () => {
-      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
-      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine', '--external']);
-      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('cannot be combined'));
-      expect(mockSpawn).not.toHaveBeenCalled();
-    });
-
-    it('rejects --self-engine combined with --pro', async () => {
-      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
-      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine', '--pro']);
-      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('cannot be combined'));
-    });
-
-    it('rejects --self-engine combined with --localstack-token', async () => {
-      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
-      const cli = loadCli(['node', 'cli.js', 'start', '--self-engine', '--localstack-token', 'TKN']);
-      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('cannot be combined'));
     });
 
     it('reports already running with the Self Engine line when engine is self', () => {
@@ -932,7 +921,7 @@ describe('bin/cli.js helpers', () => {
         throw new Error('died');
       });
       jest.advanceTimersByTime(2000);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('failed to start'), expect.anything());
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('failed to start'));
       expect(mockFs.unlinkSync).toHaveBeenCalled();
       jest.useRealTimers();
     });
@@ -953,7 +942,7 @@ describe('bin/cli.js helpers', () => {
         throw new Error('died');
       });
       jest.advanceTimersByTime(2000);
-      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('failed to start'), expect.anything());
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('failed to start'));
       expect(mockFs.unlinkSync).not.toHaveBeenCalled();
       jest.useRealTimers();
     });
@@ -997,7 +986,7 @@ describe('bin/cli.js helpers', () => {
     it('postJson wraps a messageless connection error', async () => {
       installHttp({ POST: { err: { code: 'ECONNREFUSED' } } }); // no .message
       const cli = loadCli();
-      await expect(cli.postJson('/x', {})).rejects.toThrow(/falha na conexão HTTP/);
+      await expect(cli.postJson('/x', {})).rejects.toThrow(/HTTP connection to the orchestrator failed/);
     });
 
     it('getJson resolves parsed JSON on 2xx', async () => {
@@ -1034,7 +1023,7 @@ describe('bin/cli.js helpers', () => {
     it('getJson wraps a messageless connection error', async () => {
       installHttp({ GET: { err: { code: 'ECONNREFUSED' } } });
       const cli = loadCli();
-      await expect(cli.getJson('/x')).rejects.toThrow(/falha na conexão HTTP/);
+      await expect(cli.getJson('/x')).rejects.toThrow(/HTTP connection to the orchestrator failed/);
     });
   });
 
@@ -1088,7 +1077,7 @@ describe('bin/cli.js helpers', () => {
       installHttp({ POST: { status: 200, body: JSON.stringify({ results: [] }) } });
       const cli = loadCli(['node', 'cli.js', 'seed']);
       await cli.runSeed(undefined);
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Seeding all tables'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Applying seeds'));
     });
 
     it('falls back to [] results when the response omits results', async () => {
@@ -1105,7 +1094,7 @@ describe('bin/cli.js helpers', () => {
         POST: {
           status: 200,
           body: JSON.stringify({
-            results: [{ tableName: 'Users', skipped: true, reason: 'Users does not exist in LocalStack' }],
+            results: [{ tableName: 'Users', skipped: true, reason: 'Users does not exist in the engine' }],
           }),
         },
         GET: {
@@ -1121,7 +1110,7 @@ describe('bin/cli.js helpers', () => {
       });
       const cli = loadCli(['node', 'cli.js', 'seed', 'Users']);
       await cli.runSeed('Users');
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Tabelas vivas no LocalStack'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Live tables in the engine'));
     });
 
     it('falls back to empty diagnostic fields when the list response is sparse', async () => {
@@ -1130,14 +1119,14 @@ describe('bin/cli.js helpers', () => {
         POST: {
           status: 200,
           body: JSON.stringify({
-            results: [{ tableName: 'X', skipped: true, reason: 'X does not exist in LocalStack' }],
+            results: [{ tableName: 'X', skipped: true, reason: 'X does not exist in the engine' }],
           }),
         },
         GET: { status: 200, body: JSON.stringify({}) }, // no entries, no liveTables
       });
       const cli = loadCli(['node', 'cli.js', 'seed']);
       await cli.runSeed(undefined);
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Nenhuma tabela viva'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No live tables in the engine'));
     });
 
     it('swallows a diagnostic failure (best-effort hint)', async () => {
@@ -1146,14 +1135,14 @@ describe('bin/cli.js helpers', () => {
         POST: {
           status: 200,
           body: JSON.stringify({
-            results: [{ tableName: 'X', skipped: true, reason: 'X does not exist in LocalStack' }],
+            results: [{ tableName: 'X', skipped: true, reason: 'X does not exist in the engine' }],
           }),
         },
         GET: { err: new Error('list failed') },
       });
       const cli = loadCli(['node', 'cli.js', 'seed']);
       await cli.runSeed(undefined);
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('não consegui detalhar'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('could not detail the live tables'));
       expect(exitSpy).not.toHaveBeenCalled();
     });
 
@@ -1208,7 +1197,7 @@ describe('bin/cli.js helpers', () => {
       // The POST call (second http.request) carried an empty body for "all tables".
       const postReq = httpSpy.mock.results.map(r => r.value as any).find(v => v.write.mock.calls.length);
       expect(JSON.parse(postReq.write.mock.calls[0][0])).toEqual({});
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Clearing all seeded tables'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Clearing seeded tables'));
     });
 
     it('clears a specific table', async () => {
@@ -1245,7 +1234,7 @@ describe('bin/cli.js helpers', () => {
       mockReadline('nope');
       const cli = loadCli(['node', 'cli.js', 'seed:clear']);
       await cli.clearSeed(undefined);
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Cancelado'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Aborted.'));
       // No POST was made (only the GET request).
       const posts = httpSpy.mock.results.filter(r => (r.value as any).write.mock.calls.length);
       expect(posts).toHaveLength(0);
@@ -1266,7 +1255,7 @@ describe('bin/cli.js helpers', () => {
       const cli = loadCli(['node', 'cli.js', 'seed:clear', '--yes']);
       await cli.clearSeed(undefined);
       expect(mockCreateInterface).not.toHaveBeenCalled();
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('pulando confirmação'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('skipping the interactive confirmation'));
     });
 
     it('skips the prompt with the short -y flag', async () => {
@@ -1287,7 +1276,7 @@ describe('bin/cli.js helpers', () => {
       expect(mockCreateInterface).not.toHaveBeenCalled();
     });
 
-    it('exits early with a hint when the named table does not exist in LocalStack', async () => {
+    it('exits early with a hint when the named table does not exist in the engine', async () => {
       mockFs.existsSync.mockReturnValue(true);
       const httpSpy = installHttp({
         GET: {
@@ -1301,7 +1290,7 @@ describe('bin/cli.js helpers', () => {
       });
       const cli = loadCli(['node', 'cli.js', 'seed:clear', 'Ghost']);
       await cli.clearSeed('Ghost');
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Nenhuma tabela "Ghost"'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No table "Ghost" exists in the engine'));
       const posts = httpSpy.mock.results.filter(r => (r.value as any).write.mock.calls.length);
       expect(posts).toHaveLength(0);
     });
@@ -1311,7 +1300,7 @@ describe('bin/cli.js helpers', () => {
       installHttp({ GET: { status: 200, body: JSON.stringify({ entries: [], liveTables: [] }) } });
       const cli = loadCli(['node', 'cli.js', 'seed:clear']);
       await cli.clearSeed(undefined);
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Nenhum arquivo de seed'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No seed file (*.json) found in seedsDir'));
     });
 
     it('reports a name mismatch when entries exist but none are live', async () => {
@@ -1328,7 +1317,7 @@ describe('bin/cli.js helpers', () => {
       const cli = loadCli(['node', 'cli.js', 'seed:clear']);
       await cli.clearSeed(undefined);
       expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('NENHUMA das tabelas correspondentes existe'),
+        expect.stringContaining('NONE of the matching tables exist in the engine'),
       );
     });
 
@@ -1337,7 +1326,7 @@ describe('bin/cli.js helpers', () => {
       installHttp({ GET: { status: 200, body: JSON.stringify({}) } }); // no entries, no liveTables
       const cli = loadCli(['node', 'cli.js', 'seed:clear']);
       await cli.clearSeed(undefined);
-      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Nenhum arquivo de seed'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No seed file (*.json) found in seedsDir'));
     });
 
     it('errors and exits when listing the tables fails', async () => {
@@ -1346,7 +1335,7 @@ describe('bin/cli.js helpers', () => {
       const cli = loadCli(['node', 'cli.js', 'seed:clear']);
       expect(await expectExit(() => cli.clearSeed(undefined))).toBe(1);
       expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Não consegui listar'),
+        expect.stringContaining('Could not list the tables before clearing'),
         'list down',
       );
     });
@@ -1385,6 +1374,267 @@ describe('bin/cli.js helpers', () => {
       const cli = loadCli();
       cli.showHelp();
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Local Serverless Stack (LSS) CLI'));
+    });
+  });
+
+  // `lss register` / `lss scan` — the plugin-free registration path. The
+  // orchestrator resolves packaging/name/region/ports itself, so the CLI's only
+  // duties are addressing, existence checks and honest exit codes.
+  describe('registerServices', () => {
+    it('POSTs each path and prints the result summary with warnings', async () => {
+      mockFs.existsSync.mockReturnValue(true); // pid file + service dirs
+      installHttp({
+        POST: {
+          status: 200,
+          body: JSON.stringify({
+            serviceName: 'orders', resourcesCount: 12, functionsCount: 2, routesCount: 2,
+            warnings: ['not packaged yet'],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'register', 'svc-a', 'svc-b']);
+      await cli.registerServices(['svc-a', 'svc-b']);
+      expect(mockHttpRequest).toHaveBeenCalledTimes(2);
+      const opts = mockHttpRequest.mock.calls[0][0] as { path: string; method: string };
+      expect(opts.method).toBe('POST');
+      expect(opts.path).toBe('/api/services/register');
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('orders: 12 resource(s), 2 function(s), 2 route(s)'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('not packaged yet'));
+    });
+
+    it('defaults to the current directory and tolerates a response without warnings', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        POST: {
+          status: 200,
+          body: JSON.stringify({ serviceName: 'here', resourcesCount: 1, functionsCount: 1, routesCount: 0 }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'register']);
+      await cli.registerServices([]);
+      expect(mockHttpRequest).toHaveBeenCalledTimes(1);
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('here: 1 resource(s)'));
+    });
+
+    it('exits 1 when a directory does not exist, without calling the API', async () => {
+      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('.pid'));
+      const cli = loadCli(['node', 'cli.js', 'register', 'ghost-dir']);
+      expect(await expectExit(() => cli.registerServices(['ghost-dir']))).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('directory not found'));
+      expect(mockHttpRequest).not.toHaveBeenCalled();
+    });
+
+    it('exits 1 when the orchestrator rejects a registration', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({ POST: { status: 500, body: JSON.stringify({ error: 'boom' }) } });
+      const cli = loadCli(['node', 'cli.js', 'register']);
+      expect(await expectExit(() => cli.registerServices(['.']))).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('boom'));
+    });
+
+    it('requires a running orchestrator', async () => {
+      mockFs.existsSync.mockReturnValue(false); // no pid file
+      const cli = loadCli(['node', 'cli.js', 'register']);
+      expect(await expectExit(() => cli.registerServices([]))).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('not running'));
+    });
+  });
+
+  describe('scanServices', () => {
+    it('prints each found service with flags, hints and warnings', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        GET: {
+          status: 200,
+          body: JSON.stringify({
+            projectRoot: '/abs',
+            services: [
+              { name: 'orders', relPath: 'services/orders', registered: true, installed: true, packaged: true, apiPort: 3631, invokePort: 13631, packageCommand: 'npx serverless package', warnings: [] },
+              {
+                name: 'fresh', relPath: 'services/fresh', registered: false, packaged: false,
+                warnings: [
+                  { code: 'not-packaged', message: 'not packaged yet — server wording' },
+                  // A code this CLI has no string for still prints, via the
+                  // English message the server sent with it.
+                  { code: 'from-a-newer-server', message: 'something the CLI has never heard of' },
+                ],
+              },
+              // api hint without invoke hint, and no warnings key at all
+              { name: 'bare', relPath: 'services/bare', registered: false, packaged: true, apiPort: 3640 },
+            ],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      await cli.scanServices();
+      const out = logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
+      expect(out).toContain('3 service(s) under /abs');
+      expect(out).toContain('✓ orders  (services/orders) — registered, installed, packaged api:3631 invoke:13631');
+      expect(out).toContain('· fresh  (services/fresh) — not registered, not installed, not packaged');
+      expect(out).toContain('· bare  (services/bare) — not registered, not installed, packaged api:3640');
+      expect(out).toContain('package: npx serverless package');
+      // Rendered from the code, not from the server's wording…
+      expect(out).toContain('⚠ not packaged yet — registering packages it for you (autoPackage)');
+      // …and an unknown code falls back to the message instead of vanishing.
+      expect(out).toContain('⚠ something the CLI has never heard of');
+      expect(out).toContain('npx lss register');
+    });
+
+    // `installed` is the flag onboarding shows beside registered/packaged: it
+    // answers "can this be packaged at all, or does it need an install first?".
+    // GET /scan has always returned it; the CLI used to drop it on the floor.
+    it('reports the installed flag independently of packaged', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        GET: {
+          status: 200,
+          body: JSON.stringify({
+            projectRoot: '/abs',
+            services: [
+              { name: 'stale', relPath: 'services/stale', registered: false, installed: false, packaged: true },
+              { name: 'ready', relPath: 'services/ready', registered: false, installed: true, packaged: false },
+            ],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      await cli.scanServices();
+      const out = logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
+      expect(out).toContain('· stale  (services/stale) — not registered, not installed, packaged');
+      expect(out).toContain('· ready  (services/ready) — not registered, installed, not packaged');
+    });
+
+    // The effective package command is per-service configurable
+    // (`servicePackaging`), so it earns its own line: it is what
+    // install → package → register would actually run for that service.
+    it('prints the effective package command only for the services that carry one', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        GET: {
+          status: 200,
+          body: JSON.stringify({
+            projectRoot: '/abs',
+            services: [
+              {
+                name: 'orders', relPath: 'services/orders', registered: true, installed: true, packaged: true,
+                packageCommand: 'npm run package:local',
+              },
+              // No packageCommand at all — the line is simply omitted.
+              { name: 'bare', relPath: 'services/bare', registered: false, installed: true, packaged: false },
+            ],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      await cli.scanServices();
+      const out = logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
+      expect(out).toContain('      package: npm run package:local');
+      expect(out.match(/package: /g)).toHaveLength(1);
+    });
+
+    // End-to-end proof that the catalogue is wired to the locale resolved from
+    // the environment, not just to the English default.
+    it('speaks the locale resolved from the environment', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        GET: {
+          status: 200,
+          body: JSON.stringify({
+            projectRoot: '/abs',
+            services: [
+              { name: 'orders', relPath: 'services/orders', registered: true, installed: false, packaged: false },
+            ],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'scan'], { LSS_LANG: 'pt-BR' });
+      await cli.scanServices();
+      const out = logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
+      expect(out).toContain('1 serviço(s) sob /abs');
+      expect(out).toContain('registrado, não instalado, não empacotado');
+    });
+
+    // Before the structured-warning refactor the server sent `warnings` as
+    // plain strings. A CLI newer than the orchestrator it talks to still has to
+    // print them verbatim — the renderer falls back to `String(warning)` rather
+    // than looking up `scan.warning.undefined` and dropping the line.
+    it('prints a legacy string warning from an older server verbatim', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({
+        GET: {
+          status: 200,
+          body: JSON.stringify({
+            projectRoot: '/abs',
+            services: [
+              {
+                name: 'legacy', relPath: 'services/legacy', registered: false, installed: true, packaged: false,
+                warnings: ['no .serverless directory — run serverless package'],
+              },
+            ],
+          }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      await cli.scanServices();
+      const out = logSpy.mock.calls.map((c: unknown[]) => c.join(' ')).join('\n');
+      expect(out).toContain('⚠ no .serverless directory — run serverless package');
+    });
+
+    it('says so when nothing is found', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      // no `services` key at all — the CLI treats it as an empty list
+      installHttp({ GET: { status: 200, body: JSON.stringify({ projectRoot: '/abs' }) } });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      await cli.scanServices();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('No Serverless/osls services found'));
+    });
+
+    it('exits 1 when the scan endpoint fails', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({ GET: { status: 500, body: JSON.stringify({ error: 'disk' }) } });
+      const cli = loadCli(['node', 'cli.js', 'scan']);
+      expect(await expectExit(() => cli.scanServices())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith('❌ Scan failed:', expect.stringContaining('disk'));
+    });
+  });
+
+  describe('allPositionals', () => {
+    it('collects non-flag args, skipping flag values', () => {
+      const cli = loadCli(['node', 'cli.js', 'register', 'a', '--config', 'x.json', 'b', '-y']);
+      expect(cli.allPositionals()).toEqual(['a', 'b']);
+    });
+  });
+
+  // `lss mcp` launcher. The dynamic import of the ESM build is the process entry
+  // point (it binds this process's stdio), so only the resolution and the
+  // missing-build guard are unit-testable — the rest is covered by starting the
+  // server for real in the MCP suite.
+  describe('mcp command', () => {
+    it('resolves the built MCP server next to the CLI', () => {
+      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('dist/mcp/server.js'));
+      const cli = loadCli(['node', 'cli.js', 'mcp']);
+      expect(cli.getMcpServerPath()).toMatch(/dist\/mcp\/server\.js$/);
+    });
+
+    it('returns null when nothing is built', () => {
+      mockFs.existsSync.mockReturnValue(false);
+      expect(loadCli().getMcpServerPath()).toBeNull();
+    });
+
+    it('reads the package version, falling back when package.json is unreadable', () => {
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({ version: '9.9.9' }));
+      expect(loadCli().getPackageVersion()).toBe('9.9.9');
+      mockFs.readFileSync.mockReturnValue('{ not json');
+      expect(loadCli().getPackageVersion()).toBe('0.0.0');
+      mockFs.readFileSync.mockReturnValue(JSON.stringify({}));
+      expect(loadCli().getPackageVersion()).toBe('0.0.0');
+    });
+
+    it('tells the user to build before it can serve MCP', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+      const cli = loadCli(['node', 'cli.js', 'mcp']);
+      expect(await expectExit(() => cli.runMcpServer())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('MCP server build not found'));
     });
   });
 });

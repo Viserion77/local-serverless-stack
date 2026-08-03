@@ -11,8 +11,9 @@ module.exports = {
     'src/server/routes/**/*.ts',
     'src/server/dev/**/*.ts',
     'src/client/**/*.ts',
-    'packages/serverless-plugin/src/**/*.ts',
+    'src/mcp/**/*.ts',
     'bin/cli.js',
+    'bin/i18n.js',
     // Integration-only by nature — excluded from the coverage denominator:
     '!src/server/index.ts', // calls start()/listens at import
     '!src/server/services/localstack-manager.ts', // drives Docker

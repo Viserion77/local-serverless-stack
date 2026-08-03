@@ -1,16 +1,19 @@
-// Selects and owns the active EngineBackend (LocalStack container vs the
-// in-process self engine) based on `engine` in the config. Every consumer of
-// the old LocalStackManager API goes through here (via the facade kept at
-// services/localstack-manager.ts), so the provisioner/explorers/seeds are
-// engine-agnostic: they always talk AWS wire against getConfig().endpoint.
+// Owns the AWS engine for this process.
+//
+// 1.0 removed the LocalStack backend: the self engine is the only engine, so
+// this is no longer a chooser — it is the singleton every SDK-based consumer
+// (provisioner, explorers, seeds, dynamo proxy, routes) goes through to get an
+// endpoint + credentials. It stays as a seam so those consumers never import
+// the backend, and so `getEndpoint()` answers correctly before `start()` — the
+// explorers build their clients at construction time.
 
+import type http from 'http';
 import { ConfigManager } from '../services/config-manager.js';
-import { LocalStackBackend } from './backends/localstack-backend.js';
-import type { EngineBackend } from './engine-backend.js';
+import type { SelfEngineBackend } from './backends/self-backend.js';
 
 export class EngineManager {
   private static instance: EngineManager;
-  private backend: EngineBackend | null = null;
+  private backend: SelfEngineBackend | null = null;
   private readonly configManager = ConfigManager.getInstance();
 
   static getInstance(): EngineManager {
@@ -20,13 +23,16 @@ export class EngineManager {
     return EngineManager.instance;
   }
 
-  getKind(): 'localstack' | 'self' {
-    return this.configManager.getEngineKind();
+  async start(): Promise<void> {
+    await (await this.resolveBackend()).start();
   }
 
-  async start(): Promise<void> {
-    const backend = await this.resolveBackend();
-    await backend.start();
+  /**
+   * Start the engine WITHOUT binding a port and hand back its request handler,
+   * so the orchestrator can serve the AWS wire on its own listener.
+   */
+  async startEmbedded(): Promise<(req: http.IncomingMessage, res: http.ServerResponse) => void> {
+    return (await this.resolveBackend()).startEmbedded();
   }
 
   async stop(): Promise<void> {
@@ -40,8 +46,9 @@ export class EngineManager {
   }
 
   getEndpoint(): string {
-    // Computable without the backend instance so callers can read it before
-    // start() (the self backend is loaded lazily inside start()).
+    // Embedded: the engine never bound a port of its own, so the endpoint is
+    // whatever the orchestrator resolved.
+    if (this.configManager.isSingleListener()) return this.configManager.getOrchestratorUrl();
     return this.backend?.getEndpoint() ?? this.configManager.getEngineEndpoint();
   }
 
@@ -52,32 +59,29 @@ export class EngineManager {
     return {
       endpoint: this.getEndpoint(),
       region: this.configManager.getRegion(),
-      credentials: {
-        accessKeyId: process.env.LOCALSTACK_ACCESS_KEY_ID || 'test',
-        secretAccessKey: process.env.LOCALSTACK_SECRET_ACCESS_KEY || 'test',
-      },
+      // The engine never verifies signatures; the SDKs just refuse to send a
+      // request without credentials at all.
+      credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
     };
   }
 
   healthDetail(): Record<string, unknown> {
     return {
-      kind: this.getKind(),
+      kind: 'self',
       running: this.isRunning(),
       endpoint: this.getEndpoint(),
       ...(this.backend?.healthDetail() ?? {}),
     };
   }
 
-  // The self backend is loaded with a dynamic import so LocalStack-mode
-  // processes never pay for the engine's code (RSS provably unchanged).
-  private async resolveBackend(): Promise<EngineBackend> {
+  // Loaded on demand rather than at module scope. Everything that reads an
+  // endpoint imports this module (explorers, provisioner, seeds), and a static
+  // import would drag the whole engine — emulators, dispatch, the Lambda
+  // runtime — into every one of their unit tests.
+  private async resolveBackend(): Promise<SelfEngineBackend> {
     if (!this.backend) {
-      if (this.configManager.isSelfEngine()) {
-        const { SelfEngineBackend } = await import('./backends/self-backend.js');
-        this.backend = new SelfEngineBackend();
-      } else {
-        this.backend = new LocalStackBackend();
-      }
+      const { SelfEngineBackend: Backend } = await import('./backends/self-backend.js');
+      this.backend = new Backend();
     }
     return this.backend;
   }

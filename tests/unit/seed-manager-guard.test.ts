@@ -1,5 +1,5 @@
 import { SeedManager } from '../../src/server/services/seed-manager';
-import { LocalStackManager } from '../../src/server/services/localstack-manager';
+import { EngineManager } from '../../src/server/engine/engine-manager';
 
 // These tests cover the defensive guard added to SeedManager that refuses
 // destructive operations (clearTable / clearAllSeeded) when the LocalStack
@@ -17,11 +17,11 @@ describe('SeedManager — assertLocalEndpoint guard', () => {
   beforeAll(() => {
     seedManager = SeedManager.getInstance();
     // Touch the singleton so jest.spyOn can patch the instance method.
-    LocalStackManager.getInstance();
+    EngineManager.getInstance();
   });
 
   beforeEach(() => {
-    endpointSpy = jest.spyOn(LocalStackManager.getInstance(), 'getEndpoint');
+    endpointSpy = jest.spyOn(EngineManager.getInstance(), 'getEndpoint');
   });
 
   afterEach(() => {
@@ -102,11 +102,11 @@ describe('SeedManager — clear methods invoke the guard', () => {
 
   beforeAll(() => {
     seedManager = SeedManager.getInstance();
-    LocalStackManager.getInstance();
+    EngineManager.getInstance();
   });
 
   beforeEach(() => {
-    endpointSpy = jest.spyOn(LocalStackManager.getInstance(), 'getEndpoint');
+    endpointSpy = jest.spyOn(EngineManager.getInstance(), 'getEndpoint');
   });
 
   afterEach(() => {

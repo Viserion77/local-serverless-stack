@@ -9,8 +9,8 @@ import fs from 'fs';
 import path from 'path';
 import type { Socket } from 'net';
 import type { AddressInfo } from 'net';
-import type { EngineBackend } from '../engine-backend.js';
 import { ConfigManager, type ResolvedSelfEngineConfig } from '../../services/config-manager.js';
+import { getBindHost } from '../../services/bind-host.js';
 import type { DispatcherApi, EngineContext } from '../types.js';
 import { EngineBus } from '../bus.js';
 import { createEngineStore } from '../store/engine-store.js';
@@ -31,10 +31,15 @@ import { EngineScheduler } from '../dispatch/scheduler.js';
 const SERVICES = ['dynamodb', 'sqs', 'sns', 's3', 'events', 'lambda', 'sts', 'secretsmanager', 'aoss'] as const;
 const SQS_SNAPSHOT_FILE = 'sqs-messages.snapshot.json';
 
-export class SelfEngineBackend implements EngineBackend {
+export class SelfEngineBackend {
   readonly kind = 'self' as const;
 
   private readonly overrides: Partial<ResolvedSelfEngineConfig>;
+  // Set when the engine shares the orchestrator's listener instead of binding
+  // its own: start() builds everything but skips listen(), and the caller
+  // mounts getRequestHandler() behind its own server.
+  private embedded = false;
+  private handler: ((req: http.IncomingMessage, res: http.ServerResponse) => void) | null = null;
   private config: ResolvedSelfEngineConfig | null = null;
   private store: EngineStore | null = null;
   private sqs: SqsEmulator | null = null;
@@ -52,6 +57,17 @@ export class SelfEngineBackend implements EngineBackend {
     this.overrides = overrides;
   }
 
+  /**
+   * Build the engine without binding a port. The returned handler answers the
+   * AWS wire; the caller decides which requests reach it (see is-aws-request).
+   */
+  async startEmbedded(): Promise<(req: http.IncomingMessage, res: http.ServerResponse) => void> {
+    this.embedded = true;
+    await this.start();
+    // start() always assigns the handler before returning.
+    return this.handler as (req: http.IncomingMessage, res: http.ServerResponse) => void;
+  }
+
   async start(): Promise<void> {
     if (this.running) return;
     const config = this.resolveConfig();
@@ -62,6 +78,10 @@ export class SelfEngineBackend implements EngineBackend {
       idleUnloadMs: config.idleUnloadMs,
       memoryBudgetMb: config.memoryBudgetMb,
       fsync: config.fsync,
+      // `persistence: false` must mean it: no dataDir, no catalogs, no WAL —
+      // otherwise tables and queues survive a restart and the run leaves a
+      // `.lss/engine/` tree behind.
+      persistence: config.persistence,
     });
     this.store = store;
     const bus = new EngineBus();
@@ -109,6 +129,14 @@ export class SelfEngineBackend implements EngineBackend {
       ctx,
       emulators: [dynamo, sqs, s3, events, sns, sts, secretsManager, lambdaCtl, opensearch],
     });
+    this.handler = handler;
+
+    if (this.embedded) {
+      // The orchestrator owns the listener; everything above is already live.
+      this.running = true;
+      return;
+    }
+
     const server = http.createServer(handler);
     server.on('connection', socket => {
       this.sockets.add(socket);
@@ -134,7 +162,18 @@ export class SelfEngineBackend implements EngineBackend {
       };
       server.once('error', onError);
       server.once('listening', onListening);
-      server.listen(config.port, '0.0.0.0');
+      // Split-listener mode only: `startEmbedded()` returns above and the
+      // orchestrator's own socket carries the wire instead.
+      //
+      // This asked for '0.0.0.0' outright, which put the *entire* AWS data
+      // plane — Scan/PutItem on any table, ReceiveMessage on any queue,
+      // GetObject on any bucket, GetSecretValue on any secret, all
+      // unauthenticated, since SigV4 here is parsed for the region and never
+      // verified — on every interface the moment `serverPort` and
+      // `selfEngine.port` were given different values, even while the dashboard
+      // sat on loopback. It reads the same bind host as every other listener
+      // now, so splitting the ports splits nothing else.
+      server.listen(config.port, getBindHost());
     });
     this.boundPort = (server.address() as AddressInfo).port;
     this.running = true;
@@ -180,6 +219,11 @@ export class SelfEngineBackend implements EngineBackend {
 
   getEndpoint(): string {
     return `http://localhost:${this.boundPort ?? this.resolveConfig().port}`;
+  }
+
+  /** The AWS wire handler — non-null once start()/startEmbedded() resolved. */
+  getRequestHandler(): ((req: http.IncomingMessage, res: http.ServerResponse) => void) | null {
+    return this.handler;
   }
 
   getConfig(): { endpoint: string; region: string; credentials: { accessKeyId: string; secretAccessKey: string } } {

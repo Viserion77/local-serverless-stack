@@ -1,6 +1,6 @@
 // End-to-end validation of the programmatic client (LssClient), driven entirely
-// through the client itself — it boots its OWN isolated LSS + LocalStack via
-// `lifecycle.start()` (distinct ports/stateDir from features.test.ts), registers
+// through the client itself — it boots its OWN isolated LSS on the self engine
+// via `lifecycle.start()` (distinct ports/stateDir from features.test.ts), registers
 // the fixture service (tests/integration/fixtures/sample-microservice), and
 // exercises every namespace against the live stack, then tears down via
 // `lifecycle.stop()`.
@@ -9,8 +9,8 @@
 // would — so it validates the compiled output + public surface, not the TS source.
 // Run `npm run build` before `npm run test:integration`.
 //
-// Requires Docker + a LOCALSTACK_AUTH_TOKEN (community images >= 2026.5 need it).
-// Skipped when no token is present, like features.test.ts.
+// No Docker and no auth token: the engine runs in the orchestrator process, so
+// this suite executes anywhere, like features.test.ts.
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -24,8 +24,7 @@ const SERVICE_PATH = path.join(REPO_ROOT, 'tests/integration/fixtures/sample-mic
 const QUEUE = 'sample-microservice-OrderProcessing';
 const BUCKET = 'sample-microservice-uploads';
 
-const HAS_TOKEN = Boolean(process.env.LOCALSTACK_AUTH_TOKEN);
-const suite = HAS_TOKEN ? describe : describe.skip;
+const suite = describe;
 
 async function waitFor(cond: () => Promise<boolean>, timeoutMs: number, intervalMs = 1000): Promise<void> {
   const start = Date.now();
@@ -40,10 +39,9 @@ suite('LssClient (integration, built lib)', () => {
   const lss = new LssClient({ configPath: CONFIG, cwd: REPO_ROOT });
 
   beforeAll(async () => {
-    if (!HAS_TOKEN) return;
     await lss.lifecycle.stop().catch(() => undefined);
     await lss.lifecycle.start();
-    await lss.lifecycle.waitUntilReady({ timeoutMs: 150000, intervalMs: 2000 });
+    await lss.lifecycle.waitUntilReady({ timeoutMs: 60000, intervalMs: 250 });
     // Provision the fixture service by registering it through the client.
     const reg = (await lss.services.register({ servicePath: SERVICE_PATH, invokePort: 3997 })) as {
       success?: boolean;
@@ -52,10 +50,7 @@ suite('LssClient (integration, built lib)', () => {
   }, 240000);
 
   afterAll(async () => {
-    if (!HAS_TOKEN) return;
     await lss.lifecycle.stop().catch(() => undefined);
-    await execAsync('docker rm -f $(docker ps -aq --filter name=lss-localstack-4598) 2>/dev/null || true').catch(() => undefined);
-    await execAsync('docker volume rm lss-localstack-4598-data 2>/dev/null || true').catch(() => undefined);
     await execAsync('rm -rf tests/.lss-client-integration 2>/dev/null || true').catch(() => undefined);
   }, 60000);
 
@@ -65,15 +60,14 @@ suite('LssClient (integration, built lib)', () => {
     });
 
     it('reports healthy via health.get() and RUNNING via lifecycle.status()', async () => {
-      expect((await lss.health.get()).localstack).toBe(true);
+      expect((await lss.health.get()).engineRunning).toBe(true);
       expect((await lss.lifecycle.status()).running).toBe(true);
     });
 
-    it('exposes the isolated config snapshot (no token leak)', async () => {
-      const cfg = (await lss.config.get()) as { serverPort: number; localstack: { port: number } };
+    it('exposes the isolated config snapshot', async () => {
+      const cfg = (await lss.config.get()) as { serverPort: number; engine: { kind: string; endpoint: string } };
       expect(cfg.serverPort).toBe(3398);
-      expect(cfg.localstack.port).toBe(4598);
-      expect(JSON.stringify(cfg)).not.toContain(process.env.LOCALSTACK_AUTH_TOKEN);
+      expect(cfg.engine).toEqual({ kind: 'self', endpoint: 'http://localhost:14598' });
     });
 
     it('returns a non-empty log tail via lifecycle.logs()', async () => {

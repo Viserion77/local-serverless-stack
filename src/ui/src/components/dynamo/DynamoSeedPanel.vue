@@ -4,6 +4,7 @@ import {
   TCard, TButton, TStack, TBadge, TConfirmDialog, TText, TDescriptionList, TDescriptionItem, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
+import { useI18n } from '../../i18n';
 
 const props = defineProps<{
   tableName: string;
@@ -14,7 +15,14 @@ const props = defineProps<{
 
 const emit = defineEmits<{ (e: 'refresh'): void }>();
 
+const { t } = useI18n();
 const toast = useToast();
+
+// Rendered from the template so t() runs per render and the badge follows a
+// language switch.
+function itemsLabel(count: number): string {
+  return count === 1 ? t('dynamo.itemOne', { count }) : t('dynamo.itemOther', { count });
+}
 const applying = ref(false);
 const redoing = ref(false);
 const purging = ref(false);
@@ -30,20 +38,20 @@ async function apply() {
     const skipped = res.results.find(r => r.skipped);
     if (skipped) {
       toast.add({
-        title: `Seed skipped`,
-        description: `${props.tableName}: ${skipped.reason || 'unknown reason'}`,
+        title: t('dynamo.seedSkipped'),
+        description: `${props.tableName}: ${skipped.reason || t('dynamo.unknownReason')}`,
         variant: 'warning',
       });
     } else {
       toast.add({
-        title: `Seed applied`,
-        description: `${inserted} item(s) inserted into ${props.tableName}`,
+        title: t('dynamo.seedApplied'),
+        description: t('dynamo.seedAppliedDesc', { count: inserted, table: props.tableName }),
         variant: 'success',
       });
     }
     emit('refresh');
   } catch (err: any) {
-    toast.add({ title: 'Seed failed', description: err.message, variant: 'danger' });
+    toast.add({ title: t('dynamo.seedFailed'), description: err.message, variant: 'danger' });
   } finally {
     applying.value = false;
   }
@@ -56,13 +64,13 @@ async function purge() {
     const res = await api.clearSeed(props.tableName);
     const deleted = res.results.reduce((s, r) => s + (r.deleted || 0), 0);
     toast.add({
-      title: `Table purged`,
-      description: `${deleted} item(s) removed from ${props.tableName}`,
+      title: t('dynamo.tablePurged'),
+      description: t('dynamo.purgedDesc', { count: deleted, table: props.tableName }),
       variant: 'info',
     });
     emit('refresh');
   } catch (err: any) {
-    toast.add({ title: 'Purge failed', description: err.message, variant: 'danger' });
+    toast.add({ title: t('dynamo.purgeFailed'), description: err.message, variant: 'danger' });
   } finally {
     purging.value = false;
     purgeDialog.value = false;
@@ -78,13 +86,13 @@ async function redo() {
     const runRes = await api.runSeed(props.tableName);
     const inserted = runRes.results.reduce((s, r) => s + (r.inserted || 0), 0);
     toast.add({
-      title: `Seed redone`,
-      description: `${deleted} removed, ${inserted} inserted in ${props.tableName}`,
+      title: t('dynamo.seedRedone'),
+      description: t('dynamo.redoneDesc', { deleted, inserted, table: props.tableName }),
       variant: 'success',
     });
     emit('refresh');
   } catch (err: any) {
-    toast.add({ title: 'Redo failed', description: err.message, variant: 'danger' });
+    toast.add({ title: t('dynamo.redoFailed'), description: err.message, variant: 'danger' });
   } finally {
     redoing.value = false;
     redoDialog.value = false;
@@ -97,18 +105,18 @@ async function redo() {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" justify="space-between" align="center">
-          <TText weight="semibold">Seed file</TText>
+          <TText weight="semibold">{{ t('dynamo.seedFile') }}</TText>
           <TBadge tone="info" variant="soft">
-            {{ seedItemCount }} item{{ seedItemCount === 1 ? '' : 's' }}
+            {{ itemsLabel(seedItemCount) }}
           </TBadge>
         </TStack>
       </template>
 
       <TDescriptionList>
-        <TDescriptionItem label="Path">
+        <TDescriptionItem :label="t('dynamo.path')">
           <TText family="mono" size="sm">{{ seedFile }}</TText>
         </TDescriptionItem>
-        <TDescriptionItem label="Current rows in table">
+        <TDescriptionItem :label="t('dynamo.currentRows')">
           <TText family="mono">{{ tableItemCount }}</TText>
         </TDescriptionItem>
       </TDescriptionList>
@@ -116,15 +124,15 @@ async function redo() {
 
     <TCard variant="outline">
       <template #header>
-        <TText weight="semibold">Actions</TText>
+        <TText weight="semibold">{{ t('common.actions') }}</TText>
       </template>
 
       <TStack direction="vertical" gap="0.75rem">
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
           <TStack direction="vertical" gap="0.125rem">
-            <TText weight="semibold">Apply seed</TText>
+            <TText weight="semibold">{{ t('dynamo.applySeed') }}</TText>
             <TText tone="muted" size="sm">
-              Inserts every item from the seed file. Existing items with the same key are overwritten.
+              {{ t('dynamo.applySeedDesc') }}
             </TText>
           </TStack>
           <TButton
@@ -133,15 +141,15 @@ async function redo() {
             :disabled="seedItemCount <= 0"
             @click="apply"
           >
-            Apply
+            {{ t('dynamo.apply') }}
           </TButton>
         </TStack>
 
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
           <TStack direction="vertical" gap="0.125rem">
-            <TText weight="semibold">Redo seed</TText>
+            <TText weight="semibold">{{ t('dynamo.redoSeed') }}</TText>
             <TText tone="muted" size="sm">
-              Purges the table first, then re-applies the seed file. Use when stale rows are blocking a fresh load.
+              {{ t('dynamo.redoSeedDesc') }}
             </TText>
           </TStack>
           <TButton
@@ -150,15 +158,15 @@ async function redo() {
             :disabled="seedItemCount <= 0"
             @click="redoDialog = true"
           >
-            Redo
+            {{ t('dynamo.redo') }}
           </TButton>
         </TStack>
 
         <TStack direction="horizontal" justify="space-between" align="center" gap="1rem">
           <TStack direction="vertical" gap="0.125rem">
-            <TText weight="semibold">Purge table</TText>
+            <TText weight="semibold">{{ t('dynamo.purgeTable') }}</TText>
             <TText tone="muted" size="sm">
-              Deletes every item currently in this table. The seed file is not touched.
+              {{ t('dynamo.purgeTableDesc') }}
             </TText>
           </TStack>
           <TButton
@@ -166,7 +174,7 @@ async function redo() {
             :loading="purging"
             @click="purgeDialog = true"
           >
-            Purge
+            {{ t('dynamo.purge') }}
           </TButton>
         </TStack>
       </TStack>
@@ -174,20 +182,20 @@ async function redo() {
 
     <TConfirmDialog
       v-model:open="purgeDialog"
-      :title="`Purge ${tableName}?`"
-      :description="`This deletes all ${tableItemCount} item(s) currently in the table. The seed file on disk is not affected.`"
-      confirm-label="Purge"
-      cancel-label="Cancel"
+      :title="t('dynamo.purgeConfirmTitle', { table: tableName })"
+      :description="t('dynamo.purgeConfirmDesc', { count: tableItemCount })"
+      :confirm-label="t('dynamo.purge')"
+      :cancel-label="t('common.cancel')"
       confirm-variant="danger"
       @confirm="purge"
     />
 
     <TConfirmDialog
       v-model:open="redoDialog"
-      :title="`Redo seed for ${tableName}?`"
-      :description="`This purges all ${tableItemCount} current item(s), then re-applies ${seedItemCount} seeded item(s).`"
-      confirm-label="Redo"
-      cancel-label="Cancel"
+      :title="t('dynamo.redoConfirmTitle', { table: tableName })"
+      :description="t('dynamo.redoConfirmDesc', { current: tableItemCount, seeded: seedItemCount })"
+      :confirm-label="t('dynamo.redo')"
+      :cancel-label="t('common.cancel')"
       confirm-variant="danger"
       @confirm="redo"
     />

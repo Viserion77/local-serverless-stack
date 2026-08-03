@@ -69,7 +69,7 @@ import {
   DeleteCollectionCommand,
   ListCollectionsCommand,
 } from '@aws-sdk/client-opensearchserverless';
-import { ResourceProvisioner, aossEndpoint } from '../../../src/server/services/resource-provisioner';
+import { ResourceProvisioner } from '../../../src/server/services/resource-provisioner';
 import { ConfigManager } from '../../../src/server/services/config-manager';
 import type {
   DynamoDBResource,
@@ -709,7 +709,7 @@ describe('provisionResources orchestration', () => {
     );
     expect(provisioner.getCurrentRegion()).toBe('eu-west-1');
     const createFn = lambdaMock.commandCalls(CreateFunctionCommand)[0].args[0].input as any;
-    expect(createFn.Environment.Variables.INVOKE_URL).toBe('http://host.docker.internal:3002');
+    expect(createFn.Environment.Variables.INVOKE_URL).toBe('http://127.0.0.1:3002');
   });
 
   it('uses lambdaRuntime.invokeHost when deriving the default invokeUrl from invokePort', async () => {
@@ -1373,6 +1373,28 @@ describe('listAllResources', () => {
     expect(result).toEqual({ tables: ['t1'], queues: ['q1'], topics: ['topic1'], buckets: ['b1'], collections: ['products'] });
   });
 
+  // GET /api/resources is built from these lists. ListTables caps a page at
+  // 100 names and ListQueues at 1000 — a 40-service monorepo crosses both.
+  it('pages through ListTables and ListQueues', async () => {
+    dynamoMock
+      .on(ListTablesCommand, { ExclusiveStartTableName: undefined })
+      .resolves({ TableNames: ['t1'], LastEvaluatedTableName: 't1' })
+      .on(ListTablesCommand, { ExclusiveStartTableName: 't1' })
+      .resolves({ TableNames: ['t2'] });
+    sqsMock
+      .on(ListQueuesCommand, { NextToken: undefined })
+      .resolves({ QueueUrls: ['http://localhost:4566/000/q1'], NextToken: 'p2' })
+      .on(ListQueuesCommand, { NextToken: 'p2' })
+      .resolves({ QueueUrls: ['http://localhost:4566/000/q2'] });
+    snsMock.on(ListTopicsCommand).resolves({ Topics: [] });
+    s3Mock.on(ListBucketsCommand).resolves({ Buckets: [] });
+    openSearchMock.on(ListCollectionsCommand).resolves({ collectionSummaries: [] });
+
+    const result = await provisioner.listAllResources();
+    expect(result.tables).toEqual(['t1', 't2']);
+    expect(result.queues).toEqual(['q1', 'q2']);
+  });
+
   it('builds fresh clients for a different region', async () => {
     dynamoMock.on(ListTablesCommand).resolves({ TableNames: [] });
     sqsMock.on(ListQueuesCommand).resolves({ QueueUrls: [] });
@@ -1643,34 +1665,10 @@ describe('createEventBus (via provisionResources)', () => {
   });
 });
 
-describe('aoss endpoint selection (sidecar vs engine)', () => {
-  const sidecarConfig = (enabled: boolean) => ({
-    enabled,
-    port: 14567,
-    endpoint: 'http://localhost:14567',
-    dataDir: '/tmp/aoss',
-  });
-
-  it('aossEndpoint picks the sidecar endpoint when the sidecar is enabled', () => {
-    expect(aossEndpoint({ getAossSidecarConfig: () => sidecarConfig(true) }, 'http://localhost:4566'))
-      .toBe('http://localhost:14567');
-  });
-
-  it('aossEndpoint falls back to the engine endpoint when the sidecar is disabled', () => {
-    expect(aossEndpoint({ getAossSidecarConfig: () => sidecarConfig(false) }, 'http://localhost:4566'))
-      .toBe('http://localhost:4566');
-  });
-
-  it('the aoss client targets the sidecar under the LocalStack engine (enabled by default in tests)', async () => {
-    expect(ConfigManager.getInstance().getAossSidecarConfig().enabled).toBe(true);
-    (provisioner as any).initializeClients('us-east-1');
-    const endpoint = await (provisioner as any).openSearchClient.config.endpoint();
-    expect(endpoint.hostname).toBe('localhost');
-    expect(Number(endpoint.port)).toBe(14567);
-  });
-
-  it('the aoss client targets the engine endpoint when the sidecar is disabled', async () => {
-    jest.spyOn(ConfigManager.getInstance(), 'getAossSidecarConfig').mockReturnValue(sidecarConfig(false));
+// The engine serves aoss natively on its own endpoint — 0.x needed a sidecar
+// here only because no LocalStack edition provides aoss at all.
+describe('aoss client endpoint', () => {
+  it('targets the engine endpoint', async () => {
     (provisioner as any).initializeClients('us-east-1');
     const engineUrl = new URL(ConfigManager.getInstance().getEngineEndpoint());
     const endpoint = await (provisioner as any).openSearchClient.config.endpoint();
@@ -1693,21 +1691,7 @@ describe('createOpenSearchCollection (via provisionResources)', () => {
     expect(console.error).not.toHaveBeenCalled();
   });
 
-  it('logs the sidecar data-plane endpoint — the base the client actually targeted', async () => {
-    openSearchMock.on(CreateCollectionCommand).resolves({});
-    await provisioner.provisionResources('svc', [opensearchResource()], {});
-    expect(console.log).toHaveBeenCalledWith(
-      expect.stringContaining('(endpoint: http://localhost:14567/_aoss/products)'),
-    );
-  });
-
-  it('logs the engine data-plane endpoint when the sidecar is disabled', async () => {
-    jest.spyOn(ConfigManager.getInstance(), 'getAossSidecarConfig').mockReturnValue({
-      enabled: false,
-      port: 14567,
-      endpoint: 'http://localhost:14567',
-      dataDir: '/tmp/aoss',
-    });
+  it('logs the data-plane endpoint — the base the client actually targeted', async () => {
     openSearchMock.on(CreateCollectionCommand).resolves({});
     await provisioner.provisionResources('svc', [opensearchResource()], {});
     expect(console.log).toHaveBeenCalledWith(

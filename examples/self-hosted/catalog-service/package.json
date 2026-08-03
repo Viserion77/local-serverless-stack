@@ -2,13 +2,11 @@
   "name": "catalog-service-example",
   "version": "0.0.0",
   "private": true,
-  "description": "POST /products indexes into OpenSearch; GET /search runs full-text + filtered queries; GET /stats aggregates. Port 3634 (invoke 13634). No runtime dependencies — the handlers speak the OpenSearch REST API with Node's global fetch.",
+  "description": "POST /products indexes into OpenSearch; GET /search runs full-text + filtered queries; GET /stats aggregates. Port 3634 (invoke 13634). No runtime dependencies \u2014 the handlers speak the OpenSearch REST API with Node's global fetch.",
   "scripts": {
-    "package": "serverless package",
-    "register": "serverless package"
+    "package": "serverless package"
   },
   "devDependencies": {
-    "osls": "4.0.0",
-    "serverless-lss": "file:../../../packages/serverless-plugin"
+    "osls": "4.0.0"
   }
 }

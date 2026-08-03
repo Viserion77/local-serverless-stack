@@ -23,7 +23,9 @@ import { LambdaRuntimeManager } from './services/lambda-runtime-manager.js';
 import { GatewayManager } from './services/gateway-manager.js';
 import { SourceWatcher } from './services/source-watcher.js';
 import { startDynamoProxy } from './dev/dynamo-proxy.js';
-import type { AossSidecarHandle } from './engine/aoss-sidecar.js';
+import { applyRegionToExplorers } from './services/explorer-region.js';
+import { getBindHost, isOriginAllowed, getExposureWarning } from './services/bind-host.js';
+import { isAwsRequest } from './engine/http/is-aws-request.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -32,10 +34,54 @@ const app = express();
 const configManager = ConfigManager.getInstance();
 const PORT = configManager.getDashboardPort();
 let dynamoProxyServer: http.Server | null = null;
-let aossSidecar: AossSidecarHandle | null = null;
+
+// Interface the orchestrator listens on. **Loopback by default.**
+//
+// This API has no authentication and it runs commands on this host — starting a
+// service spawns a child process, registering one packages it — so a listener on
+// every interface hands the developer's machine to anything that can reach the
+// port: another device on a café/hotel Wi-Fi, a colleague on the office LAN, a
+// compromised phone on the same router. `listen(PORT)` with no host did exactly
+// that, silently.
+//
+// `LSS_BIND_HOST` is the deliberate opt-in (`LSS_BIND_HOST=0.0.0.0 lss start`).
+// It exists because a loopback bind is invisible to Docker port publishing: with
+// `docker run -p 14566:14566` the forwarded connection arrives on the container's
+// external interface, which a 127.0.0.1 listener refuses. VS Code devcontainer
+// port forwarding does NOT need it — the forwarder attaches from inside the
+// container, where loopback is the same network stack — so the flow most people
+// use here keeps the safe default.
+//
+// It lives in services/bind-host.ts rather than here because this file is not
+// the only place that opens a socket: per-service gateway/invoke listeners, the
+// split self-engine front door and the DynamoDB proxy all bind too, and a fence
+// that only one of four listeners honours is not a fence. That module owns the
+// browser half too (`LSS_CORS_ORIGINS`, below), so the whole posture is one
+// decision made in one place.
+const BIND_HOST = getBindHost();
 
 // Middleware
-app.use(cors());
+//
+// `cors()` with no options answered every preflight with
+// `Access-Control-Allow-Origin: *`. That is what made an unauthenticated,
+// command-running API drive-by reachable: any page the developer happened to
+// open could preflight and then POST JSON to `/api/services/:name/start`. The
+// wildcard is gone; who may call from a browser is now the single decision in
+// services/bind-host.ts — loopback origins by default, widened by
+// `LSS_CORS_ORIGINS` (a comma-separated allowlist, or `*`) for the containerised
+// setup where the dashboard and the developer's own frontends live on another
+// origin. A rejected origin gets no CORS headers at all, which makes the browser
+// refuse the preflight and never send the real request.
+//
+// The AWS wire is unaffected: SDK traffic is demuxed by `isAwsRequestMessage()`
+// in the HTTP server below and handed to the engine handler *before* Express
+// (and therefore this middleware) ever sees it — and SigV4 clients are not
+// browsers, so they send no `Origin` in the first place.
+app.use(cors({
+  origin(origin, callback) {
+    callback(null, isOriginAllowed(origin));
+  },
+}));
 app.use(express.json());
 
 // API routes
@@ -56,21 +102,23 @@ app.get('/api/health', (_req, res) => {
   const engine = EngineManager.getInstance();
   res.json({
     status: 'ok',
-    // Kept for client/UI compatibility: truthy when the ACTIVE engine
-    // (LocalStack or self) is healthy.
-    localstack: engine.isRunning(),
+    engineRunning: engine.isRunning(),
     engine: engine.healthDetail(),
     dynamoProxy: {
       enabled: configManager.isEnableDynamoProxy(),
       running: Boolean(dynamoProxyServer?.listening),
       port: configManager.getDynamoProxyPort(),
     },
-    aossSidecar: {
-      enabled: configManager.getAossSidecarConfig().enabled,
-      running: aossSidecar !== null,
-      port: configManager.getAossSidecarConfig().port,
-    },
   });
+});
+
+// Anything under /api that no router claimed is a 404 in JSON, not the SPA.
+// Without this the catch-all below answers 200 text/html for a mistyped API
+// path, which reads as success to curl, to the LssClient and to any test
+// asserting on the response — the single most confusing failure mode when
+// driving LSS from an automated suite.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: `No such API route: ${req.method} /api${req.path}` });
 });
 
 // Serve frontend build (fallback for SPA)
@@ -81,44 +129,86 @@ app.get('*', (_req, res) => {
   res.sendFile(path.join(uiBuildPath, 'index.html'));
 });
 
-// Start server and LocalStack
+// Boot: engine → HTTP → services.
 async function start() {
   try {
     console.log('🚀 Starting Orchestrator Server...');
 
-    // Initialize the AWS engine (LocalStack container or in-process self engine)
+    // In-process AWS engine: no Docker, no container, no auth token.
+    //
+    // By default it shares this process's listener instead of binding its own,
+    // so the REST API, the dashboard and the AWS wire are all one port and one
+    // URL. `isAwsRequest` decides per request which handler answers; give
+    // `serverPort` and `selfEngine.port` different values to split them again.
+    //
+    // Embedded is also what puts the AWS wire on this listener's socket for
+    // free. The split-listener branch binds inside
+    // engine/backends/self-backend.ts — which now reads the same
+    // services/bind-host.ts this file does, so splitting the ports no longer
+    // splits the exposure (it used to ask for '0.0.0.0' outright, publishing
+    // the entire AWS data plane while the dashboard sat on loopback).
     const engine = EngineManager.getInstance();
-    await engine.start();
-
-    // OpenSearch Serverless (aoss) sidecar: no LocalStack edition provides
-    // aoss, so LSS serves the self-engine emulator in-process next to it.
-    // Dynamic import keeps the LocalStack-mode memory profile lean, matching
-    // how the self backend is loaded. Failure is non-fatal — everything but
-    // aoss still works.
-    const aossConfig = configManager.getAossSidecarConfig();
-    if (aossConfig.enabled) {
-      try {
-        const { startAossSidecar } = await import('./engine/aoss-sidecar.js');
-        aossSidecar = await startAossSidecar({
-          port: aossConfig.port,
-          dataDir: aossConfig.dataDir,
-          region: configManager.getRegion(),
-        });
-        console.log(
-          `🔎 OpenSearch Serverless (aoss) sidecar on ${aossSidecar.endpoint} — ` +
-            'LocalStack does not provide aoss; LSS serves it in-process',
-        );
-      } catch (error) {
-        console.warn(
-          '⚠️  Failed to start the aoss sidecar (OpenSearch Serverless will be unavailable):',
-          error instanceof Error ? error.message : error,
-        );
-      }
+    const single = configManager.isSingleListener();
+    let awsHandler: ((req: http.IncomingMessage, res: http.ServerResponse) => void) | null = null;
+    if (single) {
+      awsHandler = await engine.startEmbedded();
+    } else {
+      await engine.start();
     }
 
-    app.listen(PORT, () => {
-      console.log(`✅ Server running on http://localhost:${PORT}`);
-      console.log(`✅ Engine (${engine.getKind()}) running on ${engine.getEndpoint()}`);
+    // An EADDRINUSE on the dashboard port has to be a named, actionable
+    // failure: without an 'error' listener it surfaces as an unhandled
+    // exception AFTER the engine has already bound its own port and started
+    // its delivery loops, leaving a half-alive process behind.
+    // One server, two handlers: an AWS SDK call goes to the engine, everything
+    // else to Express. The engine's own dispatcher falls back to S3 for
+    // anything it cannot classify, so `GET /assets/app.js` would be read as a
+    // bucket — the split has to happen here, in front of it.
+    const httpServer = http.createServer((req, res) => {
+      if (awsHandler && isAwsRequestMessage(req)) {
+        awsHandler(req, res);
+        return;
+      }
+      app(req, res);
+    });
+    // `localhost` in the log lines stays correct under both binds: it is the
+    // address a loopback listener answers on, and an all-interfaces listener
+    // answers there too.
+    httpServer.listen(PORT, BIND_HOST, () => {
+      if (single) {
+        console.log(`✅ LSS on http://localhost:${PORT} — dashboard, REST API and AWS wire`);
+      } else {
+        console.log(`✅ Server running on http://localhost:${PORT}`);
+        console.log(`✅ Self engine running on ${engine.getEndpoint()}`);
+      }
+      // Widening the exposure must never be something you did and did not
+      // notice. One warning covers the whole process, both halves of the
+      // posture: every other listener (per-service gateway/invoke ports, the
+      // split engine front door, the DynamoDB proxy) binds the address resolved
+      // once in services/bind-host.ts, and the same module decides which browser
+      // origins may call the API. It returns null when neither knob was widened.
+      const exposure = getExposureWarning();
+      if (exposure) console.warn(exposure);
+    });
+    httpServer.on('error', (error: NodeJS.ErrnoException) => {
+      if (error.code === 'EADDRINUSE') {
+        console.error(
+          `❌ Orchestrator could not bind port ${PORT}: address already in use. ` +
+            'Another LSS instance (or another process) is listening there — stop it, ' +
+            'or set serverPort in lss.config.json to a free port.',
+        );
+      } else if (error.code === 'EADDRNOTAVAIL') {
+        // Only reachable through LSS_BIND_HOST: the default 127.0.0.1 always
+        // exists. Name the variable, or the failure reads as a port problem.
+        console.error(
+          `❌ Orchestrator could not bind ${BIND_HOST}:${PORT}: that address does not belong to ` +
+            'this host. LSS_BIND_HOST must name an interface of this machine — 127.0.0.1 (the ' +
+            'default), 0.0.0.0, or one of its own addresses.',
+        );
+      } else {
+        console.error('❌ Orchestrator HTTP server failed:', error);
+      }
+      void shutdown(1);
     });
 
     QueueInspector.getInstance().startPolling();
@@ -130,10 +220,16 @@ async function start() {
       onFullReload: name => ServiceRegistrar.getInstance().reregister(name),
     });
 
+    // Every explorer answers requests that omit `?region=` — the CLI, the
+    // LssClient and plain curl all do. Pin their default to the configured
+    // region here so those callers see the same resources the dashboard does
+    // (which only worked because it always sends the region from /api/config).
+    applyRegionToExplorers(configManager.getRegion());
+
     // Seed Secrets Manager BEFORE reactivating services so any handler that
     // reads a secret on its first invocation (including relay-triggered handlers
     // that fire during rehydrate) already finds an AWSCURRENT version. Non-fatal
-    // — a seed failure must not abort startup (matches the aoss-sidecar block).
+    // — a seed failure must not abort startup.
     try {
       SeedManager.getInstance().setDefaultRegion(configManager.getRegion());
       await SeedManager.getInstance().seedAllSecrets(configManager.getRegion());
@@ -148,7 +244,10 @@ async function start() {
     // so registrations survive orchestrator restarts.
     await ServiceRegistrar.getInstance().rehydrateAll();
 
-    // Optional DynamoDB proxy
+    // Optional DynamoDB proxy (off by default). Its listener is created and
+    // bound inside dev/dynamo-proxy.ts, which reads the same bind host — turning
+    // the proxy on re-publishes the engine's DynamoDB surface on :8000, but only
+    // to whoever the rest of the stack is already offered to.
     if (configManager.isEnableDynamoProxy()) {
       const proxyPort = configManager.getDynamoProxyPort();
       dynamoProxyServer = startDynamoProxy(engine.getEndpoint(), proxyPort);
@@ -162,8 +261,22 @@ async function start() {
   }
 }
 
-// Graceful shutdown
-async function shutdown() {
+// Adapts a raw request to the probe `isAwsRequest` takes.
+function isAwsRequestMessage(req: http.IncomingMessage): boolean {
+  const url = req.url ?? '/';
+  const queryIndex = url.indexOf('?');
+  return isAwsRequest({
+    method: (req.method ?? 'GET').toUpperCase(),
+    path: queryIndex === -1 ? url : url.slice(0, queryIndex),
+    headers: req.headers,
+    query: new URLSearchParams(queryIndex === -1 ? '' : url.slice(queryIndex + 1)),
+  });
+}
+
+// Graceful shutdown. `code` is non-zero when a fatal boot problem (e.g. the
+// dashboard port already taken) triggers the teardown, so the CLI reports the
+// failure instead of a clean stop.
+async function shutdown(code = 0) {
   console.log('\n🛑 Shutting down gracefully...');
   QueueInspector.getInstance().stopPolling();
   SourceWatcher.getInstance().unwatchAll();
@@ -171,14 +284,12 @@ async function shutdown() {
   await LambdaRuntimeManager.getInstance().stopAll();
   processManager.stopAll();
   await processManager.cleanup();
-  await aossSidecar?.close();
-  aossSidecar = null;
   await EngineManager.getInstance().stop();
-  process.exit(0);
+  process.exit(code);
 }
 
-process.on('SIGINT', shutdown);
+process.on('SIGINT', () => void shutdown());
 // The CLI stops the daemonized server with SIGTERM — same cleanup path.
-process.on('SIGTERM', shutdown);
+process.on('SIGTERM', () => void shutdown());
 
 start();

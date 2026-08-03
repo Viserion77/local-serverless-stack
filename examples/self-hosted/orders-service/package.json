@@ -4,8 +4,7 @@
   "private": true,
   "description": "POST /orders stores the order in DynamoDB and enqueues it on SQS for billing; GET /orders lists them. Port 3631 (invoke 13631).",
   "scripts": {
-    "package": "serverless package",
-    "register": "serverless package"
+    "package": "serverless package"
   },
   "dependencies": {
     "@aws-sdk/client-dynamodb": "^3.0.0",
@@ -13,7 +12,6 @@
     "@aws-sdk/lib-dynamodb": "^3.0.0"
   },
   "devDependencies": {
-    "osls": "4.0.0",
-    "serverless-lss": "file:../../../packages/serverless-plugin"
+    "osls": "4.0.0"
   }
 }

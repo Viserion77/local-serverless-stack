@@ -1,41 +1,47 @@
 # Self Engine
 
-The self engine is an in-process AWS emulator that replaces LocalStack for the
+The self engine is the in-process AWS emulator LSS runs on. It replaces a container-based emulator for the
 typical serverless dev loop: DynamoDB, SQS, S3, EventBridge, OpenSearch
 Serverless, Secrets Manager, SNS (minimal), Lambda control plane and STS served
 from a single `node:http` listener inside the orchestrator — no Docker, no
 container, no auth token. Design rationale and phased roadmap:
 [PRD_SELF_ENGINE.md](PRD_SELF_ENGINE.md) (PT-BR).
 
-## Enabling it
+## Configuring it
 
 ```jsonc
 // lss.config.json
 {
-  "engine": "self",                  // default: "localstack"
   "selfEngine": {
-    "port": 14566,                   // default — outside 4566–4599 on purpose*
-    "dataDir": "~/.lss/engine",      // default; <stateDir>/engine when stateDir is set
+    "port": 14566,                   // default — equal to serverPort, so the
+                                     // engine shares the orchestrator's listener*
+    "dataDir": null,                 // default: <stateDir>/engine, else ~/.lss/projects/<slug>/engine
     "account": "000000000000",
     "idleUnloadMs": 300000,          // dehydrate idle data stores after 5 min
     "memoryBudgetMb": 128,           // LRU budget for hydrated data
     "fsync": false,                  // true = fsync every WAL flush (paranoid)
-    "fallbackEndpoint": null         // e.g. "http://localhost:4566" during migration
+    "fallbackEndpoint": null         // reverse-proxy unimplemented operations here
   }
 }
 ```
 
-CLI: `npx lss start --self-engine` (equivalent to `LSS_ENGINE=self`). Env
-overrides: `LSS_ENGINE`, `LSS_ENGINE_PORT`. `--self-engine` cannot be combined
-with `--external`, `--pro` or `--localstack-token`.
+The engine starts with the orchestrator and, by default, **on the same port**:
+`selfEngine.port` defaults to the same value as `serverPort`, so the dashboard,
+the REST API and the AWS wire are one URL. A request is routed by shape — SigV4,
+`X-Amz-Target` or any `x-amz-*` header reaches the engine, everything else the
+API/SPA (`src/server/engine/http/is-aws-request.ts`). Give the two keys different
+values to go back to two listeners.
 
-Point your application at the engine exactly like LocalStack:
+Env overrides: `LSS_ENGINE_PORT`, `LSS_ENGINE_DATA_DIR` — with `LSS_DASHBOARD_PORT`
+they are everything a second instance needs.
+
+Point your application at the engine like any AWS endpoint:
 
 ```
 AWS_ENDPOINT=http://localhost:14566
 ```
 
-\* A real LocalStack install intercepts ports 4566–4599 on some hosts (Docker
+\* And outside 4566–4599: a real LocalStack install (if your machine has one) intercepts that range on some hosts (Docker
 Desktop/WSL2), silently hijacking traffic. If you need the engine on 4566 for
 drop-in compatibility, set `selfEngine.port` explicitly.
 
@@ -49,10 +55,10 @@ boot-materialized, so it is flagged `restartRequired`).
 
 The wire API is the seam: the provisioner, the dashboards/explorers, seeds,
 `LssClient` and the QueueInspector primitives (`hold`/`release`/`await-idle`)
-all speak AWS SDK against the engine endpoint, unchanged. The `serverless-lss`
-plugin is unaffected too — it only POSTs JSON to the orchestrator REST API and
-never talks to the engine directly. Event delivery to your handlers happens **in-process** through the
-LSS Lambda runtime — the LocalStack-era proxy Lambdas are absorbed as metadata
+all speak AWS SDK against the engine endpoint, unchanged. Service registration
+(`lss register`, onboarding, `POST /api/services/register`) is unaffected too —
+it only speaks the orchestrator REST API and never talks to the engine directly. Event delivery to your handlers happens **in-process** through the
+LSS Lambda runtime — proxy Lambdas are absorbed as metadata
 (their `INVOKE_URL` doubles as an HTTP fallback for services still running
 serverless-offline).
 
@@ -74,7 +80,7 @@ object ACL/policy sub-resources (treated as plain object operations) — see
 | OpenSearch Serverless | Control plane (`aoss`): CreateCollection (deterministic ids, ACTIVE immediately), BatchGetCollection (hands out the local `collectionEndpoint`), ListCollections, DeleteCollection (id or name). Data plane under `<engine>/_aoss/<collection>`: index create/get/delete/HEAD, `_mapping` get/merge, `_doc`/`_create`/`_update` (deep merge, `doc_as_upsert`/`upsert`) with versioning, auto-create on first write, `_bulk` NDJSON with per-item results, `_search`/`_count` (`match`, `match_phrase`, `multi_match`, `term`, `terms`, `range`, `prefix`, `wildcard`, `exists`, `ids`, `bool` + `minimum_should_match`; `sort`, `from`/`size`, `_source` filtering, `?q=`), aggregations (`terms`, `avg`, `sum`, `min`, `max`, `value_count`), `_refresh`, `_cat/indices` | Security/access/lifecycle policy APIs, VPC endpoints, scripted updates, `_mget`, scroll/PIT, sub-aggregations, relevance scoring (`_score` is a constant 1), analyzers/k-NN — all rejected with an explicit OpenSearch-shaped error |
 | SNS | CreateTopic, ListTopics, DeleteTopic, GetTopicAttributes, Publish (logged + counted, no fan-out) | Subscriptions and delivery |
 | STS | GetCallerIdentity | Everything else |
-| Secrets Manager | CreateSecret, GetSecretValue, PutSecretValue, UpdateSecret, DescribeSecret, DeleteSecret (recovery window + `ForceDeleteWithoutRecovery`), RestoreSecret, ListSecrets, TagResource/UntagResource, GetRandomPassword — real `AWSCURRENT`/`AWSPREVIOUS` version staging, `SecretString`/`SecretBinary`, `ClientRequestToken` idempotency, per-region scoping. Values persist in a catalog (not encrypted locally). Browsable in the dashboard's **Secrets** tab (list, version stages, reveal value). Retires the LocalStack Secrets Manager the engine used to proxy through `fallbackEndpoint`. Secrets are populated before the first read by two boot paths — CloudFormation `AWS::SecretsManager::Secret` provisioned at registration, and **boot seeds** (see below) | Rotation scheduling/Lambda, replication, KMS encryption (`KmsKeyId` accepted and ignored), resource policies |
+| Secrets Manager | CreateSecret, GetSecretValue, PutSecretValue, UpdateSecret, DescribeSecret, DeleteSecret (recovery window + `ForceDeleteWithoutRecovery`), RestoreSecret, ListSecrets, TagResource/UntagResource, GetRandomPassword — real `AWSCURRENT`/`AWSPREVIOUS` version staging, `SecretString`/`SecretBinary`, `ClientRequestToken` idempotency, per-region scoping. Values persist in a catalog (not encrypted locally). Browsable in the dashboard's **Secrets** tab (list, version stages, reveal value). Secrets are populated before the first read by two boot paths — CloudFormation `AWS::SecretsManager::Secret` provisioned at registration, and **boot seeds** (see below) | Rotation scheduling/Lambda, replication, KMS encryption (`KmsKeyId` accepted and ignored), resource policies |
 
 ### Eventing (delivered in-process to the LSS Lambda runtime)
 
@@ -141,14 +147,40 @@ Both paths share one value resolver, are idempotent (an existing active secret
 is skipped, never clobbered; one scheduled for deletion is warned and skipped)
 and non-fatal (a failure warns and boot continues).
 
+## Health endpoints
+
+- `GET /_lss/health` — native: `{ "status": "ok", "engine": "self" }`.
+- `GET /_localstack/health` — **compatibility alias**, not a dependency. Third-party
+  tooling (wait-for scripts, IDE plugins, compose healthchecks) probes this path to
+  decide whether a local AWS is up; the engine answers in the shape they expect, with
+  `edition: "self"` so nothing pretends to be something it is not.
+
+The orchestrator's own `GET /api/health` (port 3100) is the one the dashboard and the
+`LssClient` use — it reports the engine plus the Lambda runtime and the DynamoDB proxy.
+
 ## Storage & footprint
 
-Data lives under `dataDir` (default `~/.lss/engine`): JSON catalogs for
-metadata, JSONL snapshot + WAL per DynamoDB table / S3 object index / OpenSearch
-index, S3 bodies as content-addressed blobs. Registration writes metadata only;
-item data hydrates on first access (streamed line-by-line) and dehydrates after
-`idleUnloadMs` or under `memoryBudgetMb` LRU pressure. SQS messages are
-memory-only (snapshotted on graceful shutdown when `persistence` is on).
+Data lives under `dataDir` (default `<stateDir>/engine`, or
+`~/.lss/projects/<project-slug>-<hash>/engine` when no `stateDir` is set — the
+home fallback is scoped per project so two checkouts never share one set of
+tables): JSON catalogs for metadata, JSONL snapshot + WAL per DynamoDB table /
+S3 object index / OpenSearch index, S3 bodies as content-addressed blobs.
+Registration writes metadata only; item data hydrates on first access (streamed
+line-by-line) and dehydrates after `idleUnloadMs` or under `memoryBudgetMb` LRU
+pressure. SQS messages are memory-only (snapshotted on graceful shutdown when
+`persistence` is on).
+
+A table's WAL folds back into its snapshot on dehydrate **and** on its own once
+it outgrows both 4 MB and twice the table's resident size — a table written to
+continuously never goes idle, and without that its WAL would grow for the whole
+session and be replayed in full on the next boot.
+
+**`persistence: false` means in-memory.** The engine swaps the file-backed store
+for a heap-only one: `dataDir` is never created, no catalog/WAL/blob is written,
+and every boot starts empty. That is the mode for an automated test run that
+needs a guaranteed clean slate and no leftover files; `idleUnloadMs` /
+`memoryBudgetMb` are inert there, since with no snapshot on disk an eviction
+would be data loss.
 
 Crash-safety bar (a dev tool, stated honestly): a hard crash may lose the last
 ~20 ms of writes. Ground truth is regenerable — re-register the services and
@@ -179,4 +211,4 @@ run `lss seed`. Worst case, delete `dataDir` and start clean.
   are skipped with a registration warning). Unsigned data-plane requests
   (plain `curl`) resolve to the engine's default region — SigV4-signed clients
   carry their own region, like every other service.
-- LocalStack volume data does not migrate; re-register + `lss seed`.
+- Container-volume data from another emulator does not migrate; re-register + `lss seed`.

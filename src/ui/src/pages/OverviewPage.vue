@@ -1,15 +1,23 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
+import { useRouter } from 'vue-router';
 import {
   TCard, TStack, TBadge, TGrid, TStat, TTag, TDivider, TButton, TSpinner, TText, TIcon,
   TDescriptionList, TDescriptionItem,
 } from '@treeui/vue';
 import { RouterLink } from 'vue-router';
+import ActivityPanel from '../components/ActivityPanel.vue';
 import { api } from '../services/api';
+import { isOnboardingDone } from '../services/onboarding';
+import { useI18n } from '../i18n';
+import type { AwsIconName } from '../icons/aws';
+import { engineServiceIcon } from '../icons/resourceIcons';
 import type {
   HealthInfo, LambdaSummary, LssConfigSnapshot, PortEntry, ServiceApiInfo, ServiceSummary,
 } from '../services/api';
 
+const { t } = useI18n();
+const router = useRouter();
 const health = ref<HealthInfo | null>(null);
 const config = ref<LssConfigSnapshot | null>(null);
 const ports = ref<PortEntry[]>([]);
@@ -56,7 +64,26 @@ const totalServices = computed(() => services.value.length);
 const lambdasOnline = computed(() => lambdas.value.filter(l => l.status === 'online').length);
 const totalLambdas = computed(() => lambdas.value.length);
 const apiRoutesTotal = computed(() => apis.value.reduce((s, a) => s + a.routes.length, 0));
-const localstackTone = computed(() => health.value?.localstack ? 'success' : 'danger');
+const engineRunning = computed(() => health.value?.engineRunning ?? false);
+const engineTone = computed(() => (engineRunning.value ? 'success' : 'danger'));
+// What the engine reports it answers for — the truth, rather than a configured
+// wish list (v1 read it from a configured service allow-list).
+const emulatedServices = computed(() => health.value?.engine?.services ?? []);
+
+// The engine reports raw wire ids ('aoss', 'events'), which read as jargon on
+// their own — each one names one AWS service, so each tag carries that
+// service's official mark. The id → mark table lives in `icons/resourceIcons`
+// with the other service→mark decisions, and is exhaustive over the engine's
+// service union; `engineServiceIcon` returns null for an id from a newer
+// orchestrator, so it renders as text rather than under a wrong brand.
+//
+// Resolved here rather than in the template so the `null` case is a value the
+// template can branch on, instead of an index expression typed as if it always
+// hits.
+const emulatedServiceTags = computed(() => emulatedServices.value.map(id => ({
+  id,
+  icon: engineServiceIcon(id),
+})));
 const proxyEnabled = computed(() => Boolean(health.value?.dynamoProxy?.enabled));
 const proxyRunning = computed(() => Boolean(health.value?.dynamoProxy?.running));
 const autoPackage = computed(() => Boolean(config.value?.autoPackage));
@@ -65,49 +92,81 @@ const persistence = computed(() => Boolean(config.value?.persistence));
 const portKindTone: Record<PortEntry['kind'], 'info' | 'success' | 'warning' | 'neutral'> = {
   orchestrator: 'info',
   engine: 'success',
-  sidecar: 'info',
   proxy: 'warning',
   'service-api': 'info',
   'service-invoke': 'neutral',
 };
-const portKindLabel: Record<PortEntry['kind'], string> = {
-  orchestrator: 'orchestrator',
-  engine: 'engine',
-  sidecar: 'sidecar',
-  proxy: 'proxy',
-  'service-api': 'HTTP API',
-  'service-invoke': 'invoke',
+// Only the message *keys* live at module level: the label itself has to be
+// resolved on every render, otherwise a language switch would leave the badges
+// in the old locale.
+const portKindKeys: Record<PortEntry['kind'], string> = {
+  orchestrator: 'overview.portKindOrchestrator',
+  engine: 'overview.portKindEngine',
+  proxy: 'overview.portKindProxy',
+  'service-api': 'overview.portKindServiceApi',
+  'service-invoke': 'overview.portKindServiceInvoke',
 };
+function portKindLabel(kind: PortEntry['kind']): string {
+  return t(portKindKeys[kind]);
+}
 
-const coveredResources = [
+/**
+ * One row of the coverage card.
+ *
+ * `icon` and `status` answer two different questions and must stay separate:
+ * the brand says WHICH AWS service the row is about, the status says whether
+ * LSS covers it yet. Annotating the computed is what keeps `icon` a registered
+ * icon name — an inferred object literal would widen it to `string`, which
+ * `TIcon`'s `name` does not accept.
+ */
+interface CoveredResource {
+  type: string;
+  description: string;
+  status: 'covered' | 'planned';
+  to: string | null;
+  icon: AwsIconName;
+}
+
+// Computed (not a plain const) for the same reason: t() must run per render.
+const coveredResources = computed<CoveredResource[]>(() => [
   {
-    type: 'SNS Topics',
-    description: 'Pub/sub fan-out for cross-service events',
-    status: 'covered' as const,
+    type: t('overview.coveredSnsTitle'),
+    description: t('overview.coveredSnsDescription'),
+    status: 'covered',
     to: null,
+    icon: 'aws-sns',
   },
   {
-    type: 'SQS Queues',
-    description: 'Async message queues with consumer monitoring',
-    status: 'covered' as const,
+    type: t('overview.coveredSqsTitle'),
+    description: t('overview.coveredSqsDescription'),
+    status: 'covered',
     to: '/queues',
+    icon: 'aws-sqs',
   },
   {
-    type: 'DynamoDB Tables',
-    description: 'Tables, indexes, items explorer and seeds',
-    status: 'covered' as const,
+    type: t('overview.coveredDynamoTitle'),
+    description: t('overview.coveredDynamoDescription'),
+    status: 'covered',
     to: '/dynamo',
+    icon: 'aws-dynamodb',
   },
   {
-    type: 'S3 Buckets',
-    description: 'Buckets, objects browser, upload/download, Lambda notifications',
-    status: 'covered' as const,
+    type: t('overview.coveredS3Title'),
+    description: t('overview.coveredS3Description'),
+    status: 'covered',
     to: '/buckets',
+    icon: 'aws-s3',
   },
-];
+]);
 
-onMounted(() => {
-  loadAll();
+onMounted(async () => {
+  await loadAll();
+  // A stack with nothing registered and no dismissed flag is a first run —
+  // hand the user to the guided setup instead of an empty dashboard.
+  if (services.value.length === 0 && !isOnboardingDone()) {
+    void router.push('/onboarding');
+    return;
+  }
   timer = window.setInterval(loadAll, 15000);
 });
 
@@ -125,39 +184,38 @@ onBeforeUnmount(() => {
           <TIcon name="zap" />
           <TStack direction="vertical" gap="0.125rem">
             <TText size="xl" weight="semibold">Local Serverless Stack</TText>
-            <TText tone="muted">One LocalStack. Every microservice. Zero docker juggling.</TText>
+            <TText tone="muted">{{ t('overview.heroTagline') }}</TText>
           </TStack>
         </TStack>
         <p style="max-width: 70ch; line-height: 1.55;">
-          A single control plane for your local serverless workflow. Register a Serverless Framework project
-          and LSS parses its CloudFormation template, provisions the resources in a shared LocalStack
-          instance, wires up event-source mappings, and gives you live visibility into every queue, table,
-          and topic — without spinning up a separate LocalStack per service.
+          {{ t('overview.heroParagraph') }}
         </p>
         <TStack direction="horizontal" gap="0.5rem" wrap>
-          <TBadge :tone="localstackTone" variant="soft">
-            LocalStack {{ health?.localstack ? 'running' : 'offline' }}
+          <TBadge :tone="engineTone" variant="soft">
+            {{ engineRunning ? t('overview.engineBadgeRunning') : t('overview.engineBadgeOffline') }}
           </TBadge>
           <TBadge
             v-if="proxyEnabled"
             :tone="proxyRunning ? 'success' : 'warning'"
             variant="soft"
           >
-            Dynamo Proxy {{ proxyRunning ? 'on' : 'enabled (not listening)' }}
+            {{ proxyRunning ? t('overview.proxyBadgeOn') : t('overview.proxyBadgeNotListening') }}
           </TBadge>
-          <TBadge v-else tone="neutral" variant="soft">Dynamo Proxy off</TBadge>
+          <TBadge v-else tone="neutral" variant="soft">{{ t('overview.proxyBadgeOff') }}</TBadge>
           <TBadge :tone="autoPackage ? 'info' : 'neutral'" variant="soft">
-            Auto-package {{ autoPackage ? 'on' : 'off' }}
+            {{ t('overview.autoPackage') }} {{ autoPackage ? t('overview.on') : t('overview.off') }}
           </TBadge>
           <TBadge :tone="persistence ? 'info' : 'neutral'" variant="soft">
-            Persistence {{ persistence ? 'on' : 'off' }}
+            {{ t('overview.persistence') }} {{ persistence ? t('overview.on') : t('overview.off') }}
           </TBadge>
         </TStack>
       </TStack>
     </TCard>
 
+    <ActivityPanel />
+
     <TStack v-if="loading && !health" direction="horizontal" justify="center" align="center">
-      <TSpinner label="Loading overview..." />
+      <TSpinner :label="t('overview.loading')" />
     </TStack>
 
     <template v-else>
@@ -165,46 +223,45 @@ onBeforeUnmount(() => {
       <TGrid :columns="2" gap="1rem">
         <TCard variant="outline">
           <template #header>
-            <TText weight="semibold">Server status</TText>
+            <TText weight="semibold">{{ t('overview.serverStatus') }}</TText>
           </template>
           <TDescriptionList>
-            <TDescriptionItem label="LocalStack">
-              <TBadge :tone="health?.localstack ? 'success' : 'danger'" variant="soft">
-                {{ health?.localstack ? 'Running' : 'Offline' }}
+            <TDescriptionItem :label="t('overview.selfEngine')">
+              <TBadge :tone="engineTone" variant="soft">
+                {{ engineRunning ? t('overview.running') : t('overview.offline') }}
               </TBadge>
             </TDescriptionItem>
-            <TDescriptionItem label="Endpoint">
-              <TText family="mono">{{ config?.localstack?.endpoint || '—' }}</TText>
+            <TDescriptionItem :label="t('overview.endpoint')">
+              <TText family="mono">{{ config?.engine?.endpoint || '—' }}</TText>
             </TDescriptionItem>
-            <TDescriptionItem label="Image">
-              <TText family="mono" size="sm">{{ config?.localstack?.image || '—' }}</TText>
-            </TDescriptionItem>
-            <TDescriptionItem label="Mode">
-              <TTag size="sm" variant="soft">{{ config?.localstack?.mode || '—' }}</TTag>
+            <TDescriptionItem :label="t('overview.runsIn')">
+              <TTag size="sm" variant="soft">{{ t('overview.runsInValue') }}</TTag>
             </TDescriptionItem>
           </TDescriptionList>
           <TDivider />
           <TDescriptionList>
-            <TDescriptionItem label="Dynamo Proxy">
+            <TDescriptionItem :label="t('overview.dynamoProxy')">
               <TStack direction="horizontal" gap="0.375rem" align="center">
                 <TBadge
                   v-if="proxyEnabled"
                   :tone="proxyRunning ? 'success' : 'warning'"
                   variant="soft"
                 >
-                  {{ proxyRunning ? `Listening :${health?.dynamoProxy?.port}` : 'Enabled, not listening' }}
+                  {{ proxyRunning
+                    ? t('overview.proxyListening', { port: health?.dynamoProxy?.port ?? '' })
+                    : t('overview.proxyEnabledNotListening') }}
                 </TBadge>
-                <TBadge v-else tone="neutral" variant="soft">Disabled</TBadge>
+                <TBadge v-else tone="neutral" variant="soft">{{ t('common.disabled') }}</TBadge>
               </TStack>
             </TDescriptionItem>
-            <TDescriptionItem label="Auto-package">
+            <TDescriptionItem :label="t('overview.autoPackage')">
               <TBadge :tone="autoPackage ? 'info' : 'neutral'" variant="soft">
-                {{ autoPackage ? 'on' : 'off' }}
+                {{ autoPackage ? t('overview.on') : t('overview.off') }}
               </TBadge>
             </TDescriptionItem>
-            <TDescriptionItem label="Persistence">
+            <TDescriptionItem :label="t('overview.persistence')">
               <TBadge :tone="persistence ? 'info' : 'neutral'" variant="soft">
-                {{ persistence ? 'on' : 'off' }}
+                {{ persistence ? t('overview.on') : t('overview.off') }}
               </TBadge>
             </TDescriptionItem>
           </TDescriptionList>
@@ -213,39 +270,46 @@ onBeforeUnmount(() => {
         <TCard variant="outline">
           <template #header>
             <TStack direction="horizontal" justify="space-between" align="center">
-              <TText weight="semibold">LSS configuration</TText>
+              <TText weight="semibold">{{ t('overview.lssConfiguration') }}</TText>
               <RouterLink to="/settings" style="text-decoration: none;">
-                <TButton size="sm" variant="ghost">Edit <TIcon name="arrow-right" /></TButton>
+                <TButton size="sm" variant="ghost">{{ t('overview.edit') }} <TIcon name="arrow-right" /></TButton>
               </RouterLink>
             </TStack>
           </template>
           <TDescriptionList>
-            <TDescriptionItem label="Engine">
+            <TDescriptionItem :label="t('overview.engine')">
               <TTag size="sm" variant="soft">{{ config?.engine?.kind || '—' }}</TTag>
             </TDescriptionItem>
-            <TDescriptionItem label="Default region">
+            <TDescriptionItem :label="t('overview.defaultRegion')">
               <TText family="mono">{{ config?.region || '—' }}</TText>
             </TDescriptionItem>
-            <TDescriptionItem label="Server port">
+            <TDescriptionItem :label="t('overview.serverPort')">
               <TText family="mono">{{ config?.serverPort || '—' }}</TText>
             </TDescriptionItem>
-            <TDescriptionItem label="LocalStack services">
+            <TDescriptionItem :label="t('overview.emulatedServices')">
               <TStack direction="horizontal" gap="0.25rem" wrap justify="flex-end">
-                <TTag
-                  v-for="svc in (config?.services || [])"
-                  :key="svc"
-                  size="sm"
-                  variant="soft"
-                >
-                  {{ svc }}
+                <!-- The mark is decorative: the id beside it already is the tag's
+                     accessible name, and 'aoss'/'sts' are exactly the labels a
+                     screen reader should read out here. The v-if sits on the
+                     slot rather than on the TIcon because TTag renders its icon
+                     frame from `$slots.icon` alone — an always-declared slot
+                     would leave an empty frame (and its gap) on an unmapped id. -->
+                <TTag v-for="svc in emulatedServiceTags" :key="svc.id" size="sm" variant="soft">
+                  <template
+                    v-if="svc.icon"
+                    #icon
+                  >
+                    <TIcon :name="svc.icon" />
+                  </template>
+                  {{ svc.id }}
                 </TTag>
-                <TText v-if="!(config?.services || []).length" tone="muted">—</TText>
+                <TText v-if="!emulatedServiceTags.length" tone="muted">—</TText>
               </TStack>
             </TDescriptionItem>
-            <TDescriptionItem label="Seeds dir">
+            <TDescriptionItem :label="t('overview.seedsDir')">
               <TText family="mono" size="xs">{{ config?.seedsDir || '—' }}</TText>
             </TDescriptionItem>
-            <TDescriptionItem v-if="config?.configPath" label="Config file">
+            <TDescriptionItem v-if="config?.configPath" :label="t('overview.configFile')">
               <TText family="mono" size="xs">{{ config.configPath }}</TText>
             </TDescriptionItem>
           </TDescriptionList>
@@ -256,9 +320,9 @@ onBeforeUnmount(() => {
       <TCard variant="outline">
         <template #header>
           <TStack direction="horizontal" justify="space-between" align="center">
-            <TText weight="semibold">Exposed ports</TText>
+            <TText weight="semibold">{{ t('overview.exposedPorts') }}</TText>
             <TText tone="muted" size="xs">
-              What to point your SDKs, curl and browser at
+              {{ t('overview.exposedPortsHint') }}
             </TText>
           </TStack>
         </template>
@@ -270,65 +334,102 @@ onBeforeUnmount(() => {
           >
             <TStack direction="horizontal" gap="0.5rem" align="center" wrap justify="flex-end">
               <TText tone="muted" size="xs">{{ entry.description }}</TText>
-              <TBadge :tone="portKindTone[entry.kind]" variant="soft">{{ portKindLabel[entry.kind] }}</TBadge>
+              <TBadge :tone="portKindTone[entry.kind]" variant="soft">{{ portKindLabel(entry.kind) }}</TBadge>
               <TText family="mono" size="sm">{{ entry.url }}</TText>
             </TStack>
           </TDescriptionItem>
         </TDescriptionList>
-        <TText v-else tone="muted" size="sm">No ports reported — is the orchestrator healthy?</TText>
+        <TText v-else tone="muted" size="sm">{{ t('overview.noPorts') }}</TText>
       </TCard>
 
-      <!-- Totalizers -->
+      <!-- Totalizers. Each tile counts one thing, so each carries that thing's
+           mark in TStat's #icon slot: the seven AWS resource counters get the
+           official service icon, and "services running" — which counts
+           LSS-registered microservices, not an AWS service — gets the same
+           TreeUI functional icon the sidebar uses for that concept. Every
+           label already names what it counts, so the marks stay decorative. -->
       <TGrid :columns="5" gap="1rem">
         <TStat
-          label="Services running"
+          :label="t('overview.statServicesRunning')"
           :value="`${runningServices} / ${totalServices}`"
           tone="success"
-        />
+        >
+          <template #icon>
+            <TIcon name="boxes" />
+          </template>
+        </TStat>
         <TStat
-          label="Lambdas online"
+          :label="t('overview.statLambdasOnline')"
           :value="`${lambdasOnline} / ${totalLambdas}`"
           tone="success"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-lambda" />
+          </template>
+        </TStat>
         <TStat
-          label="API routes"
+          :label="t('overview.statApiRoutes')"
           :value="apiRoutesTotal"
           tone="info"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-api-gateway" />
+          </template>
+        </TStat>
         <TStat
-          label="DynamoDB tables"
+          :label="t('overview.statDynamoTables')"
           :value="resources.tables.length"
           tone="info"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-dynamodb" />
+          </template>
+        </TStat>
         <TStat
-          label="SQS queues"
+          :label="t('overview.statSqsQueues')"
           :value="resources.queues.length"
           tone="warning"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-sqs" />
+          </template>
+        </TStat>
         <TStat
-          label="SNS topics"
+          :label="t('overview.statSnsTopics')"
           :value="resources.topics.length"
           tone="info"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-sns" />
+          </template>
+        </TStat>
         <TStat
-          label="S3 buckets"
+          :label="t('overview.statS3Buckets')"
           :value="resources.buckets.length"
           tone="neutral"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-s3" />
+          </template>
+        </TStat>
         <TStat
-          label="OpenSearch collections"
+          :label="t('overview.statOpenSearchCollections')"
           :value="resources.collections?.length ?? 0"
           tone="info"
-        />
+        >
+          <template #icon>
+            <TIcon name="aws-opensearch" />
+          </template>
+        </TStat>
       </TGrid>
 
       <!-- Coverage -->
       <TCard variant="outline">
         <template #header>
           <TStack direction="horizontal" justify="space-between" align="center">
-            <TText weight="semibold">What's covered</TText>
+            <TText weight="semibold">{{ t('overview.whatsCovered') }}</TText>
             <TText tone="muted" size="xs">
-              Resource types LSS understands today
+              {{ t('overview.whatsCoveredHint') }}
             </TText>
           </TStack>
         </template>
@@ -340,14 +441,23 @@ onBeforeUnmount(() => {
           >
             <TStack direction="horizontal" gap="0.75rem" align="center" justify="space-between">
               <TStack direction="vertical" gap="0.125rem">
+                <!-- Two marks, two meanings: the AWS brand leads because it says
+                     WHICH service the row is about, and check/clock stays a
+                     TreeUI functional icon because it says supported vs planned.
+                     Moving that one into the badge's #icon slot keeps it next to
+                     the words it qualifies instead of competing with the brand
+                     for the leading position. -->
                 <TStack direction="horizontal" gap="0.5rem" align="center">
-                  <TIcon :name="item.status === 'covered' ? 'check' : 'clock'" />
+                  <TIcon :name="item.icon" />
                   <TText weight="semibold">{{ item.type }}</TText>
                   <TBadge
                     :tone="item.status === 'covered' ? 'success' : 'neutral'"
                     variant="soft"
                   >
-                    {{ item.status === 'covered' ? 'Supported' : 'Planned' }}
+                    <template #icon>
+                      <TIcon :name="item.status === 'covered' ? 'check' : 'clock'" />
+                    </template>
+                    {{ item.status === 'covered' ? t('overview.supported') : t('overview.planned') }}
                   </TBadge>
                 </TStack>
                 <TText tone="muted" size="sm">
@@ -359,7 +469,7 @@ onBeforeUnmount(() => {
                 :to="item.to"
                 style="text-decoration: none;"
               >
-                <TButton size="sm" variant="ghost">Open <TIcon name="arrow-right" /></TButton>
+                <TButton size="sm" variant="ghost">{{ t('overview.open') }} <TIcon name="arrow-right" /></TButton>
               </RouterLink>
             </TStack>
           </TCard>

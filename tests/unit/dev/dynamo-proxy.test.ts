@@ -5,6 +5,7 @@ import http from 'http';
 import { once } from 'events';
 import { AddressInfo } from 'net';
 import { startDynamoProxy } from '../../../src/server/dev/dynamo-proxy';
+import { getBindHost } from '../../../src/server/services/bind-host';
 
 function close(server: http.Server): Promise<void> {
   return new Promise(resolve => server.close(() => resolve()));
@@ -71,13 +72,43 @@ describe('startDynamoProxy', () => {
     expect(await res.text()).toBe('Bad Gateway');
   });
 
-  it('defaults the port to 8000 when not provided', async () => {
-    // Stub http.createServer so we never bind 8000; assert the default arg is used.
-    const fakeServer = { listen: jest.fn((_p: number, cb?: () => void) => cb && cb()) } as unknown as http.Server;
+  it('defaults the port to 8000 and binds the shared bind host', async () => {
+    // Stub http.createServer so we never bind 8000; assert the default arg is
+    // used — and that the host argument is passed at all. Omitting it is what
+    // made this credential-free pass-through to the engine's DynamoDB surface
+    // answer on every interface (a bare `listen(port)` binds `::`), regardless
+    // of how the orchestrator itself was fenced.
+    const fakeServer = {
+      listen: jest.fn((_p: number, _host: string, cb?: () => void) => cb && cb()),
+      on: jest.fn(),
+    } as unknown as http.Server;
     const spy = jest.spyOn(http, 'createServer').mockReturnValue(fakeServer);
     const returned = startDynamoProxy('http://localhost:4566');
     expect(returned).toBe(fakeServer);
     expect(spy).toHaveBeenCalled();
-    expect((fakeServer.listen as jest.Mock)).toHaveBeenCalledWith(8000, expect.any(Function));
+    expect((fakeServer.listen as jest.Mock)).toHaveBeenCalledWith(8000, getBindHost(), expect.any(Function));
+    expect((fakeServer.on as jest.Mock)).toHaveBeenCalledWith('error', expect.any(Function));
+  });
+
+  // The proxy is optional: a busy port warns and leaves the orchestrator up,
+  // instead of throwing an unhandled 'error' event that kills the process.
+  it('warns instead of throwing when the port is already in use', () => {
+    const handlers: Record<string, (err: NodeJS.ErrnoException) => void> = {};
+    const fakeServer = {
+      listen: jest.fn(),
+      on: jest.fn((event: string, handler: (err: NodeJS.ErrnoException) => void) => {
+        handlers[event] = handler;
+      }),
+    } as unknown as http.Server;
+    jest.spyOn(http, 'createServer').mockReturnValue(fakeServer);
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    startDynamoProxy('http://localhost:4566', 8123);
+    handlers.error(Object.assign(new Error('bind failed'), { code: 'EADDRINUSE' }));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('port 8123 is already in use'));
+
+    handlers.error(Object.assign(new Error('some other failure'), { code: 'EACCES' }));
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('some other failure'));
+    warn.mockRestore();
   });
 });

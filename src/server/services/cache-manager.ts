@@ -1,9 +1,13 @@
 import fs from 'fs/promises';
 import path from 'path';
 import os from 'os';
-import crypto from 'crypto';
 import { ConfigManager } from './config-manager.js';
+import { projectCacheSegment } from './project-scope.js';
 import type { RegisteredFunction, HttpRoute, AuthorizerConfig } from './serverless-state-parser.js';
+
+// Re-exported for the existing importers (the segment itself now lives in
+// project-scope.ts, which config-manager can import without a cycle).
+export { projectCacheSegment };
 
 export interface ServiceMetadata {
   name: string;
@@ -20,20 +24,6 @@ export interface ServiceMetadata {
   functions?: RegisteredFunction[];
   routes?: HttpRoute[];
   authorizers?: AuthorizerConfig[];
-}
-
-// Stable, filesystem-safe cache segment for one project root: a readable slug
-// from the directory basename plus a short hash of the absolute path, so two
-// projects whose directories share a basename still get distinct namespaces.
-export function projectCacheSegment(projectRoot: string): string {
-  const absoluteRoot = path.resolve(projectRoot);
-  const slug = path.basename(absoluteRoot)
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 40) || 'project';
-  const hash = crypto.createHash('sha256').update(absoluteRoot).digest('hex').slice(0, 8);
-  return `${slug}-${hash}`;
 }
 
 export class CacheManager {

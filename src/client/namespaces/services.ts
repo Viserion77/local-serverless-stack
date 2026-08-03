@@ -26,8 +26,49 @@ export interface ServiceRuntimeStatus {
   };
 }
 
+// One row of GET /api/services/scan — a discovered (not necessarily
+// registered) Serverless/osls service under the project root.
+export interface ScannedService {
+  name: string;
+  root: string;
+  relPath: string;
+  configFile: string;
+  installed: boolean;
+  packaged: boolean;
+  registered: boolean;
+  region?: string;
+  // Effective values: `serviceRuntime` config overrides win over yml hints.
+  apiPort?: number;
+  invokePort?: number;
+  // Effective package command for this service (servicePackaging else global).
+  packageCommand: string;
+  // `code` is what a localised surface translates; `message` is the English
+  // fallback and what a non-localised consumer (log, script) reads.
+  warnings: ScanWarning[];
+}
+
+export interface ScanWarning {
+  code: string;
+  message: string;
+  params?: Record<string, string>;
+}
+
+// Result of the preparation endpoints (install/package).
+export interface PrepareServiceResult {
+  success: boolean;
+  exitCode: number;
+  durationMs: number;
+  output: string;
+}
+
 export interface ServicesApi {
   register(input: RegisterServiceInput): Promise<unknown>;
+  /** GET /api/services/scan — discover Serverless/osls services under the project root. */
+  scan(): Promise<{ projectRoot: string; services: ScannedService[] }>;
+  /** POST /api/services/install — install a service's dependencies (default `npm install`). */
+  install(servicePath: string, command?: string): Promise<PrepareServiceResult>;
+  /** POST /api/services/package — package a service with its effective package command. */
+  package(servicePath: string): Promise<PrepareServiceResult>;
   list(): Promise<unknown[]>;
   get(name: string): Promise<unknown>;
   remove(name: string): Promise<{ success: true }>;
@@ -47,6 +88,9 @@ export function createServicesApi(http: Http): ServicesApi {
   const base = (name: string) => `/api/services/${encodeURIComponent(name)}`;
   return {
     register: (input) => http.json('POST', '/api/services/register', { body: input }),
+    scan: () => http.json('GET', '/api/services/scan'),
+    install: (servicePath, command) => http.json('POST', '/api/services/install', { body: { servicePath, command } }),
+    package: (servicePath) => http.json('POST', '/api/services/package', { body: { servicePath } }),
     list: () => http.json('GET', '/api/services'),
     get: (name) => http.json('GET', base(name)),
     remove: (name) => http.json('DELETE', base(name)),

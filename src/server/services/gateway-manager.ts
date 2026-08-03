@@ -5,6 +5,7 @@
 // proxies keep their ports and contracts; only the process answering changes.
 
 import http from 'http';
+import { getBindHost } from './bind-host.js';
 import { FunctionRegistry, ServiceEntry } from './function-registry.js';
 import { LambdaRuntimeManager } from './lambda-runtime-manager.js';
 import { AuthorizerService } from './authorizer-service.js';
@@ -131,6 +132,16 @@ export class GatewayManager {
   // EADDRINUSE never fails the registration: the listener reports
   // 'port-conflict' and rebinding is retried every `rebindIntervalMs` until
   // the port frees up or the service stops.
+  //
+  // Every `listen()` below passes `getBindHost()` explicitly. These are raw
+  // http.Servers: they never reach Express, so they have no CORS middleware and
+  // no origin check, and `handleInvokeRequest` executes a registered Lambda
+  // handler with the request's JSON body as the event — with
+  // `FunctionRegistry.resolve()` falling back to the global registry, so any
+  // function of any service is reachable from any invoke port. Omitting the host
+  // (which is what this did) binds `::`, so the whole set was answering on the
+  // LAN even with the orchestrator itself fenced to loopback: the code-execution
+  // surface was precisely the part the fence did not cover.
   private bind(
     port: number,
     handler: (req: http.IncomingMessage, res: http.ServerResponse) => void,
@@ -143,12 +154,12 @@ export class GatewayManager {
       let hadConflict = false;
       server.on('error', (err: NodeJS.ErrnoException) => {
         if (err.code === 'EADDRINUSE') {
-          // Port conflicts are first-class during migration (serverless-offline
-          // may still own the port) — flag it, never fail the registration.
+          // Port conflicts are first-class: another process (or another LSS instance)
+          // may own the port — flag it, never fail the registration.
           setStatus('port-conflict');
           if (!hadConflict) {
             hadConflict = true;
-            console.warn(`⚠️  ${label}: port ${port} already in use — retrying every ${this.rebindIntervalMs}ms (is serverless-offline still running?)`);
+            console.warn(`⚠️  ${label}: port ${port} already in use — retrying every ${this.rebindIntervalMs}ms (another process owns it)`);
           }
           this.scheduleRebind(server, port, rebindTimers);
         } else {
@@ -166,7 +177,7 @@ export class GatewayManager {
         }
         resolve(server);
       });
-      server.listen(port);
+      server.listen(port, getBindHost());
     });
   }
 
@@ -177,8 +188,10 @@ export class GatewayManager {
     const timer = setTimeout(() => {
       rebindTimers.delete(timer);
       // A failed retry re-enters the server's 'error' handler and reschedules.
+      // Same host as the first attempt — a retry that widened the bind would
+      // reopen the hole a few seconds after the fence closed it.
       if (!server.listening) {
-        server.listen(port);
+        server.listen(port, getBindHost());
       }
     }, this.rebindIntervalMs);
     timer.unref();

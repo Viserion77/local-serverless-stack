@@ -6,13 +6,16 @@ import {
   TCard, TCodeBlock, TTag, TEmptyState, TGrid, TStat, TTable, TTextarea, TFormField,
   TSelect, TDivider, TText, TIcon, useToast,
 } from '@treeui/vue';
-import type { TreeBadgeTone } from '@treeui/vue';
+import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { InvokeResult, LambdaDetailInfo, LambdaInvocationRecord } from '../../services/api';
+import { toLambdaTriggers } from './triggerIcons';
+import { useI18n } from '../../i18n';
 
 const props = defineProps<{ functionName: string }>();
 const emit = defineEmits<{ (e: 'back'): void }>();
 
+const { t } = useI18n();
 const route = useRoute();
 const router = useRouter();
 const toast = useToast();
@@ -44,33 +47,40 @@ const invoking = ref(false);
 const lastResult = ref<InvokeResult | null>(null);
 const lastAccepted = ref(false);
 
-const invocationTypeOptions = [
-  { value: 'RequestResponse', label: 'RequestResponse (sync)' },
-  { value: 'Event', label: 'Event (async, fire & forget)' },
-];
+// Computed, not a module const: the labels have to follow a language switch.
+// `RequestResponse` and `Event` are the API's own invocation types — only the
+// parenthetical hint is translated.
+const invocationTypeOptions = computed(() => [
+  { value: 'RequestResponse', label: t('lambdas.invocationTypeSync') },
+  { value: 'Event', label: t('lambdas.invocationTypeAsync') },
+]);
 
 // Logs tab state
 const history = ref<LambdaInvocationRecord[]>([]);
 const logsLoading = ref(false);
 const expandedLogs = ref<Record<number, boolean>>({});
 
-const envColumns = [
-  { key: 'key', label: 'Key' },
-  { key: 'value', label: 'Value' },
-];
+const envColumns = computed(() => [
+  { key: 'key', label: t('lambdas.key') },
+  { key: 'value', label: t('lambdas.value') },
+]);
 
 const envRows = computed(() =>
   Object.entries(fn.value?.environment || {}).map(([key, value]) => ({ key, value })),
 );
 
-const routesColumns = [
-  { key: 'method', label: 'Method' },
-  { key: 'path', label: 'Path' },
-  { key: 'eventType', label: 'Type' },
-  { key: 'authorizerName', label: 'Authorizer' },
-];
+const routesColumns = computed(() => [
+  { key: 'method', label: t('lambdas.method') },
+  { key: 'path', label: t('lambdas.path') },
+  { key: 'eventType', label: t('common.type') },
+  { key: 'authorizerName', label: t('lambdas.authorizer') },
+]);
 
 const routesRows = computed(() => (fn.value?.routes || []).map(r => ({ ...r })));
+
+// Same data and the same mapping as the list column, so the two screens brand
+// a trigger identically.
+const triggerMarks = computed(() => toLambdaTriggers(fn.value?.triggers || []));
 
 const resultPayloadPretty = computed(() => {
   if (!lastResult.value) return '';
@@ -89,7 +99,7 @@ async function load(showSpinner = true) {
     fn.value = await api.getLambda(props.functionName);
     error.value = null;
   } catch (err: any) {
-    error.value = err.message || 'Failed to load function';
+    error.value = err.message || t('lambdas.detailLoadFailed');
     fn.value = null;
   } finally {
     loading.value = false;
@@ -103,7 +113,7 @@ async function loadLogs() {
     history.value = [...res.invocations].reverse();
   } catch (err: any) {
     toast.add({
-      title: 'Failed to load invocation logs',
+      title: t('lambdas.logsLoadFailed'),
       description: err.message,
       variant: 'danger',
     });
@@ -120,8 +130,8 @@ async function invoke() {
       payload = JSON.parse(text);
     } catch {
       toast.add({
-        title: 'Invalid JSON payload',
-        description: 'Fix the payload before invoking.',
+        title: t('lambdas.invalidJsonTitle'),
+        description: t('lambdas.invalidJsonDescription'),
         variant: 'danger',
       });
       return;
@@ -137,8 +147,8 @@ async function invoke() {
       lastResult.value = null;
       lastAccepted.value = true;
       toast.add({
-        title: 'Invocation accepted',
-        description: 'Event invocation queued (fire & forget).',
+        title: t('lambdas.acceptedTitle'),
+        description: t('lambdas.acceptedDescription'),
         variant: 'success',
       });
     } else {
@@ -146,7 +156,7 @@ async function invoke() {
       lastResult.value = result as InvokeResult;
       if (!(result as InvokeResult).ok) {
         toast.add({
-          title: 'Function returned an error',
+          title: t('lambdas.functionErrorTitle'),
           description: (result as InvokeResult).functionError?.errorMessage,
           variant: 'danger',
         });
@@ -155,7 +165,7 @@ async function invoke() {
     await load(false);
   } catch (err: any) {
     toast.add({
-      title: 'Failed to invoke function',
+      title: t('lambdas.invokeFailed'),
       description: err.message,
       variant: 'danger',
     });
@@ -168,7 +178,7 @@ function toggleLogs(idx: number) {
   expandedLogs.value[idx] = !expandedLogs.value[idx];
 }
 
-function statusTone(status?: string): TreeBadgeTone {
+function statusTone(status?: string): TBadgeTone {
   switch (status) {
     case 'online': return 'success';
     case 'starting': return 'info';
@@ -177,7 +187,19 @@ function statusTone(status?: string): TreeBadgeTone {
   }
 }
 
-function methodTone(method: string): TreeBadgeTone {
+// Same mapping as the list: the API's lowercase enum shown in the user's
+// language, with anything unexpected passed through untouched.
+function statusLabel(status?: string): string {
+  switch (status) {
+    case 'online': return t('common.online');
+    case 'starting': return t('lambdas.statusStarting');
+    case 'stopped': return t('common.stopped');
+    case 'error': return t('lambdas.statusError');
+    default: return status ?? t('common.unknown');
+  }
+}
+
+function methodTone(method: string): TBadgeTone {
   return method === 'ANY' ? 'info' : 'neutral';
 }
 
@@ -206,11 +228,14 @@ watch(() => props.functionName, () => {
   <TStack direction="vertical" gap="1rem">
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
-        <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> Lambdas</TButton>
+        <TButton size="sm" variant="ghost" @click="emit('back')"><TIcon name="arrow-left" /> {{ t('nav.lambdas') }}</TButton>
+        <!-- Detail-screen identity: one mark says which AWS service you are
+             inside, decorative because the back link already names it. -->
+        <TIcon name="aws-lambda" />
         <TText weight="semibold" size="lg">{{ functionName }}</TText>
         <TText v-if="fn" tone="muted" family="mono" size="xs">{{ fn.fullName }}</TText>
       </TStack>
-      <TButton size="sm" variant="ghost" :loading="loading" @click="load()">Refresh</TButton>
+      <TButton size="sm" variant="ghost" :loading="loading" @click="load()">{{ t('common.refresh') }}</TButton>
     </TStack>
 
     <TAlert v-if="error" variant="danger" dismissible @dismiss="error = null">
@@ -218,24 +243,24 @@ watch(() => props.functionName, () => {
     </TAlert>
 
     <TStack v-if="loading && !fn" direction="horizontal" justify="center" align="center">
-      <TSpinner label="Loading function..." />
+      <TSpinner :label="t('lambdas.loadingDetail')" />
     </TStack>
 
     <template v-else-if="fn">
       <TGrid :columns="5" gap="0.75rem">
-        <TStat label="Status" :value="fn.status" :tone="statusTone(fn.status)" />
-        <TStat label="Runtime" :value="fn.runtime" tone="info" />
-        <TStat label="Memory" :value="`${fn.memorySize} MB`" tone="neutral" />
-        <TStat label="Timeout" :value="`${fn.timeout}s`" tone="neutral" />
-        <TStat label="Mode" :value="fn.executionMode || '—'" tone="neutral" />
+        <TStat :label="t('common.status')" :value="statusLabel(fn.status)" :tone="statusTone(fn.status)" />
+        <TStat :label="t('lambdas.runtime')" :value="fn.runtime" tone="info" />
+        <TStat :label="t('lambdas.memory')" :value="`${fn.memorySize} MB`" tone="neutral" />
+        <TStat :label="t('lambdas.timeout')" :value="`${fn.timeout}s`" tone="neutral" />
+        <TStat :label="t('lambdas.mode')" :value="fn.executionMode || '—'" tone="neutral" />
       </TGrid>
 
       <TTabs v-model="activeTab">
         <TTabList>
-          <TTab value="invoke">Invoke</TTab>
-          <TTab value="triggers">Triggers</TTab>
-          <TTab value="environment">Environment</TTab>
-          <TTab value="logs">Logs</TTab>
+          <TTab value="invoke">{{ t('lambdas.tabInvoke') }}</TTab>
+          <TTab value="triggers">{{ t('lambdas.triggers') }}</TTab>
+          <TTab value="environment">{{ t('lambdas.tabEnvironment') }}</TTab>
+          <TTab value="logs">{{ t('lambdas.tabLogs') }}</TTab>
         </TTabList>
 
         <TTabPanel value="invoke">
@@ -244,13 +269,13 @@ watch(() => props.functionName, () => {
               <TCard variant="outline">
                 <template #header>
                   <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-                    <TText weight="semibold">Invoke function</TText>
+                    <TText weight="semibold">{{ t('lambdas.invokeTitle') }}</TText>
                     <TText tone="muted" family="mono" size="xs">{{ fn.handler }}</TText>
                   </TStack>
                 </template>
 
                 <TStack direction="vertical" gap="0.75rem">
-                  <TFormField label="Event payload" hint="JSON passed to the handler as the event">
+                  <TFormField :label="t('lambdas.payloadLabel')" :hint="t('lambdas.payloadHint')">
                     <TTextarea
                       v-model="payloadText"
                       class="mono"
@@ -258,7 +283,7 @@ watch(() => props.functionName, () => {
                       placeholder="{}"
                     />
                   </TFormField>
-                  <TFormField label="Invocation type" style="max-width: 20rem;">
+                  <TFormField :label="t('lambdas.invocationTypeLabel')" style="max-width: 20rem;">
                     <TSelect v-model="invocationType" :options="invocationTypeOptions" />
                   </TFormField>
                 </TStack>
@@ -266,13 +291,15 @@ watch(() => props.functionName, () => {
                 <template #footer>
                   <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
                     <TStack direction="horizontal" gap="0.5rem" align="center">
-                      <TButton variant="solid" :loading="invoking" @click="invoke">Invoke</TButton>
+                      <TButton variant="solid" :loading="invoking" @click="invoke">
+                        {{ t('lambdas.invokeAction') }}
+                      </TButton>
                       <TButton variant="ghost" :disabled="invoking" @click="payloadText = '{}'">
-                        Reset payload
+                        {{ t('lambdas.resetPayload') }}
                       </TButton>
                     </TStack>
                     <TText v-if="lastAccepted" tone="muted" size="xs">
-                      Last invocation accepted as Event — check the Logs tab for output.
+                      {{ t('lambdas.acceptedHint') }}
                     </TText>
                   </TStack>
                 </template>
@@ -282,9 +309,9 @@ watch(() => props.functionName, () => {
                 <template #header>
                   <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
                     <TStack direction="horizontal" gap="0.5rem" align="center">
-                      <TText weight="semibold">Result</TText>
+                      <TText weight="semibold">{{ t('lambdas.resultTitle') }}</TText>
                       <TBadge :tone="lastResult.ok ? 'success' : 'danger'" variant="soft">
-                        {{ lastResult.ok ? 'OK' : (lastResult.functionError?.errorType || 'Error') }}
+                        {{ lastResult.ok ? 'OK' : (lastResult.functionError?.errorType || t('lambdas.errorBadge')) }}
                       </TBadge>
                     </TStack>
                     <TText tone="muted" family="mono" size="xs">
@@ -295,16 +322,16 @@ watch(() => props.functionName, () => {
 
                 <TStack direction="vertical" gap="0.75rem">
                   <template v-if="lastResult.ok">
-                    <TText weight="semibold" size="sm">Response payload</TText>
-                    <TCodeBlock :code="resultPayloadPretty" label="Response payload" max-block-size="24rem" wrap copyable />
+                    <TText weight="semibold" size="sm">{{ t('lambdas.responsePayload') }}</TText>
+                    <TCodeBlock :code="resultPayloadPretty" :label="t('lambdas.responsePayload')" max-block-size="24rem" wrap copyable />
                   </template>
                   <template v-else>
-                    <TText weight="semibold" size="sm">Function error</TText>
-                    <TCodeBlock :code="[`${lastResult.functionError?.errorType || 'Error'}: ${lastResult.functionError?.errorMessage || ''}`, ...(lastResult.functionError?.trace || [])].join('\n')" label="Function error" max-block-size="60vh" wrap copyable />
+                    <TText weight="semibold" size="sm">{{ t('lambdas.functionError') }}</TText>
+                    <TCodeBlock :code="[`${lastResult.functionError?.errorType || 'Error'}: ${lastResult.functionError?.errorMessage || ''}`, ...(lastResult.functionError?.trace || [])].join('\n')" :label="t('lambdas.functionError')" max-block-size="60vh" wrap copyable />
                   </template>
                   <TDivider />
-                  <TText weight="semibold" size="sm">Captured logs</TText>
-                  <TCodeBlock :code="lastResult.logs.join('\n') || '— no output —'" label="Captured logs" max-block-size="60vh" wrap copyable />
+                  <TText weight="semibold" size="sm">{{ t('lambdas.capturedLogs') }}</TText>
+                  <TCodeBlock :code="lastResult.logs.join('\n') || t('lambdas.noOutput')" :label="t('lambdas.capturedLogs')" max-block-size="60vh" wrap copyable />
                 </TStack>
               </TCard>
             </TStack>
@@ -316,12 +343,23 @@ watch(() => props.functionName, () => {
             <TStack direction="vertical" gap="1rem">
               <TCard variant="outline">
                 <template #header>
-                  <TText weight="semibold">Trigger sources</TText>
+                  <TText weight="semibold">{{ t('lambdas.triggerSources') }}</TText>
                 </template>
+                <!-- Same brands as the list column, from the same mapper. The
+                     icons are decorative and sized down: filled tiles at the
+                     20px default would outweigh a `sm` tag's own text. -->
                 <TStack direction="horizontal" gap="0.25rem" wrap>
-                  <template v-if="fn.triggers.length">
-                    <TTag v-for="t in fn.triggers" :key="t" size="sm" variant="soft">
-                      {{ t }}
+                  <template v-if="triggerMarks.length">
+                    <TTag
+                      v-for="trigger in triggerMarks"
+                      :key="trigger.name"
+                      size="sm"
+                      variant="soft"
+                    >
+                      <template v-if="trigger.icon" #icon>
+                        <TIcon :name="trigger.icon" size="14" />
+                      </template>
+                      {{ trigger.name }}
                     </TTag>
                   </template>
                   <TText v-else tone="muted">—</TText>
@@ -330,9 +368,15 @@ watch(() => props.functionName, () => {
 
               <TCard variant="outline">
                 <template #header>
-                  <TText weight="semibold">HTTP routes</TText>
+                  <!-- These routes are served by the API Gateway emulation — a
+                       different AWS service from the Lambda that owns the page,
+                       which is exactly what the mark is useful for here. -->
+                  <TStack direction="horizontal" gap="0.5rem" align="center">
+                    <TIcon name="aws-api-gateway" />
+                    <TText weight="semibold">{{ t('lambdas.httpRoutes') }}</TText>
+                  </TStack>
                 </template>
-                <TTable v-if="fn.routes.length" :columns="routesColumns" :rows="routesRows" aria-label="HTTP routes">
+                <TTable v-if="fn.routes.length" :columns="routesColumns" :rows="routesRows" :aria-label="t('lambdas.httpRoutes')">
                   <template #cell-method="{ row }">
                     <TBadge :tone="methodTone(String(row.method))" variant="soft">
                       {{ row.method }}
@@ -353,8 +397,8 @@ watch(() => props.functionName, () => {
                 </TTable>
                 <TEmptyState
                   v-else
-                  title="No HTTP routes"
-                  description="This function has no http/httpApi events pointing at it."
+                  :title="t('lambdas.noRoutesTitle')"
+                  :description="t('lambdas.noRoutesDescription')"
                 />
               </TCard>
             </TStack>
@@ -365,9 +409,9 @@ watch(() => props.functionName, () => {
           <div style="padding-top: 1rem;">
             <TCard variant="outline">
               <template #header>
-                <TText weight="semibold">Environment variables</TText>
+                <TText weight="semibold">{{ t('lambdas.environmentVariables') }}</TText>
               </template>
-              <TTable v-if="envRows.length" :columns="envColumns" :rows="envRows" aria-label="Environment variables">
+              <TTable v-if="envRows.length" :columns="envColumns" :rows="envRows" :aria-label="t('lambdas.environmentVariables')">
                 <template #cell-key="{ row }">
                   <TText family="mono" style="font-size: 0.78rem;">{{ row.key }}</TText>
                 </template>
@@ -377,8 +421,8 @@ watch(() => props.functionName, () => {
               </TTable>
               <TEmptyState
                 v-else
-                title="No environment variables"
-                description="No environment variables are configured for this function."
+                :title="t('lambdas.noEnvTitle')"
+                :description="t('lambdas.noEnvDescription')"
               />
             </TCard>
           </div>
@@ -389,21 +433,23 @@ watch(() => props.functionName, () => {
             <TCard variant="outline">
               <template #header>
                 <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-                  <TText weight="semibold">Recent invocations ({{ history.length }})</TText>
+                  <TText weight="semibold">
+                    {{ t('lambdas.recentInvocations', { count: history.length }) }}
+                  </TText>
                   <TButton size="sm" variant="ghost" :loading="logsLoading" @click="loadLogs">
-                    Refresh
+                    {{ t('common.refresh') }}
                   </TButton>
                 </TStack>
               </template>
 
               <TStack v-if="logsLoading && !history.length" direction="horizontal" justify="center" align="center">
-                <TSpinner label="Loading invocations..." />
+                <TSpinner :label="t('lambdas.loadingInvocations')" />
               </TStack>
 
               <TEmptyState
                 v-else-if="!history.length"
-                title="No invocations recorded"
-                description="Invoke the function to see its captured output here."
+                :title="t('lambdas.noInvocationsTitle')"
+                :description="t('lambdas.noInvocationsDescription')"
               />
 
               <TStack v-else direction="vertical" gap="0.5rem">
@@ -419,7 +465,7 @@ watch(() => props.functionName, () => {
                           <TIcon :name="expandedLogs[idx] ? 'chevron-down' : 'chevron-right'" />
                           <TText size="sm">{{ formatDate(rec.at) }}</TText>
                           <TBadge :tone="rec.ok ? 'success' : 'danger'" variant="soft">
-                            {{ rec.ok ? 'OK' : 'Error' }}
+                            {{ rec.ok ? 'OK' : t('lambdas.errorBadge') }}
                           </TBadge>
                           <TBadge
                             v-if="rec.statusCode && rec.statusCode >= 400"
@@ -430,11 +476,14 @@ watch(() => props.functionName, () => {
                           </TBadge>
                         </TStack>
                         <TText tone="muted" family="mono" size="xs">
-                          {{ rec.durationMs }}ms · {{ rec.logs.length }} line{{ rec.logs.length === 1 ? '' : 's' }}
+                          {{ rec.durationMs }}ms ·
+                          {{ rec.logs.length === 1
+                            ? t('lambdas.logLine', { count: rec.logs.length })
+                            : t('lambdas.logLines', { count: rec.logs.length }) }}
                         </TText>
                       </TStack>
                     </a>
-                    <TCodeBlock v-if="expandedLogs[idx]" :code="rec.logs.join('\n') || '— no output —'" label="Invocation log" max-block-size="60vh" wrap copyable />
+                    <TCodeBlock v-if="expandedLogs[idx]" :code="rec.logs.join('\n') || t('lambdas.noOutput')" :label="t('lambdas.invocationLog')" max-block-size="60vh" wrap copyable />
                   </TStack>
                 </TCard>
               </TStack>

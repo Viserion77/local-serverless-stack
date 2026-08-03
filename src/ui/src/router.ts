@@ -8,6 +8,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Overview' },
   },
   {
+    path: '/onboarding',
+    name: 'onboarding',
+    component: () => import('./pages/OnboardingPage.vue'),
+    meta: { title: 'Onboarding' },
+  },
+  {
     path: '/services',
     name: 'services',
     component: () => import('./pages/ServicesPage.vue'),

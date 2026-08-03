@@ -1,5 +1,5 @@
 // End-to-end validation of raw cross-stack AWS::ApiGatewayV2 routes against the
-// localstack-free example: `gateway-stack` owns NO Lambdas and declares its
+// apigw-raw fixture: `gateway-stack` owns NO Lambdas and declares its
 // ::Api/::Route/::Integration/::Authorizer (+ Lambda::Permission) purely under
 // CFN `resources:`, all targeting users-service's functions by ARN.
 //
@@ -8,10 +8,9 @@
 // service boundary, and NOTHING falls back to an /api/{proxy+} or $default
 // catch-all.
 //
-// Requires Docker + LOCALSTACK_AUTH_TOKEN *and* an installed example
-// (`npm run setup` inside examples/localstack-free, which each service needs for
-// `serverless package`). The suite skips cleanly when either is missing, so it
-// never fails a token-less or un-provisioned checkout.
+// Runs on the self engine — no Docker, no auth token. It still needs the fixture
+// services installed (`npm install` in each, which `serverless package` requires),
+// so it skips cleanly on a checkout where they are not.
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -19,21 +18,20 @@ import fs from 'fs';
 
 const execAsync = promisify(exec);
 const REPO_ROOT = path.resolve(__dirname, '../..');
-const EXAMPLE = path.join(REPO_ROOT, 'examples/localstack-free');
-const CONFIG = path.join(EXAMPLE, 'lss.config.json');
-const BASE = 'http://localhost:3120';
+const FIXTURE = path.join(REPO_ROOT, 'tests/integration/fixtures/apigw-raw');
+const CONFIG = path.join(FIXTURE, 'lss.config.json');
+const BASE = 'http://localhost:3397';
 const GATEWAY_API = 'http://localhost:3613';
 
-const USERS_PATH = path.join(EXAMPLE, 'users-service');
-const GATEWAY_PATH = path.join(EXAMPLE, 'gateway-stack');
+const USERS_PATH = path.join(FIXTURE, 'users-service');
+const GATEWAY_PATH = path.join(FIXTURE, 'gateway-stack');
 
 const LIST_USERS_ARN = 'arn:aws:lambda:sa-east-1:000000000000:function:users-service-dev-listUsers';
 
-// The example must be installed for `serverless package` to run in each service.
-const EXAMPLE_READY = fs.existsSync(path.join(USERS_PATH, 'node_modules'))
+// The fixture services must be installed for `serverless package` to run.
+const FIXTURE_READY = fs.existsSync(path.join(USERS_PATH, 'node_modules'))
   && fs.existsSync(path.join(GATEWAY_PATH, 'node_modules'));
-const HAS_TOKEN = Boolean(process.env.LOCALSTACK_AUTH_TOKEN);
-const suite = HAS_TOKEN && EXAMPLE_READY ? describe : describe.skip;
+const suite = FIXTURE_READY ? describe : describe.skip;
 
 function cli(args: string) {
   return execAsync(`node bin/cli.js ${args}`, { cwd: REPO_ROOT, env: process.env });
@@ -69,8 +67,8 @@ suite('raw cross-stack ApiGatewayV2 routes (integration)', () => {
     await cli(`start --config ${CONFIG}`);
     await waitFor(async () => {
       const res = await fetch(`${BASE}/api/health`);
-      const j = await res.json() as { localstack?: boolean };
-      return j.localstack === true;
+      const j = await res.json() as { engineRunning?: boolean };
+      return j.engineRunning === true;
     }, 150000);
 
     // Register the GATEWAY FIRST, while its target Lambdas are still unknown —

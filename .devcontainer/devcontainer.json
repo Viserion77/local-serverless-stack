@@ -4,58 +4,33 @@
 	"name": "Node.js & TypeScript",
 	// Or use a Dockerfile or Docker Compose file. More info: https://containers.dev/guide/dockerfile
 	"image": "mcr.microsoft.com/devcontainers/typescript-node:1-22-bookworm",
-	"features": {
-		"ghcr.io/devcontainers/features/docker-in-docker:4": {},
-	},
 	"runArgs": [
 		"--net=host"
 	],
-	// REGRA: com --net=host todos os devcontainers da máquina compartilham a rede
-	// do host — porta nova aqui deve evitar faixas já usadas por outros containers.
-	// Convenção DESTE repo: gateways dos exemplos 36xx (invoke = apiPort + 10000
-	// → 136xx), serverless-offline 3002-3003, dashboards dos exemplos 31xx,
-	// consoles de validação dos exemplos 8620-8622, LocalStack 4567/4571-4572,
-	// self engine 14566. Os defaults de produto (3100/4566/8000) continuam no
-	// código, mas o dev neste container usa os overrides do lss.config.json da
-	// raiz (3101/4567/8001) — por isso os defaults não são forwardados aqui.
+	// No features: nothing in this repo shells out to Docker — not the
+	// orchestrator, not the engine, not the test suites (`npm run
+	// test:integration` boots a real stack in-process).
+	//
+	//  14566  LSS — dashboard, REST API and AWS wire, all one listener
+	//   3101  Vite dev server for the dashboard (dev only)
+	//   8001  DynamoDB proxy (opt-in via enableDynamoProxy)
+	//  36xx   per-service HTTP APIs · 136xx their invoke listeners
+	//   8622  validation console of examples/self-hosted (npm run console)
 	"forwardPorts": [
-		// Core (dev deste repo)
-		3101, // Dashboard/API (lss.config.json raiz) e UI Vite dev
-		14566, // Self engine (AWS wire)
-		4567, // LocalStack (lss.config.json raiz)
-		8001, // Proxy DynamoDB (lss.config.json raiz, opt-in)
-		// serverless-offline (localstack-ultimate)
-		3002, 3003,
-		// Lambda API por serviço (exemplos)
-		3610, 3611, 3612, // localstack-free
-		3631, 3632, 3633, 3634, // self-hosted
-		// Lambda Invoke por serviço (apiPort + 10000)
-		13610, 13611, 13612, // localstack-free
-		13631, 13632, 13633, 13634, // self-hosted
-		// Dashboards dos exemplos (serverPort de cada lss.config.json)
-		3111, 3120, 3140,
-		// Consoles de validação dos exemplos (npm run console)
-		8620, 8621, 8622,
-		// LocalStack dos exemplos
-		4571, 4572
+		14566,
+		3101,
+		8001,
+		3631, 3632, 3633, 3634,
+		13631, 13632, 13633, 13634,
+		8622
 	],
 	"portsAttributes": {
-		"3101": { "label": "LSS Dashboard/API (dev) / UI Vite" },
-		"14566": { "label": "Self Engine (AWS wire)" },
-		"4567": { "label": "LocalStack (config raiz)" },
-		"8001": { "label": "DynamoDB Proxy (config raiz)" },
-		"3002-3003": { "label": "serverless-offline (localstack-ultimate)" },
-		"3610-3612": { "label": "Lambda API (localstack-free)" },
-		"3631-3634": { "label": "Lambda API (self-hosted)" },
-		"13610-13612": { "label": "Lambda Invoke (localstack-free)" },
-		"13631-13634": { "label": "Lambda Invoke (self-hosted)" },
-		"3111": { "label": "LSS Dashboard (localstack-ultimate)" },
-		"3120": { "label": "LSS Dashboard (localstack-free)" },
-		"3140": { "label": "LSS Dashboard (self-hosted)" },
-		"8620": { "label": "Console de validação (localstack-free)" },
-		"8621": { "label": "Console de validação (localstack-ultimate)" },
-		"8622": { "label": "Console de validação (self-hosted)" },
-		"4571-4572": { "label": "LocalStack (exemplos)" }
+		"14566": { "label": "LSS (dashboard + API + AWS wire)" },
+		"3101": { "label": "UI Vite dev server" },
+		"8001": { "label": "DynamoDB Proxy (opt-in)" },
+		"3631-3634": { "label": "Lambda API (example self-hosted)" },
+		"13631-13634": { "label": "Lambda Invoke (example self-hosted)" },
+		"8622": { "label": "Validation console (example self-hosted)" }
 	}
 	// Use 'postCreateCommand' to run commands after the container is created.
 	// "postCreateCommand": "yarn install",

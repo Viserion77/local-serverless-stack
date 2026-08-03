@@ -30,13 +30,13 @@ jobs:
         run: npm run test:coverage
 
   integration:
-    name: Integration Tests (LocalStack)
+    name: Integration Tests (self engine)
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    # ubuntu-latest runners ship Docker; LocalStack runs as an unprivileged
-    # container. Gated on the token: community images >= 2026.5 require it.
-    env:
-      LOCALSTACK_AUTH_TOKEN: ${{ secrets.LOCALSTACK_AUTH_TOKEN }}
+    timeout-minutes: 15
+    # 1.0 removed the LocalStack backend: the engine runs in the orchestrator
+    # process, so this job needs no Docker, no service container and no secret.
+    # It is therefore unconditional — under 0.x it skipped itself whenever the
+    # LocalStack auth token was absent, which was most of the time.
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -48,19 +48,15 @@ jobs:
           cache: 'npm'
 
       - name: Install dependencies (root)
-        if: env.LOCALSTACK_AUTH_TOKEN != ''
         run: npm ci
 
       - name: Install dependencies (sample-microservice fixture)
-        if: env.LOCALSTACK_AUTH_TOKEN != ''
         run: npm ci --prefix tests/integration/fixtures/sample-microservice
 
       - name: Build project
-        if: env.LOCALSTACK_AUTH_TOKEN != ''
         run: npm run build
 
       - name: Run integration tests
-        if: env.LOCALSTACK_AUTH_TOKEN != ''
         run: npm run test:integration
 
   lint:
@@ -85,9 +81,6 @@ jobs:
 
       - name: Check TypeScript (server)
         run: npx tsc --project src/server/tsconfig.json --noEmit
-
-      - name: Check TypeScript (plugin)
-        run: npx tsc --project packages/serverless-plugin/tsconfig.json --noEmit
 
   build:
     name: Build Check
@@ -115,5 +108,4 @@ jobs:
           test -d dist/ui
           test -d dist/client
           test -f dist/client/index.js
-          test -d packages/serverless-plugin/dist
           test -f bin/cli.js

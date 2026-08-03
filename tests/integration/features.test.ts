@@ -1,12 +1,11 @@
 // End-to-end validation of LSS's promised features (see docs/FEATURES.md).
-// Boots an ISOLATED LSS + LocalStack instance (own ports + stateDir, managed
-// mode, token from LOCALSTACK_AUTH_TOKEN), provisions the fixture service
-// (tests/integration/fixtures/sample-microservice), and asserts each capability
-// against the live HTTP API.
+// Boots an ISOLATED LSS instance on the self engine (own ports + stateDir),
+// provisions the fixture service (tests/integration/fixtures/sample-microservice),
+// and asserts each capability against the live HTTP API.
 //
-// Requires Docker + a LOCALSTACK_AUTH_TOKEN (community images >= 2026.5 need it).
-// The whole suite is skipped when no token is present, so it never fails a
-// token-less local run or a CI job without the secret.
+// No Docker, no auth token, nothing to gate on: the engine runs in the
+// orchestrator process, so this suite executes on every machine and in every CI
+// job. That is the point of 1.0.
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
@@ -15,15 +14,14 @@ import fs from 'fs';
 const execAsync = promisify(exec);
 const REPO_ROOT = path.resolve(__dirname, '../..');
 const CONFIG = 'tests/integration/fixtures/lss.integration.config.json';
-const BASE = 'http://localhost:3399';
+const BASE = 'http://localhost:14599';
 const SERVICE_PATH = path.join(REPO_ROOT, 'tests/integration/fixtures/sample-microservice');
 const STATE_PID = path.join(REPO_ROOT, 'tests/.lss-integration/orchestrator.pid');
 
 const QUEUE = 'sample-microservice-OrderProcessing';
 const BUCKET = 'sample-microservice-uploads';
 
-const HAS_TOKEN = Boolean(process.env.LOCALSTACK_AUTH_TOKEN);
-const suite = HAS_TOKEN ? describe : describe.skip;
+const suite = describe;
 
 function cli(args: string) {
   return execAsync(`node bin/cli.js ${args}`, { cwd: REPO_ROOT, env: process.env });
@@ -55,38 +53,34 @@ async function waitFor(cond: () => Promise<boolean>, timeoutMs: number, interval
 
 suite('LSS promised features (integration)', () => {
   beforeAll(async () => {
-    if (!HAS_TOKEN) return;
     await cli(`stop --config ${CONFIG}`).catch(() => undefined);
     await cli(`start --config ${CONFIG}`);
-    // Wait for the orchestrator + LocalStack to come up.
+    // Wait for the orchestrator to come up (self engine boots in milliseconds).
     await waitFor(async () => {
       const res = await fetch(`${BASE}/api/health`);
       const j = await res.json();
-      return j.localstack === true;
-    }, 150000);
+      return j.engineRunning === true;
+    }, 60000, 250);
     // Register the fixture service — provisioning runs within the request.
     const reg = await api('POST', '/api/services/register', { servicePath: SERVICE_PATH, invokePort: 3998 });
     expect(reg.status).toBe(200);
   }, 240000);
 
   afterAll(async () => {
-    if (!HAS_TOKEN) return;
     await cli(`stop --config ${CONFIG}`).catch(() => undefined);
-    // Remove the main LocalStack container AND any Lambda child containers it spawned
-    // (named lss-localstack-4599-lambda-…), plus the scoped volume.
-    await execAsync('docker rm -f $(docker ps -aq --filter name=lss-localstack-4599) 2>/dev/null || true').catch(() => undefined);
-    await execAsync('docker volume rm lss-localstack-4599-data 2>/dev/null || true').catch(() => undefined);
+    // Nothing to reap but the state dir: no container, no volume, no image.
     await execAsync('rm -rf tests/.lss-integration 2>/dev/null || true').catch(() => undefined);
   }, 60000);
 
   describe('config & isolation', () => {
-    it('exposes the isolated instance config (no token leak)', async () => {
+    it('exposes the isolated instance config', async () => {
       const { status, data } = await api('GET', '/api/config');
       expect(status).toBe(200);
-      expect(data.serverPort).toBe(3399);
-      expect(data.localstack.port).toBe(4599);
+      expect(data.serverPort).toBe(14599);
+      expect(data.engine.kind).toBe('self');
+      // Single listener: the AWS endpoint IS the dashboard URL.
+      expect(data.engine.endpoint).toBe(BASE);
       expect(data.configPath).toContain('lss.integration.config.json');
-      expect(JSON.stringify(data)).not.toContain(process.env.LOCALSTACK_AUTH_TOKEN);
     });
 
     it('keeps PID/log under the stateDir, not /tmp', () => {

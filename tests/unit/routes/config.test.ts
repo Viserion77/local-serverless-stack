@@ -18,9 +18,6 @@ function appWith() {
 }
 
 interface StubOptions {
-  authToken?: string;
-  selfEngine?: boolean;
-  aossEnabled?: boolean;
   proxyEnabled?: boolean;
   raw?: Record<string, unknown>;
   stateDir?: string;
@@ -30,20 +27,9 @@ interface StubOptions {
 // touch the filesystem or env.
 function stub(options: StubOptions = {}) {
   const cm = ConfigManager.getInstance();
-  jest.spyOn(cm, 'getServerPort').mockReturnValue(3100);
-  jest.spyOn(cm, 'getOrchestratorUrl').mockReturnValue('http://localhost:3100');
-  jest.spyOn(cm, 'getEngineKind').mockReturnValue(options.selfEngine ? 'self' : 'localstack');
-  jest.spyOn(cm, 'isSelfEngine').mockReturnValue(Boolean(options.selfEngine));
-  jest.spyOn(cm, 'getEngineEndpoint').mockReturnValue(
-    options.selfEngine ? 'http://localhost:14566' : 'http://localhost:4566',
-  );
-  jest.spyOn(cm, 'getMode').mockReturnValue('managed');
-  jest.spyOn(cm, 'getLocalStackEndpoint').mockReturnValue('http://localhost:4566');
-  jest.spyOn(cm, 'getLocalStackPort').mockReturnValue(4566);
-  jest.spyOn(cm, 'getLocalStackEdition').mockReturnValue('community');
-  jest.spyOn(cm, 'getLocalStackVersion').mockReturnValue('latest');
-  jest.spyOn(cm, 'getLocalStackImage').mockReturnValue('localstack/localstack:latest');
-  jest.spyOn(cm, 'getLocalStackAuthToken').mockReturnValue(options.authToken);
+  jest.spyOn(cm, 'getServerPort').mockReturnValue(14566);
+  jest.spyOn(cm, 'getOrchestratorUrl').mockReturnValue('http://localhost:14566');
+  jest.spyOn(cm, 'getEngineEndpoint').mockReturnValue('http://localhost:14566');
   jest.spyOn(cm, 'getSelfEngineConfig').mockReturnValue({
     port: 14566,
     dataDir: '/abs/engine',
@@ -55,16 +41,9 @@ function stub(options: StubOptions = {}) {
     persistence: true,
     region: 'us-east-1',
   });
-  jest.spyOn(cm, 'getAossSidecarConfig').mockReturnValue({
-    enabled: options.aossEnabled ?? true,
-    port: 14567,
-    endpoint: 'http://localhost:14567',
-    dataDir: '/abs/aoss',
-  });
   jest.spyOn(cm, 'isEnableDynamoProxy').mockReturnValue(options.proxyEnabled ?? false);
   jest.spyOn(cm, 'getDynamoProxyPort').mockReturnValue(8000);
   jest.spyOn(cm, 'getRegion').mockReturnValue('us-east-1');
-  jest.spyOn(cm, 'getServices').mockReturnValue(['sqs', 'dynamodb']);
   jest.spyOn(cm, 'isPersistence').mockReturnValue(true);
   jest.spyOn(cm, 'isDebug').mockReturnValue(false);
   jest.spyOn(cm, 'getSeedsDir').mockReturnValue('/abs/seeds');
@@ -75,7 +54,7 @@ function stub(options: StubOptions = {}) {
   jest.spyOn(cm, 'isLambdaRuntimeEnabled').mockReturnValue(true);
   jest.spyOn(cm, 'getLambdaExecutionMode').mockReturnValue('auto');
   jest.spyOn(cm, 'getInvokePortOffset').mockReturnValue(10000);
-  jest.spyOn(cm, 'getInvokeHost').mockReturnValue('host.docker.internal');
+  jest.spyOn(cm, 'getInvokeHost').mockReturnValue('127.0.0.1');
   jest.spyOn(cm, 'getSecretSeeds').mockReturnValue({ apiKey: 'secret-seed-value' } as never);
   jest.spyOn(cm, 'getEnvOverriddenKeys').mockReturnValue(['region']);
   jest.spyOn(cm, 'getConfig').mockReturnValue((options.raw ?? {}) as never);
@@ -102,7 +81,6 @@ afterEach(() => jest.restoreAllMocks());
 describe('GET /api/config', () => {
   it('returns the full snapshot and never leaks the token, env values or secret seeds', async () => {
     stub({
-      authToken: 'secret-token',
       raw: {
         packageArgs: ['--g'],
         packageEnv: { DEPLOY_KEY: 'super-secret-env' },
@@ -122,14 +100,11 @@ describe('GET /api/config', () => {
     const res = await request(appWith()).get('/api/config');
     expect(res.status).toBe(200);
     expect(res.body).toMatchObject({
-      serverPort: 3100,
-      engine: { kind: 'localstack', endpoint: 'http://localhost:4566' },
-      localstack: { mode: 'managed', port: 4566, hasAuthToken: true },
+      serverPort: 14566,
+      engine: { kind: 'self', endpoint: 'http://localhost:14566' },
       selfEngine: { port: 14566, account: '000000000000', fallbackEndpoint: null },
-      aossSidecar: { enabled: true, port: 14567, endpoint: 'http://localhost:14567' },
       dynamoProxy: { enabled: false, port: 8000 },
       region: 'us-east-1',
-      services: ['sqs', 'dynamodb'],
       stateDir: null,
       packageArgs: ['--g'],
       packageEnvKeys: ['DEPLOY_KEY'],
@@ -147,7 +122,7 @@ describe('GET /api/config', () => {
         execution: 'auto',
         watch: true,
         invokePortOffset: 10000,
-        invokeHost: 'host.docker.internal',
+        invokeHost: '127.0.0.1',
       },
       serviceRuntime: { access: { apiPort: 3001 } },
       secretSeedCount: 1,
@@ -166,7 +141,6 @@ describe('GET /api/config', () => {
   it('applies defaults for an empty raw config and surfaces stateDir when set', async () => {
     stub({ stateDir: '/abs/state' });
     const res = await request(appWith()).get('/api/config');
-    expect(res.body.localstack.hasAuthToken).toBe(false);
     expect(res.body.stateDir).toBe('/abs/state');
     expect(res.body.packageArgs).toEqual([]);
     expect(res.body.packageEnvKeys).toEqual([]);
@@ -191,7 +165,7 @@ describe('PUT /api/config', () => {
     expect(res.body.configPath).toBe('/abs/lss.config.json');
     expect(res.body.restartRequired).toEqual(['serverPort']);
     expect(res.body.envOverridden).toEqual(['region']);
-    expect(res.body.config.serverPort).toBe(3100);
+    expect(res.body.config.serverPort).toBe(14566);
   });
 
   it('answers 400 with every detail on a validation error', async () => {
@@ -238,7 +212,7 @@ describe('POST /api/config/reload', () => {
     expect(reload).toHaveBeenCalled();
     expect(res.body.configPath).toBe('/abs/lss.config.json');
     expect(res.body.restartRequired).toEqual(['engine']);
-    expect(res.body.config.serverPort).toBe(3100);
+    expect(res.body.config.serverPort).toBe(14566);
   });
 
   it('answers 400 when the file no longer parses (working config kept)', async () => {
@@ -273,8 +247,8 @@ describe('POST /api/config/reload', () => {
 });
 
 describe('GET /api/config/ports', () => {
-  it('lists orchestrator, LocalStack edge, sidecar, proxy and per-service listeners', async () => {
-    stub({ proxyEnabled: true, aossEnabled: true });
+  it('lists orchestrator, engine, proxy and per-service listeners', async () => {
+    stub({ proxyEnabled: true });
     FunctionRegistry.getInstance().registerService({
       name: 'svc-a',
       root: '/abs/svc-a',
@@ -299,28 +273,17 @@ describe('GET /api/config/ports', () => {
     const res = await request(appWith()).get('/api/config/ports');
     expect(res.status).toBe(200);
     expect(res.body.ports.map((p: { kind: string; name: string; port: number }) => [p.kind, p.name, p.port])).toEqual([
-      ['orchestrator', 'Orchestrator', 3100],
-      ['engine', 'LocalStack (managed)', 4566],
-      ['sidecar', 'OpenSearch Serverless sidecar', 14567],
+      ['orchestrator', 'Orchestrator', 14566],
+      ['engine', 'Self engine', 14566],
       ['proxy', 'DynamoDB proxy', 8000],
       ['service-api', 'svc-a', 3001],
       ['service-invoke', 'svc-a', 13001],
     ]);
-    expect(res.body.ports[1].url).toBe('http://localhost:4566');
+    expect(res.body.ports[1].url).toBe('http://localhost:14566');
   });
 
-  it('lists the self engine (and no LocalStack/sidecar rows) in self mode', async () => {
-    stub({ selfEngine: true });
-    const res = await request(appWith()).get('/api/config/ports');
-    expect(res.body.ports.map((p: { kind: string; port: number }) => [p.kind, p.port])).toEqual([
-      ['orchestrator', 3100],
-      ['engine', 14566],
-    ]);
-    expect(res.body.ports[1].name).toBe('Self engine');
-  });
-
-  it('omits the sidecar row when the aoss sidecar is disabled', async () => {
-    stub({ aossEnabled: false });
+  it('omits the proxy row when the DynamoDB proxy is off', async () => {
+    stub();
     const res = await request(appWith()).get('/api/config/ports');
     expect(res.body.ports.map((p: { kind: string }) => p.kind)).toEqual(['orchestrator', 'engine']);
   });

@@ -1,9 +1,4 @@
 {
-  "serverPort": 3140,
-  "engine": "self",
-  "selfEngine": {
-    "port": 14566
-  },
   "region": "us-west-2",
   "persistence": true,
   "debug": false,
@@ -22,10 +17,7 @@
     "favicon": "./assets/logo.svg",
     "defaultTheme": "dark",
     "colors": {
-      "brand-primary": "#0d9488",
-      "brand-hover": "#0f766e",
-      "brand-soft": "#ccfbf1",
-      "--tree-radius-md": "4px"
+      "brand-primary": "#0d9488"
     },
     "themeColors": {
       "dark": {
@@ -35,5 +27,6 @@
         "brand-contrast": "#042f2e"
       }
     }
-  }
+  },
+  "serviceRuntime": {}
 }

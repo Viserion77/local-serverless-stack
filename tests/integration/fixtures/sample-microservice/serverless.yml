@@ -10,22 +10,15 @@ provider:
     USERS_TABLE: ${self:service}-Users
     SESSIONS_TABLE: ${self:service}-Sessions
     ORDERS_TABLE: ${self:service}-Orders
-    ORDER_QUEUE_URL: http://localhost:4570/000000000000/${self:service}-OrderProcessing
+    ORDER_QUEUE_URL: http://localhost:14599/000000000000/${self:service}-OrderProcessing
     ORDER_EVENTS_TOPIC_ARN: arn:aws:sns:us-east-1:000000000000:${self:service}-OrderEvents
     UPLOADS_BUCKET: sample-microservice-uploads
-    AWS_ENDPOINT: http://localhost:4570
-
-plugins:
-  - serverless-lss
-  - serverless-offline
+    AWS_ENDPOINT: http://localhost:14599
 
 custom:
-  orchestrator:
-    enabled: true
-    orchestratorUrl: http://localhost:3110
-  serverless-offline:
-    httpPort: 3000
-    lambdaPort: 3001
+  lss:
+    apiPort: 3000
+    invokePort: 3001
 
 functions:
   health:

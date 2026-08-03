@@ -4,7 +4,7 @@ import {
   TCard, TButton, TInput, TFormField, TBadge, TTable, TEmptyState,
   TStack, TModal, TConfirmDialog, TSpinner, TTag, TText, TIcon, TLink, TCodeBlock, useToast,
 } from '@treeui/vue';
-import type { TreeBadgeTone } from '@treeui/vue';
+import type { TBadgeTone } from '@treeui/vue';
 
 interface TableColumn {
   key: string;
@@ -14,8 +14,12 @@ interface TableColumn {
   width?: string;
 }
 import { api } from '../services/api';
-import type { ServiceSummary } from '../services/api';
+import type { ResourceBreakdown, ServiceSummary } from '../services/api';
+import { ENGINE_LABEL } from '../services/engine';
+import { breakdownEntries, breakdownOrder } from '../icons/resourceIcons';
+import { useI18n } from '../i18n';
 
+const { t } = useI18n();
 const toast = useToast();
 const services = ref<ServiceSummary[]>([]);
 const loading = ref(true);
@@ -31,14 +35,17 @@ const deleteTarget = ref<string | null>(null);
 const deleteDialogOpen = ref(false);
 let refreshTimer: number | null = null;
 
-const columns: TableColumn[] = [
-  { key: 'name', label: 'Name' },
-  { key: 'status', label: 'Status' },
-  { key: 'root', label: 'Path' },
-  { key: 'resourceBreakdown', label: 'Resources' },
-  { key: 'lastUpdated', label: 'Last updated' },
-  { key: 'actions', label: 'Actions', align: 'right' },
-];
+// Computed, not a module-level const: the header labels have to be re-read
+// through t() whenever the language changes, or the table keeps the labels it
+// was built with.
+const columns = computed<TableColumn[]>(() => [
+  { key: 'name', label: t('common.name') },
+  { key: 'status', label: t('common.status') },
+  { key: 'root', label: t('services.path') },
+  { key: 'resourceBreakdown', label: t('services.resources') },
+  { key: 'lastUpdated', label: t('services.lastUpdated') },
+  { key: 'actions', label: t('common.actions'), align: 'right' },
+]);
 
 const rows = computed(() => services.value.map(s => ({ ...s })));
 const logsModalOpen = computed({
@@ -63,10 +70,10 @@ async function startService(name: string) {
   starting.value = { ...starting.value, [name]: true };
   try {
     await api.startService(name);
-    toast.add({ title: 'Service started', description: name, variant: 'success' });
+    toast.add({ title: t('services.startedToast'), description: name, variant: 'success' });
     await loadServices();
   } catch (error: any) {
-    toast.add({ title: 'Failed to start service', description: error.message, variant: 'danger' });
+    toast.add({ title: t('services.startFailedToast'), description: error.message, variant: 'danger' });
   } finally {
     starting.value = { ...starting.value, [name]: false };
   }
@@ -77,10 +84,10 @@ async function stopService(name: string) {
   stopping.value = { ...stopping.value, [name]: true };
   try {
     await api.stopService(name);
-    toast.add({ title: 'Service stopped', description: name, variant: 'info' });
+    toast.add({ title: t('services.stoppedToast'), description: name, variant: 'info' });
     await loadServices();
   } catch (error: any) {
-    toast.add({ title: 'Failed to stop service', description: error.message, variant: 'danger' });
+    toast.add({ title: t('services.stopFailedToast'), description: error.message, variant: 'danger' });
   } finally {
     stopping.value = { ...stopping.value, [name]: false };
   }
@@ -116,11 +123,11 @@ async function registerService() {
   registering.value = true;
   try {
     await api.registerService(newServicePath.value);
-    toast.add({ title: 'Service registered', description: newServicePath.value, variant: 'success' });
+    toast.add({ title: t('services.registeredToast'), description: newServicePath.value, variant: 'success' });
     newServicePath.value = '';
     await loadServices();
   } catch (error: any) {
-    toast.add({ title: 'Failed to register service', description: error.message, variant: 'danger' });
+    toast.add({ title: t('services.registerFailedToast'), description: error.message, variant: 'danger' });
   } finally {
     registering.value = false;
   }
@@ -136,10 +143,10 @@ async function confirmDelete() {
   const name = deleteTarget.value;
   try {
     await api.deleteService(name);
-    toast.add({ title: 'Service deleted', description: name, variant: 'info' });
+    toast.add({ title: t('services.deletedToast'), description: name, variant: 'info' });
     await loadServices();
   } catch (error: any) {
-    toast.add({ title: 'Failed to delete service', description: error.message, variant: 'danger' });
+    toast.add({ title: t('services.deleteFailedToast'), description: error.message, variant: 'danger' });
   } finally {
     deleteTarget.value = null;
     deleteDialogOpen.value = false;
@@ -150,12 +157,47 @@ function formatDate(timestamp: number): string {
   return new Date(timestamp).toLocaleString();
 }
 
-function statusTone(status: string): TreeBadgeTone {
+/**
+ * The resource counters of one row: what the service declares, each tag
+ * carrying the AWS mark of the service it counts (see `icons/resourceIcons`).
+ * Counters at zero — or absent, since the orchestrator omits the ones it never
+ * saw — are dropped rather than shown as "0".
+ *
+ * Assembled from the shared table instead of eight near-identical blocks in the
+ * template: order, mark and accessible name are data, and the detail screen has
+ * to group by the same keys. The `TTable` slot types a row as
+ * `Record<string, unknown>`, hence the cast to the shape the API guarantees.
+ */
+function breakdownTags(row: Record<string, unknown>) {
+  const breakdown = row.resourceBreakdown as ResourceBreakdown | undefined;
+  if (!breakdown) return [];
+  return breakdownOrder
+    .map(key => ({ key, count: breakdown[key] ?? 0, ...breakdownEntries[key] }))
+    .filter(entry => entry.count > 0);
+}
+
+function statusTone(status: string): TBadgeTone {
   switch (status) {
     case 'running': return 'success';
     case 'registered': return 'warning';
     case 'stopped': return 'neutral';
     default: return 'danger';
+  }
+}
+
+/**
+ * The orchestrator reports the lifecycle state as an English enum; the badge
+ * shows it translated. An unknown state falls through to the raw value rather
+ * than a blank badge — a surprising string is still a usable bug report.
+ */
+function statusLabel(status: string): string {
+  switch (status) {
+    case 'running': return t('services.statusRunning');
+    case 'registered': return t('services.statusRegistered');
+    case 'stopped': return t('common.stopped');
+    case 'failed': return t('services.statusFailed');
+    case 'error': return t('services.statusError');
+    default: return status;
   }
 }
 
@@ -174,12 +216,12 @@ onBeforeUnmount(() => {
   <TCard variant="outline">
     <template #header>
       <TStack direction="horizontal" gap="0.75rem" align="center" justify="space-between">
-        <TText weight="semibold">Microservices</TText>
+        <TText weight="semibold">{{ t('services.title') }}</TText>
         <TStack direction="horizontal" gap="0.5rem" align="center">
-          <TFormField hint="Absolute path to a Serverless project" :htmlFor="'register-path'">
+          <TFormField :hint="t('services.registerHint')" :htmlFor="'register-path'">
             <TInput
               v-model="newServicePath"
-              placeholder="/path/to/microservice"
+              :placeholder="t('services.registerPlaceholder')"
               :disabled="registering"
               @keyup.enter="registerService"
             />
@@ -190,23 +232,23 @@ onBeforeUnmount(() => {
             :disabled="!newServicePath.trim()"
             @click="registerService"
           >
-            Register
+            {{ t('services.register') }}
           </TButton>
         </TStack>
       </TStack>
     </template>
 
     <TStack v-if="loading" direction="horizontal" justify="center" align="center">
-      <TSpinner label="Loading services..." />
+      <TSpinner :label="t('services.loadingList')" />
     </TStack>
 
     <TEmptyState
       v-else-if="!services.length"
-      title="No services registered"
-      description="Register your first microservice using the form above."
+      :title="t('services.emptyTitle')"
+      :description="t('services.emptyDescription')"
     />
 
-    <TTable v-else :columns="columns" :rows="rows" aria-label="Registered microservices">
+    <TTable v-else :columns="columns" :rows="rows" :aria-label="t('services.tableLabel')">
       <template #cell-name="{ row }">
         <TLink :to="`/services/${encodeURIComponent(String(row.name))}`">
           <TText weight="semibold">
@@ -217,7 +259,7 @@ onBeforeUnmount(() => {
 
       <template #cell-status="{ row }">
         <TBadge :tone="statusTone(String(row.status))" variant="soft">
-          {{ row.status }}
+          {{ statusLabel(String(row.status)) }}
         </TBadge>
       </template>
 
@@ -227,68 +269,27 @@ onBeforeUnmount(() => {
 
       <template #cell-resourceBreakdown="{ row }">
         <TStack direction="horizontal" gap="0.25rem" wrap>
+          <!--
+            The mark stays in the tag's DEFAULT slot, not its `#icon` slot:
+            TTag wraps `#icon` in `aria-hidden`, which is right when the tag has
+            a visible label, but here the mark is the only thing that says which
+            service the number belongs to. In the default slot TIcon's `label`
+            names it, so a screen reader reads "SQS queues, 3" instead of "3".
+          -->
           <TTag
-            v-if="(row.resourceBreakdown as any)?.lambdas"
+            v-for="entry in breakdownTags(row)"
+            :key="entry.key"
             size="sm"
             variant="soft"
           >
-            <TIcon name="code" /> {{ (row.resourceBreakdown as any).lambdas }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.tables"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="database" /> {{ (row.resourceBreakdown as any).tables }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.queues"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="inbox" /> {{ (row.resourceBreakdown as any).queues }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.topics"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="megaphone" /> {{ (row.resourceBreakdown as any).topics }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.buckets"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="archive" /> {{ (row.resourceBreakdown as any).buckets }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.buses"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="shuffle" /> {{ (row.resourceBreakdown as any).buses }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.eventRules"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="target" /> {{ (row.resourceBreakdown as any).eventRules }}
-          </TTag>
-          <TTag
-            v-if="(row.resourceBreakdown as any)?.collections"
-            size="sm"
-            variant="soft"
-          >
-            <TIcon name="search" /> {{ (row.resourceBreakdown as any).collections }}
+            <TIcon :name="entry.icon" :label="t(entry.labelKey)" /> {{ entry.count }}
           </TTag>
           <TText
             v-if="!row.resourcesCount"
             tone="muted"
             size="xs"
           >
-            none
+            {{ t('common.none') }}
           </TText>
         </TStack>
       </template>
@@ -306,7 +307,7 @@ onBeforeUnmount(() => {
             :loading="starting[String(row.name)]"
             @click="startService(String(row.name))"
           >
-            Start
+            {{ t('services.start') }}
           </TButton>
           <TButton
             size="sm"
@@ -315,17 +316,17 @@ onBeforeUnmount(() => {
             :loading="stopping[String(row.name)]"
             @click="stopService(String(row.name))"
           >
-            Stop
+            {{ t('services.stop') }}
           </TButton>
           <TButton size="sm" variant="ghost" @click="openLogs(String(row.name))">
-            Logs
+            {{ t('services.logs') }}
           </TButton>
           <TButton
             size="sm"
             variant="danger"
             @click="requestDelete(String(row.name))"
           >
-            Delete
+            {{ t('common.delete') }}
           </TButton>
         </TStack>
       </template>
@@ -333,19 +334,25 @@ onBeforeUnmount(() => {
 
     <TModal
       v-model:open="logsModalOpen"
-      :title="logsService ? `Logs — ${logsService}` : 'Logs'"
-      :description="logsService ? `Status: ${logsStatus}` : ''"
+      :title="logsService ? t('services.logsTitleFor', { name: logsService }) : t('services.logsTitle')"
+      :description="logsService ? t('services.logsStatus', { status: statusLabel(logsStatus) }) : ''"
       size="lg"
     >
-      <TCodeBlock :code="logs.join('\n') || '— no output yet —'" label="Service log" max-block-size="60vh" wrap copyable />
+      <TCodeBlock
+        :code="logs.join('\n') || t('services.logsEmpty')"
+        :label="t('services.logsLabel')"
+        max-block-size="60vh"
+        wrap
+        copyable
+      />
     </TModal>
 
     <TConfirmDialog
       v-model:open="deleteDialogOpen"
-      :title="`Delete service${deleteTarget ? ` “${deleteTarget}”` : ''}?`"
-      description="This removes the service from the cache and cleans up its provisioned resources in LocalStack."
-      confirm-label="Delete"
-      cancel-label="Cancel"
+      :title="deleteTarget ? t('services.deleteTitleNamed', { name: deleteTarget }) : t('services.deleteTitle')"
+      :description="t('services.deleteDescription', { engine: ENGINE_LABEL })"
+      :confirm-label="t('common.delete')"
+      :cancel-label="t('common.cancel')"
       confirm-variant="danger"
       @confirm="confirmDelete"
     />

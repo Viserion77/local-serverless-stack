@@ -14,14 +14,8 @@ provider:
     BILLING_BUS: billing-events
     AWS_ENDPOINT: http://localhost:14566
 
-plugins:
-  - serverless-lss
-
 custom:
   accountId: '000000000000'
-  orchestrator:
-    enabled: true
-    orchestratorUrl: http://localhost:3140
   lss:
     apiPort: 3632
     invokePort: 13632

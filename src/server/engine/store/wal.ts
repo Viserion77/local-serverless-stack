@@ -20,6 +20,13 @@ import type { ItemTable } from './store-types.js';
 const WAL_FLUSH_DEBOUNCE_MS = 20;
 const WAL_FLUSH_BYTES = 256 * 1024;
 const SNAPSHOT_WRITE_CHUNK = 256 * 1024;
+// Self-compaction thresholds. Compaction used to happen only on dehydrate —
+// which is driven by the idle sweep and the LRU budget — so a table that is
+// written to continuously never compacted: its WAL grew for the whole session
+// and the next boot replayed every record. Compact once the WAL has outgrown
+// both an absolute floor and the table's own resident size.
+const WAL_COMPACT_MIN_BYTES = 4 * 1024 * 1024;
+const WAL_COMPACT_RATIO = 2;
 
 interface WalRecord {
   seq: number;
@@ -83,6 +90,10 @@ export class JsonlItemTable implements ItemTable {
 
   private walBuffer: string[] = [];
   private walBufferBytes = 0;
+  // Bytes appended to the WAL file since the last compaction, and the guard
+  // that keeps a background compaction from being scheduled twice.
+  private walBytesSinceCompact = 0;
+  private compacting = false;
   private walTimer: NodeJS.Timeout | null = null;
   // Serializes WAL appends; kept always-resolved (failures are logged) so a
   // bad write never wedges later flushes.
@@ -178,7 +189,7 @@ export class JsonlItemTable implements ItemTable {
     await this.writeSnapshot(tmpPath, map);
     await fsp.rename(tmpPath, this.snapshotPath);
     await fsp.writeFile(this.walPath, '');
-
+    this.walBytesSinceCompact = 0;
   }
 
   async dehydrate(): Promise<void> {
@@ -332,11 +343,32 @@ export class JsonlItemTable implements ItemTable {
     const data = this.walBuffer.join('');
     this.walBuffer = [];
     this.walBufferBytes = 0;
-    const next = this.walChain.then(() => appendToFile(this.walPath, data, this.fsync));
+    const next = this.walChain.then(async () => {
+      await appendToFile(this.walPath, data, this.fsync);
+      this.walBytesSinceCompact += Buffer.byteLength(data);
+    });
     this.walChain = next.catch((err) => {
       console.warn(`[engine-store] WAL append failed for ${this.walPath}:`, err);
     });
+    // Scheduled OUTSIDE the chain: compact() awaits walChain, so calling it
+    // from within would deadlock.
+    void this.walChain.then(() => this.maybeCompact());
     return next;
+  }
+
+  // Fold the WAL back into the snapshot once it has grown past both thresholds.
+  // Runs in the background — writers never block on it.
+  private maybeCompact(): void {
+    if (this.compacting || !this.entriesMap) return;
+    if (this.walBytesSinceCompact < Math.max(WAL_COMPACT_MIN_BYTES, this.approx * WAL_COMPACT_RATIO)) return;
+    this.compacting = true;
+    void this.compact()
+      .catch((err) => {
+        console.warn(`[engine-store] WAL compaction failed for ${this.walPath}:`, err);
+      })
+      .finally(() => {
+        this.compacting = false;
+      });
   }
 
   private dropBufferedWal(): void {

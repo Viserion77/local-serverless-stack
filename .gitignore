@@ -33,3 +33,9 @@ tests/.lss-client-integration/
 # Cache
 .cache/
 .parcel-cache/
+
+# Vendor source packs downloaded for a generator, never committed. The AWS
+# Architecture Service Icons pack (41 MB) is unzipped here for
+# `npm run icons:aws`; only the curated output in src/ui/src/icons/aws/ is
+# versioned — see src/ui/ui-ux.md §3.
+temp/

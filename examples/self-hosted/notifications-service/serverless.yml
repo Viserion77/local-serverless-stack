@@ -13,14 +13,8 @@ provider:
     NOTIFICATIONS_TABLE: notifications-Notifications
     AWS_ENDPOINT: http://localhost:14566
 
-plugins:
-  - serverless-lss
-
 custom:
   accountId: '000000000000'
-  orchestrator:
-    enabled: true
-    orchestratorUrl: http://localhost:3140
   lss:
     apiPort: 3633
     invokePort: 13633

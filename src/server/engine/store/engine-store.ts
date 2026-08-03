@@ -16,6 +16,7 @@ import path from 'path';
 import type { CatalogStore, EngineStore, ItemTable } from './store-types.js';
 import { atomicWriteFile } from './atomic.js';
 import { JsonlItemTable } from './wal.js';
+import { MemoryEngineStore } from './memory-store.js';
 
 const CATALOG_FLUSH_DEBOUNCE_MS = 20;
 const SWEEP_INTERVAL_MS = 60_000;
@@ -25,10 +26,14 @@ export interface EngineStoreOptions {
   idleUnloadMs: number;
   memoryBudgetMb: number;
   fsync: boolean;
+  // `false` swaps in the in-memory store: nothing is read from or written to
+  // dataDir, so the run starts clean and leaves nothing behind. Defaults to
+  // true — every existing caller keeps the file-backed behaviour.
+  persistence?: boolean;
 }
 
 export function createEngineStore(options: EngineStoreOptions): EngineStore {
-  return new FileEngineStore(options);
+  return options.persistence === false ? new MemoryEngineStore() : new FileEngineStore(options);
 }
 
 class JsonCatalog<T> implements CatalogStore<T> {

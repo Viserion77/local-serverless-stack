@@ -10,13 +10,16 @@ import { currentRegion, regionOptions, applyConfiguredRegion } from './services/
 import { api } from './services/api';
 import type { HealthInfo } from './services/api';
 import { branding, loadBranding, applyTheme } from './services/branding';
+import { useI18n } from './i18n';
+
+const { t, locale, setLocale, locales, localeLabels } = useI18n();
 
 const route = useRoute();
 const router = useRouter();
 
 const health = ref<HealthInfo>({
   status: 'unknown',
-  localstack: false,
+  engineRunning: false,
   dynamoProxy: { enabled: false, running: false, port: 8000 },
 });
 const theme = ref<'dark' | 'light'>(
@@ -32,21 +35,38 @@ const activeTopLevel = computed(() => {
 });
 
 const menuItems = computed(() => [
-  { label: theme.value === 'dark' ? 'Switch to light' : 'Switch to dark', value: 'theme' },
+  { label: theme.value === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark'), value: 'theme' },
+  ...locales.map(code => ({
+    label: `${localeLabels[code]}${code === locale.value ? ' ✓' : ''}`,
+    value: `locale:${code}`,
+  })),
 ]);
 
-const navItems: TNavMenuItem[] = [
-  { label: 'Overview', value: '/' },
-  { label: 'Services', value: '/services' },
-  { label: 'Lambdas', value: '/lambdas' },
-  { label: 'APIs', value: '/apis' },
-  { label: 'Queues', value: '/queues' },
-  { label: 'S3', value: '/buckets' },
-  { label: 'DynamoDB', value: '/dynamo' },
-  { label: 'OpenSearch', value: '/opensearch' },
-  { label: 'Secrets', value: '/secrets' },
-  { label: 'Settings', value: '/settings' },
-];
+// Recomputed on a language switch; the AWS service names stay untranslated
+// because that is what they are called in every console and SDK.
+//
+// Every row carries an icon, and that is deliberate: TNavMenu falls back to a
+// one-letter marker for an icon-less item, so a partly-iconified rail would
+// collapse Services / S3 / Secrets / Settings into four identical "S" tiles.
+// Which SOURCE the icon comes from still follows ui-ux.md rule 3 — a section
+// that IS an AWS service gets the official AWS mark, a section that is an LSS
+// concept (the dashboard itself, the registered microservices, the stack's own
+// configuration) gets a TreeUI functional icon. Icons are what remains visible
+// once the shell collapses, so this is also what makes the collapsed rail
+// readable. TNavMenuItem.icon is TIconInput: a registered name needs no import
+// and no markRaw, and it keeps the item plain data inside this computed.
+const navItems = computed<TNavMenuItem[]>(() => [
+  { label: t('nav.overview'), value: '/', icon: 'layout-dashboard' },
+  { label: t('nav.services'), value: '/services', icon: 'boxes' },
+  { label: t('nav.lambdas'), value: '/lambdas', icon: 'aws-lambda' },
+  { label: t('nav.apis'), value: '/apis', icon: 'aws-api-gateway' },
+  { label: t('nav.queues'), value: '/queues', icon: 'aws-sqs' },
+  { label: 'S3', value: '/buckets', icon: 'aws-s3' },
+  { label: 'DynamoDB', value: '/dynamo', icon: 'aws-dynamodb' },
+  { label: 'OpenSearch', value: '/opensearch', icon: 'aws-opensearch' },
+  { label: t('nav.secrets'), value: '/secrets', icon: 'aws-secrets-manager' },
+  { label: t('nav.settings'), value: '/settings', icon: 'settings' },
+]);
 
 function onNavSelect(value: string) {
   if (value && value !== activeTopLevel.value) router.push(value);
@@ -56,6 +76,10 @@ function onMenuSelect(value: string) {
   if (value === 'theme') {
     theme.value = theme.value === 'dark' ? 'light' : 'dark';
     applyTheme(theme.value, true);
+    return;
+  }
+  if (value.startsWith('locale:')) {
+    setLocale(value.slice('locale:'.length) as typeof locale.value);
   }
 }
 
@@ -66,6 +90,8 @@ async function checkHealth() {
     console.error('Health check failed:', error);
   }
 }
+
+const engineRunning = computed(() => health.value.engineRunning);
 
 onMounted(async () => {
   checkHealth();
@@ -112,34 +138,34 @@ onBeforeUnmount(() => {
       <template #header-end>
         <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
           <TBadge
-            :tone="health.localstack ? 'success' : 'danger'"
+            :tone="engineRunning ? 'success' : 'danger'"
             variant="soft"
           >
-            LocalStack: {{ health.localstack ? 'Running' : 'Offline' }}
+            {{ t('nav.engine') }}: {{ engineRunning ? t('nav.engineRunning') : t('nav.engineOffline') }}
           </TBadge>
           <TBadge
             v-if="health.dynamoProxy?.enabled"
             :tone="health.dynamoProxy.running ? 'success' : 'warning'"
             variant="soft"
           >
-            Dynamo Proxy: {{ health.dynamoProxy.running ? 'On' : 'Off' }}
+            {{ t('nav.dynamoProxy') }}: {{ health.dynamoProxy.running ? t('nav.on') : t('nav.off') }}
           </TBadge>
           <TStackItem min-width="14rem">
             <TSelect
               v-model="currentRegion"
               :options="regionOptions"
               size="sm"
-              aria-label="AWS Region"
+              :aria-label="t('nav.awsRegion')"
             />
           </TStackItem>
           <TDropdown
             :items="menuItems"
             size="sm"
-            label="Open menu"
+            :label="t('nav.openMenu')"
             @select="onMenuSelect"
           >
             <template #trigger>
-              <TButton icon-only size="sm" variant="ghost" label="Open menu">
+              <TButton icon-only size="sm" variant="ghost" :label="t('nav.openMenu')">
                 <template #icon>
                   <TIcon name="ellipsis-vertical" />
                 </template>
@@ -153,7 +179,7 @@ onBeforeUnmount(() => {
         <TNavMenu
           :items="navItems"
           :model-value="activeTopLevel"
-          aria-label="Primary"
+          :aria-label="t('nav.primary')"
           @select="onNavSelect"
         />
       </template>

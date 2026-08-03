@@ -2,30 +2,42 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
-  TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TTag, TSpinner, TAlert, TText, TLink,
+  TCard, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
+  TTag, TSpinner, TAlert, TText, TLink, TIcon,
 } from '@treeui/vue';
-import type { TreeBadgeTone } from '@treeui/vue';
+import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { LambdaSummary } from '../../services/api';
+import { toLambdaTriggers } from './triggerIcons';
+import type { LambdaTrigger } from './triggerIcons';
+import { useI18n } from '../../i18n';
+
+const { t } = useI18n();
 
 const lambdas = ref<LambdaSummary[]>([]);
 const loading = ref(true);
 const error = ref<string | null>(null);
 let refreshTimer: number | null = null;
 
-const columns = [
-  { key: 'name', label: 'Function' },
-  { key: 'service', label: 'Service' },
-  { key: 'runtime', label: 'Runtime' },
-  { key: 'handler', label: 'Handler' },
-  { key: 'triggers', label: 'Triggers' },
-  { key: 'status', label: 'Status' },
-  { key: 'invocations', label: 'Invocations', align: 'right' as const },
-  { key: 'last', label: 'Last' },
-];
+// Computed rather than a module const: the headers have to be re-translated
+// when the user switches language, without a reload.
+const columns = computed(() => [
+  { key: 'name', label: t('lambdas.function') },
+  { key: 'service', label: t('common.service') },
+  { key: 'runtime', label: t('lambdas.runtime') },
+  { key: 'handler', label: t('lambdas.handler') },
+  { key: 'triggers', label: t('lambdas.triggers') },
+  { key: 'status', label: t('common.status') },
+  { key: 'invocations', label: t('lambdas.invocations'), align: 'right' as const },
+  { key: 'last', label: t('lambdas.last') },
+]);
 
-const rows = computed(() => lambdas.value.map(l => ({ ...l })));
+// The trigger tags carry the mark of the AWS service that fires them, so the
+// mapping is resolved once per row here instead of per render inside the v-for.
+const rows = computed(() => lambdas.value.map(l => ({
+  ...l,
+  triggerMarks: toLambdaTriggers(l.triggers),
+})));
 
 const totals = computed(() => ({
   total: lambdas.value.length,
@@ -39,18 +51,30 @@ async function loadLambdas() {
     lambdas.value = await api.listLambdas();
     error.value = null;
   } catch (err: any) {
-    error.value = err.message || 'Failed to load lambdas';
+    error.value = err.message || t('lambdas.loadFailed');
   } finally {
     loading.value = false;
   }
 }
 
-function statusTone(status: string): TreeBadgeTone {
+function statusTone(status: string): TBadgeTone {
   switch (status) {
     case 'online': return 'success';
     case 'starting': return 'info';
     case 'stopped': return 'neutral';
     default: return 'danger';
+  }
+}
+
+// The API returns the state as a lowercase enum; the badge shows it in the
+// user's language, keeping the same lowercase register as the other screens.
+function statusLabel(status: string): string {
+  switch (status) {
+    case 'online': return t('common.online');
+    case 'starting': return t('lambdas.statusStarting');
+    case 'stopped': return t('common.stopped');
+    case 'error': return t('lambdas.statusError');
+    default: return status;
   }
 }
 
@@ -73,25 +97,25 @@ onBeforeUnmount(() => {
   <TStack direction="vertical" gap="1.25rem">
     <TGrid :columns="4" gap="1rem">
       <TStat
-        label="Functions"
+        :label="t('lambdas.statFunctions')"
         :value="totals.total"
         tone="info"
         :loading="loading"
       />
       <TStat
-        label="Online"
+        :label="t('lambdas.statOnline')"
         :value="totals.online"
         tone="success"
         :loading="loading"
       />
       <TStat
-        label="Invocations (session)"
+        :label="t('lambdas.statInvocations')"
         :value="totals.invocations"
         tone="info"
         :loading="loading"
       />
       <TStat
-        label="Errors"
+        :label="t('lambdas.statErrors')"
         :value="totals.errors"
         :tone="totals.errors > 0 ? 'warning' : 'neutral'"
         :loading="loading"
@@ -105,22 +129,31 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <TText weight="semibold">Lambda functions</TText>
-          <TText tone="muted">Live · refreshes every 10s</TText>
+          <!-- The screen is AWS Lambda: the brand sits on the card header once,
+               not on every row (the scale target is 40 services x ~60 lambdas). -->
+          <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TIcon name="aws-lambda" />
+            <TText weight="semibold">{{ t('lambdas.listTitle') }}</TText>
+          </TStack>
+          <TText tone="muted">{{ t('lambdas.listLive') }}</TText>
         </TStack>
       </template>
 
       <TStack v-if="loading" direction="horizontal" justify="center" align="center">
-        <TSpinner label="Loading lambdas..." />
+        <TSpinner :label="t('lambdas.loadingList')" />
       </TStack>
 
       <TEmptyState
         v-else-if="!lambdas.length"
-        title="No functions registered"
-        description="Register a microservice that defines Lambda functions to see them here."
-      />
+        :title="t('lambdas.emptyTitle')"
+        :description="t('lambdas.emptyDescription')"
+      >
+        <template #icon>
+          <TIcon name="aws-lambda" />
+        </template>
+      </TEmptyState>
 
-      <TTable v-else :columns="columns" :rows="rows" aria-label="Lambda functions">
+      <TTable v-else :columns="columns" :rows="rows" :aria-label="t('lambdas.listTitle')">
         <template #cell-name="{ row }">
           <TStack direction="vertical" gap="0.125rem">
             <TLink
@@ -152,16 +185,25 @@ onBeforeUnmount(() => {
           <TText family="mono" style="font-size: 0.78rem;">{{ row.handler }}</TText>
         </template>
 
+        <!-- The one row-level brand on this screen: the trigger tags are where
+             several different AWS services are genuinely being told apart. The
+             icon is decorative — the tag text already names the trigger, and
+             TTag renders the slot aria-hidden anyway. `size` is explicit here
+             because the marks are filled tiles: at TIcon's 20px default they
+             would outweigh a `sm` tag's own text. -->
         <template #cell-triggers="{ row }">
           <TStack direction="horizontal" gap="0.25rem" wrap>
-            <template v-if="(row.triggers as string[]).length">
+            <template v-if="(row.triggerMarks as LambdaTrigger[]).length">
               <TTag
-                v-for="t in (row.triggers as string[])"
-                :key="t"
+                v-for="trigger in (row.triggerMarks as LambdaTrigger[])"
+                :key="trigger.name"
                 size="sm"
                 variant="soft"
               >
-                {{ t }}
+                <template v-if="trigger.icon" #icon>
+                  <TIcon :name="trigger.icon" size="14" />
+                </template>
+                {{ trigger.name }}
               </TTag>
             </template>
             <TText v-else tone="muted">—</TText>
@@ -170,7 +212,7 @@ onBeforeUnmount(() => {
 
         <template #cell-status="{ row }">
           <TBadge :tone="statusTone(String(row.status))" variant="soft">
-            {{ row.status }}
+            {{ statusLabel(String(row.status)) }}
           </TBadge>
         </template>
 
@@ -183,7 +225,7 @@ onBeforeUnmount(() => {
               {{ row.invocations }}
             </TBadge>
             <TBadge v-if="Number(row.errors) > 0" tone="danger" variant="soft">
-              {{ row.errors }} err
+              {{ t('lambdas.errShort', { count: Number(row.errors) }) }}
             </TBadge>
           </TStack>
         </template>

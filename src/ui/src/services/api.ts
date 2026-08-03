@@ -1,6 +1,8 @@
 import { currentRegion } from './region';
 
-const API_BASE = import.meta.env.DEV ? 'http://localhost:3100' : '';
+// In dev the SPA runs on the Vite server, so it needs the orchestrator's
+// absolute URL; in a build it is served by the orchestrator itself.
+const API_BASE = import.meta.env.DEV ? 'http://localhost:14566' : '';
 
 // Absolute URL for orchestrator-served paths (e.g. branding assets), so they
 // also resolve under `vite dev` where the UI runs on a different port.
@@ -26,7 +28,9 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: response.statusText }));
-    throw new Error(error.error || 'Request failed');
+    // Carry the parsed body: error payloads may hold more than the message
+    // (e.g. install/package answer 422 with the command's output tail).
+    throw Object.assign(new Error(error.error || 'Request failed'), { body: error });
   }
 
   return response.json();
@@ -186,9 +190,111 @@ export interface SeedClearResult {
   reason?: string;
 }
 
+// One row of GET /api/services/scan — a discovered (not necessarily
+// registered) Serverless/osls service under the project root.
+export interface ScannedService {
+  name: string;
+  root: string;
+  relPath: string;
+  configFile: string;
+  installed: boolean;
+  packaged: boolean;
+  registered: boolean;
+  region?: string;
+  // Effective values: `serviceRuntime` config overrides win over yml hints.
+  apiPort?: number;
+  invokePort?: number;
+  // Effective package command for this service (servicePackaging else global).
+  packageCommand: string;
+  warnings: ScanWarning[];
+}
+
+// A scan warning carries a stable code the dashboard translates, plus the
+// English message the server produced as a fallback.
+export interface ScanWarning {
+  code: string;
+  message: string;
+  params?: Record<string, string>;
+}
+
+// GET /api/lambdas/activity — what the runtime has actually been doing, and
+// what it is costing the host.
+export interface InvocationSpan {
+  service: string;
+  functionName: string;
+  startedAt: number;
+  durationMs: number;
+  ok: boolean;
+  coldStart: boolean;
+}
+
+export interface ActivitySnapshot {
+  windowMs: number;
+  spans: InvocationSpan[];
+  buckets: { at: number; peak: number; started: number }[];
+  totals: {
+    invocations: number;
+    errors: number;
+    coldStarts: number;
+    peakConcurrency: number;
+    activeNow: number;
+    avgDurationMs: number;
+  };
+  workers: {
+    service: string;
+    status: string;
+    warm: boolean;
+    pid?: number;
+    startedAt?: number;
+    lastInvokedAt?: number;
+    invocations: number;
+    errors: number;
+    functions: number;
+    executionMode?: string;
+  }[];
+  residency: { warm: number; maxWarmWorkers: number; lazy: boolean; idleTimeoutMs: number };
+  host: {
+    rssBytes: number;
+    heapUsedBytes: number;
+    totalMemBytes: number;
+    freeMemBytes: number;
+    cpuCount: number;
+    loadAvg1m: number;
+    uptimeMs: number;
+  };
+}
+
+// Result of POST /api/services/install and /api/services/package.
+export interface PrepareServiceResult {
+  success: boolean;
+  exitCode: number;
+  durationMs: number;
+  output: string;
+}
+
+export interface ScanResponse {
+  projectRoot: string;
+  services: ScannedService[];
+}
+
+export interface RegisterServiceResult {
+  success: boolean;
+  serviceName: string;
+  resourcesCount: number;
+  functionsCount: number;
+  routesCount: number;
+  warnings: string[];
+}
+
 export interface HealthInfo {
   status: string;
-  localstack: boolean;
+  engineRunning: boolean;
+  engine?: {
+    kind: 'self';
+    running: boolean;
+    endpoint: string;
+    services?: string[];
+  };
   dynamoProxy: {
     enabled: boolean;
     running: boolean;
@@ -226,6 +332,11 @@ export interface LambdaRuntimeInfo {
   watch: boolean | null;
   invokePortOffset: number;
   invokeHost: string;
+  // Residency policy, already resolved by the server (maxWarmWorkers' default
+  // is derived from the host's RAM, so the raw value is rarely the useful one).
+  lazy: boolean;
+  idleTimeoutMs: number;
+  maxWarmWorkers: number;
 }
 
 // Per-service packaging override with env VALUES redacted to key names.
@@ -247,30 +358,15 @@ export interface ServiceRuntimeInfo {
 export interface LssConfigSnapshot {
   serverPort: number;
   engine: {
-    kind: 'localstack' | 'self';
+    kind: 'self';
     endpoint: string;
-  };
-  localstack: {
-    mode: string;
-    endpoint: string;
-    port: number;
-    edition: string;
-    version: string;
-    image: string;
-    hasAuthToken: boolean;
   };
   selfEngine: SelfEngineInfo;
-  aossSidecar: {
-    enabled: boolean;
-    port: number;
-    endpoint: string;
-  };
   dynamoProxy: {
     enabled: boolean;
     port: number;
   };
   region: string;
-  services: string[];
   persistence: boolean;
   debug: boolean;
   seedsDir: string;
@@ -295,16 +391,9 @@ export interface LssConfigSnapshot {
 // the file; object blocks merge one level deep and a null subkey deletes it.
 export interface LssConfigUpdate {
   serverPort?: number;
-  localstackPort?: number;
-  localstackEndpoint?: string | null;
-  mode?: 'managed' | 'external';
-  localstackEdition?: 'community' | 'pro';
-  localstackVersion?: string | null;
-  localstackImage?: string | null;
   enableDynamoProxy?: boolean;
   dynamoProxyPort?: number;
   region?: string;
-  services?: string[] | null;
   persistence?: boolean;
   debug?: boolean;
   seedsDir?: string | null;
@@ -313,13 +402,15 @@ export interface LssConfigUpdate {
   packageCommand?: string | null;
   packageArgs?: string[];
   packageTimeoutMs?: number;
-  engine?: 'localstack' | 'self';
   lambdaRuntime?: {
     enabled?: boolean;
     execution?: 'auto' | 'artifact' | 'source';
     watch?: boolean | null;
     invokePortOffset?: number;
     invokeHost?: string | null;
+    lazy?: boolean;
+    idleTimeoutMs?: number;
+    maxWarmWorkers?: number;
   };
   selfEngine?: {
     port?: number;
@@ -329,15 +420,15 @@ export interface LssConfigUpdate {
     fsync?: boolean;
     fallbackEndpoint?: string | null;
   };
-  aossSidecar?: {
-    enabled?: boolean;
-    port?: number;
-  };
   branding?: {
     title?: string | null;
     subtitle?: string | null;
     defaultTheme?: 'dark' | 'light';
   };
+  // Map entries merge per service on the server: sending one subkey never
+  // drops that entry's siblings; null deletes an entry (or one subkey).
+  serviceRuntime?: Record<string, { apiPort?: number | null; invokePort?: number | null } | null>;
+  servicePackaging?: Record<string, { packageCommand?: string | null } | null>;
 }
 
 export interface ConfigUpdateResponse {
@@ -357,7 +448,7 @@ export interface ConfigReloadResponse {
 
 export interface PortEntry {
   name: string;
-  kind: 'orchestrator' | 'engine' | 'sidecar' | 'proxy' | 'service-api' | 'service-invoke';
+  kind: 'orchestrator' | 'engine' | 'proxy' | 'service-api' | 'service-invoke';
   port: number;
   url: string;
   description: string;
@@ -380,6 +471,28 @@ export interface ServiceResource {
   type: 'lambda' | 'dynamodb' | 'sqs' | 'sns' | 's3' | 'eventbus' | 'event-rule' | 'opensearch' | 'event-source';
   name: string;
 }
+
+/**
+ * The wire ids the self engine reports in `HealthInfo.engine.services` —
+ * mirrors `EngineServiceName` in `src/server/engine/types.ts`. They are SigV4
+ * signing names, not display names: `events` is EventBridge (the id predates
+ * the rename from CloudWatch Events) and `aoss` is OpenSearch Serverless.
+ *
+ * Mirrored rather than imported: the UI is a separate tsconfig that must not
+ * reach into server source. The wire field stays `string[]` so an id added on
+ * the server can never make the dashboard fail to parse a health response —
+ * this union exists so the tables keyed by it stay exhaustive.
+ */
+export type EngineServiceName =
+  | 'dynamodb'
+  | 'sqs'
+  | 'sns'
+  | 's3'
+  | 'events'
+  | 'lambda'
+  | 'sts'
+  | 'secretsmanager'
+  | 'aoss';
 
 export interface ResourceBreakdown {
   lambdas: number;
@@ -594,6 +707,7 @@ export interface ServiceApiInfo {
 export const api = {
   // Health & config
   checkHealth: () => request<HealthInfo>('/api/health'),
+  scanServices: () => request<ScanResponse>('/api/services/scan'),
   getConfig: () => request<LssConfigSnapshot>('/api/config'),
   updateConfig: (patch: LssConfigUpdate) =>
     request<ConfigUpdateResponse>('/api/config', {
@@ -609,7 +723,17 @@ export const api = {
   listServices: () => request<ServiceSummary[]>('/api/services'),
   getService: (name: string) => request<ServiceDetail>(`/api/services/${encodeURIComponent(name)}`),
   registerService: (servicePath: string) =>
-    request<any>('/api/services/register', {
+    request<RegisterServiceResult>('/api/services/register', {
+      method: 'POST',
+      body: JSON.stringify({ servicePath }),
+    }),
+  installService: (servicePath: string, command?: string) =>
+    request<PrepareServiceResult>('/api/services/install', {
+      method: 'POST',
+      body: JSON.stringify({ servicePath, command }),
+    }),
+  packageService: (servicePath: string) =>
+    request<PrepareServiceResult>('/api/services/package', {
       method: 'POST',
       body: JSON.stringify({ servicePath }),
     }),
@@ -624,7 +748,14 @@ export const api = {
     }),
 
   // Process control
-  startService: (name: string, payload?: { stage?: string; cwd?: string; command?: string; args?: string[] }) =>
+  //
+  // The payload only *selects* what runs: which start script (`stage`, which the
+  // server interpolates into `start:${stage}`) and which package manager runs it.
+  // `cwd`, `args` and `env` used to be advertised here and were handed straight
+  // to spawn() on the server; the endpoint ignores them now — it derives the cwd
+  // from the registered service root and the argv from `stage` — so the type no
+  // longer offers a capability the server refuses.
+  startService: (name: string, payload?: { stage?: string; command?: 'npm' | 'yarn' | 'pnpm' }) =>
     request<any>(`/api/services/${name}/start`, {
       method: 'POST',
       body: JSON.stringify(payload || {}),
@@ -636,6 +767,8 @@ export const api = {
   getServiceLogs: (name: string) => request<any>(`/api/services/${name}/logs`),
 
   // Lambdas
+  getActivity: (windowMs?: number) =>
+    request<ActivitySnapshot>(`/api/lambdas/activity${windowMs ? `?windowMs=${windowMs}` : ''}`),
   listLambdas: () => request<LambdaSummary[]>('/api/lambdas'),
   getLambda: (name: string) =>
     request<LambdaDetailInfo>(`/api/lambdas/${encodeURIComponent(name)}`),

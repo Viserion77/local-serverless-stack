@@ -6,6 +6,7 @@ import {
   ServicePackageConfig,
 } from '../services/config-manager.js';
 import { FunctionRegistry } from '../services/function-registry.js';
+import { applyRegionToExplorers } from '../services/explorer-region.js';
 
 const router = Router();
 
@@ -26,27 +27,16 @@ function redactPackaging(map: Record<string, ServicePackageConfig>) {
 }
 
 // Public-safe LSS configuration snapshot — everything the dashboard shows and
-// edits. Never expose secret VALUES: the LocalStack auth token collapses to
-// hasAuthToken, packageEnv maps collapse to their key names, and the secrets
-// seed map collapses to a count.
+// edits. Never expose secret VALUES: packageEnv maps collapse to their key
+// names and the secrets seed map collapses to a count.
 function buildConfigSnapshot(cm: ConfigManager) {
   const raw = cm.getConfig();
   const selfEngine = cm.getSelfEngineConfig();
-  const aossSidecar = cm.getAossSidecarConfig();
   return {
     serverPort: cm.getServerPort(),
     engine: {
-      kind: cm.getEngineKind(),
+      kind: 'self' as const,
       endpoint: cm.getEngineEndpoint(),
-    },
-    localstack: {
-      mode: cm.getMode(),
-      endpoint: cm.getLocalStackEndpoint(),
-      port: cm.getLocalStackPort(),
-      edition: cm.getLocalStackEdition(),
-      version: cm.getLocalStackVersion(),
-      image: cm.getLocalStackImage(),
-      hasAuthToken: Boolean(cm.getLocalStackAuthToken()),
     },
     selfEngine: {
       port: selfEngine.port,
@@ -57,17 +47,11 @@ function buildConfigSnapshot(cm: ConfigManager) {
       fsync: selfEngine.fsync,
       fallbackEndpoint: selfEngine.fallbackEndpoint,
     },
-    aossSidecar: {
-      enabled: aossSidecar.enabled,
-      port: aossSidecar.port,
-      endpoint: aossSidecar.endpoint,
-    },
     dynamoProxy: {
       enabled: cm.isEnableDynamoProxy(),
       port: cm.getDynamoProxyPort(),
     },
     region: cm.getRegion(),
-    services: cm.getServices(),
     persistence: cm.isPersistence(),
     debug: cm.isDebug(),
     seedsDir: cm.getSeedsDir(),
@@ -85,6 +69,12 @@ function buildConfigSnapshot(cm: ConfigManager) {
       watch: raw.lambdaRuntime?.watch ?? null,
       invokePortOffset: cm.getInvokePortOffset(),
       invokeHost: cm.getInvokeHost(),
+      // Residency policy: how many worker processes this stack may hold and for
+      // how long. Resolved (not raw) because maxWarmWorkers' default is derived
+      // from the host's RAM — the number that matters is the effective one.
+      lazy: cm.isLambdaRuntimeLazy(),
+      idleTimeoutMs: cm.getLambdaIdleTimeoutMs(),
+      maxWarmWorkers: cm.getLambdaMaxWarmWorkers(),
     },
     serviceRuntime: raw.serviceRuntime ?? {},
     secretSeedCount: Object.keys(cm.getSecretSeeds()).length,
@@ -109,6 +99,10 @@ router.put('/', (req: Request, res: Response) => {
   const cm = ConfigManager.getInstance();
   try {
     const result = cm.updateConfig(req.body);
+    // `region` is lazily consumed, so a patch that changes it takes effect at
+    // once — the explorers' default has to follow or they keep answering for
+    // the previous region.
+    applyRegionToExplorers(cm.getRegion());
     res.json({
       config: buildConfigSnapshot(cm),
       configPath: result.path,
@@ -132,6 +126,7 @@ router.post('/reload', (_req: Request, res: Response) => {
   const cm = ConfigManager.getInstance();
   try {
     const result = cm.reloadFromDisk();
+    applyRegionToExplorers(cm.getRegion());
     res.json({
       config: buildConfigSnapshot(cm),
       configPath: result.path,
@@ -147,14 +142,13 @@ router.post('/reload', (_req: Request, res: Response) => {
 });
 
 // Every local port the stack exposes, so "what do I point my SDK/browser at?"
-// has one answer: orchestrator, active engine (LocalStack edge or self engine),
-// aoss sidecar, DynamoDB proxy, plus each registered service's HTTP API and
-// Lambda invoke listeners.
+// has one answer: orchestrator, engine, DynamoDB proxy, plus each registered
+// service's HTTP API and Lambda invoke listeners.
 router.get('/ports', (_req: Request, res: Response) => {
   const cm = ConfigManager.getInstance();
   const ports: Array<{
     name: string;
-    kind: 'orchestrator' | 'engine' | 'sidecar' | 'proxy' | 'service-api' | 'service-invoke';
+    kind: 'orchestrator' | 'engine' | 'proxy' | 'service-api' | 'service-invoke';
     port: number;
     url: string;
     description: string;
@@ -168,34 +162,14 @@ router.get('/ports', (_req: Request, res: Response) => {
     description: 'Dashboard UI + REST API (register, explorers, seeds)',
   });
 
-  if (cm.isSelfEngine()) {
-    const selfEngine = cm.getSelfEngineConfig();
-    ports.push({
-      name: 'Self engine',
-      kind: 'engine',
-      port: selfEngine.port,
-      url: `http://localhost:${selfEngine.port}`,
-      description: 'In-process AWS emulator — point SDK endpoints here',
-    });
-  } else {
-    ports.push({
-      name: `LocalStack (${cm.getMode()})`,
-      kind: 'engine',
-      port: cm.getLocalStackPort(),
-      url: cm.getLocalStackEndpoint(),
-      description: 'LocalStack edge — every AWS service on one port',
-    });
-    const aossSidecar = cm.getAossSidecarConfig();
-    if (aossSidecar.enabled) {
-      ports.push({
-        name: 'OpenSearch Serverless sidecar',
-        kind: 'sidecar',
-        port: aossSidecar.port,
-        url: aossSidecar.endpoint,
-        description: 'aoss served in-process — no LocalStack edition provides it',
-      });
-    }
-  }
+  const selfEngine = cm.getSelfEngineConfig();
+  ports.push({
+    name: 'Self engine',
+    kind: 'engine',
+    port: selfEngine.port,
+    url: `http://localhost:${selfEngine.port}`,
+    description: 'In-process AWS emulator — point SDK endpoints here',
+  });
 
   if (cm.isEnableDynamoProxy()) {
     ports.push({

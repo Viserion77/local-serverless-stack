@@ -8,7 +8,7 @@ import type { AddressInfo } from 'net';
 // These tests exercise bin/cli.js directly by spawning it as a subprocess
 // against a stub HTTP server that pretends to be the orchestrator. That lets
 // us validate the new confirmation flow, --yes bypass, and the "missing
-// tables" hint without needing a real LocalStack or orchestrator running.
+// tables" hint without needing a real engine or orchestrator running.
 
 const CLI_PATH = path.resolve(__dirname, '../../bin/cli.js');
 
@@ -98,7 +98,7 @@ function startStubOrchestrator(): Promise<Stub> {
                     tableName: e.tableName,
                     inserted: 0,
                     skipped: true,
-                    reason: 'table does not exist in LocalStack',
+                    reason: 'table does not exist in the engine',
                   },
             ),
           }),
@@ -168,7 +168,7 @@ describe('CLI — seed and seed:clear', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lss-cli-test-'));
     fs.writeFileSync(
       path.join(tempDir, 'lss.config.json'),
-      JSON.stringify({ serverPort: stub.port, localstackPort: 4566 }),
+      JSON.stringify({ serverPort: stub.port }),
     );
 
     // cli.js looks at `/tmp/lss-orchestrator-<port>.pid` for non-default ports,
@@ -198,10 +198,10 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr + result.stdout).toContain('Não consegui listar');
+      expect(result.stderr + result.stdout).toContain('Could not list the tables before clearing');
       // Critical: the error suffix must NEVER be empty. Match the colon followed
       // by at least one non-whitespace character.
-      expect(result.stderr + result.stdout).toMatch(/Não consegui listar.*:\s*\S+/);
+      expect(result.stderr + result.stdout).toMatch(/Could not list the tables before clearing.*:\s*\S+/);
       expect(result.stderr + result.stdout).toContain('HTTP 500');
     });
 
@@ -210,7 +210,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(1);
-      expect(result.stderr + result.stdout).toMatch(/Não consegui listar.*:\s*\S+/);
+      expect(result.stderr + result.stdout).toMatch(/Could not list the tables before clearing.*:\s*\S+/);
     });
 
     it('shows a useful message when the orchestrator returns 500 with {error: ""}', async () => {
@@ -219,7 +219,7 @@ describe('CLI — seed and seed:clear', () => {
 
       expect(result.exitCode).toBe(1);
       // Empty error from server should not lead to empty CLI message
-      expect(result.stderr + result.stdout).toMatch(/Não consegui listar.*:\s*\S+/);
+      expect(result.stderr + result.stdout).toMatch(/Could not list the tables before clearing.*:\s*\S+/);
       expect(result.stderr + result.stdout).toContain('HTTP 500');
     });
   });
@@ -233,16 +233,16 @@ describe('CLI — seed and seed:clear', () => {
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
-    it('shows scope summary mentioning LocalStack URL and the AWS safety guarantee', async () => {
+    it('shows scope summary mentioning the engine URL and the AWS safety guarantee', async () => {
       stub.state.seedsList = [
         { tableName: 'Users', file: 'Users.json', itemCount: 3, tableExists: true },
       ];
       const result = await runCli(['seed:clear', '--yes'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('ATENÇÃO');
-      expect(result.stdout).toMatch(/LocalStack:\s+http:\/\/localhost:4566/);
-      expect(result.stdout).toMatch(/não toca em nenhuma conta AWS/i);
+      expect(result.stdout).toContain('WARNING');
+      expect(result.stdout).toMatch(/Engine:\s+http:\/\/localhost:14566/);
+      expect(result.stdout).toMatch(/does NOT touch any AWS account/i);
     });
 
     it('skips the prompt with --yes and clears all live tables', async () => {
@@ -253,7 +253,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear', '--yes'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('pulando confirmação');
+      expect(result.stdout).toContain('skipping the interactive confirmation');
       expect(result.stdout).toContain('Users: 1 item(s) deleted');
       expect(result.stdout).toContain('Orders: 1 item(s) deleted');
       expect(stub.state.clearCalls).toHaveLength(1);
@@ -294,7 +294,7 @@ describe('CLI — seed and seed:clear', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Cancelado');
+      expect(result.stdout).toContain('Aborted');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
@@ -308,7 +308,7 @@ describe('CLI — seed and seed:clear', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Cancelado');
+      expect(result.stdout).toContain('Aborted');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
@@ -322,7 +322,7 @@ describe('CLI — seed and seed:clear', () => {
       });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Cancelado');
+      expect(result.stdout).toContain('Aborted');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
@@ -334,7 +334,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('NENHUMA das tabelas correspondentes existe no LocalStack');
+      expect(result.stdout).toContain('NONE of the matching tables exist in the engine');
       expect(result.stdout).toContain('Ghost');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
@@ -345,7 +345,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed:clear'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Nenhum arquivo de seed');
+      expect(result.stdout).toContain('No seed file');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
@@ -379,18 +379,18 @@ describe('CLI — seed and seed:clear', () => {
       expect(result.stdout).toContain('pro-sample-microservice-Users');
       expect(result.stdout).toContain('pro-sample-microservice-Sessions');
       // And the actionable hint about TableName matching:
-      expect(result.stdout).toMatch(/bater EXATAMENTE com.*TableName/);
+      expect(result.stdout).toMatch(/match the `TableName`.*EXACTLY/);
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
-    it('exits early when the requested specific table does not exist in LocalStack', async () => {
+    it('exits early when the requested specific table does not exist in the engine', async () => {
       stub.state.seedsList = [
         { tableName: 'Users', file: 'Users.json', itemCount: 3, tableExists: true },
       ];
       const result = await runCli(['seed:clear', 'Orders'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Nenhuma tabela "Orders"');
+      expect(result.stdout).toContain('No table "Orders" exists in the engine');
       expect(stub.state.clearCalls).toHaveLength(0);
     });
 
@@ -410,7 +410,7 @@ describe('CLI — seed and seed:clear', () => {
   });
 
   describe('seed', () => {
-    it('seeds all tables that exist in LocalStack', async () => {
+    it('seeds all tables that exist in the engine', async () => {
       stub.state.seedsList = [
         { tableName: 'Users', file: 'Users.json', itemCount: 3, tableExists: true },
         { tableName: 'Orders', file: 'Orders.json', itemCount: 5, tableExists: true },
@@ -436,8 +436,8 @@ describe('CLI — seed and seed:clear', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('Users: 3 item(s) inserted');
       // The diagnostic now lists live tables (since some exist):
-      expect(result.stdout).toContain('Tabelas vivas no LocalStack');
-      expect(result.stdout).toMatch(/bater EXATAMENTE/);
+      expect(result.stdout).toContain('Live tables in the engine');
+      expect(result.stdout).toMatch(/match the `TableName`.*EXACTLY/);
     });
 
     it('shows the deploy-the-stack hint when no live tables exist at all', async () => {
@@ -448,7 +448,7 @@ describe('CLI — seed and seed:clear', () => {
       const result = await runCli(['seed'], { cwd: tempDir });
 
       expect(result.exitCode).toBe(0);
-      expect(result.stdout).toContain('Nenhuma tabela viva no LocalStack');
+      expect(result.stdout).toContain('No live tables in the engine');
       expect(result.stdout).toContain('npx lss start');
       expect(result.stdout).toContain('serverless deploy');
     });

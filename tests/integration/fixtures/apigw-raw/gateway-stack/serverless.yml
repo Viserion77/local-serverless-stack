@@ -1,0 +1,104 @@
+# Gateway-only stack: NO functions of its own. It declares a RAW HTTP API v2
+# topology under `resources:` — an ::Api fronting one ::Route/::Integration/
+# ::Authorizer — whose Lambdas are owned by ANOTHER service (users-service).
+# This is the shape a gateway stack takes in a real multi-stack account, and the
+# reason LSS used to need an `ANY /api/{proxy+}` catch-all wired to a real
+# function just so local traffic landed somewhere.
+#
+# Nothing here is a serverless `httpApi:` event: the route exists ONLY as raw
+# CloudFormation. LSS parses AWS::ApiGatewayV2::Api/Route/Integration/Authorizer
+# + AWS::Lambda::Permission, reduces IntegrationUri/AuthorizerUri to concrete
+# Lambda ARNs, and registers them into the same route registry serverless-state
+# feeds — resolving the cross-stack target through the global function registry
+# at request time, so registration ORDER does not matter.
+#
+#   curl http://localhost:3613/gw/users -H 'authorization: Bearer lss-secret'
+#
+# There is deliberately NO /api/{proxy+} and NO $default catch-all anywhere.
+service: gateway-stack
+
+frameworkVersion: '>=3'
+
+provider:
+  name: aws
+  runtime: nodejs20.x
+  region: sa-east-1
+  stage: dev
+
+custom:
+  accountId: '000000000000'
+  lss:
+    apiPort: 3613
+    invokePort: 13613
+
+# No `functions:` block at all — every Lambda this gateway targets lives in
+# users-service and is referenced by its cross-stack ARN.
+
+resources:
+  Resources:
+    # The HTTP API itself. CorsConfiguration is what makes LSS answer browser
+    # preflights for the raw routes (HttpRoute.cors).
+    GatewayHttpApi:
+      Type: AWS::ApiGatewayV2::Api
+      Properties:
+        Name: gateway-stack-dev
+        ProtocolType: HTTP
+        CorsConfiguration:
+          AllowOrigins:
+            - '*'
+          AllowMethods:
+            - '*'
+          AllowHeaders:
+            - '*'
+
+    # AWS_PROXY integration onto users-service's listUsers — a Lambda this stack
+    # does NOT own. Payload v2 is what HTTP APIs always use in practice.
+    ListUsersIntegration:
+      Type: AWS::ApiGatewayV2::Integration
+      Properties:
+        ApiId: !Ref GatewayHttpApi
+        IntegrationType: AWS_PROXY
+        PayloadFormatVersion: '2.0'
+        TimeoutInMillis: 30000
+        IntegrationUri: arn:aws:lambda:${self:provider.region}:${self:custom.accountId}:function:users-service-dev-listUsers
+
+    # GET /gw/users, protected by the cross-stack authorizer below.
+    ListUsersRoute:
+      Type: AWS::ApiGatewayV2::Route
+      Properties:
+        ApiId: !Ref GatewayHttpApi
+        RouteKey: GET /gw/users
+        Target: !Join ['/', ['integrations', !Ref ListUsersIntegration]]
+        AuthorizationType: CUSTOM
+        AuthorizerId: !Ref SessionAuthorizer
+
+    # REQUEST authorizer, payload v2 with simple responses ({isAuthorized,context}).
+    # Its Lambda is ALSO owned by users-service — resolved by ARN through the
+    # global registry, exactly like the existing cross-service authorizer path.
+    SessionAuthorizer:
+      Type: AWS::ApiGatewayV2::Authorizer
+      Properties:
+        ApiId: !Ref GatewayHttpApi
+        Name: gatewaySessionAuthorizer
+        AuthorizerType: REQUEST
+        AuthorizerPayloadFormatVersion: '2.0'
+        EnableSimpleResponses: true
+        AuthorizerResultTtlInSeconds: 3600
+        IdentitySource:
+          - $request.header.authorization
+        AuthorizerUri: arn:aws:lambda:${self:provider.region}:${self:custom.accountId}:function:users-service-dev-sessionAuthorizerV2Local
+
+    # The invoke grant. In AWS, without this API Gateway 500s; locally the
+    # in-process runtime performs the invoke, so LSS treats it as ADVISORY —
+    # present, it is recorded as the route's SourceArn; absent, the route still
+    # registers and LSS logs a single warning naming the ungranted function.
+    ListUsersInvokePermission:
+      Type: AWS::Lambda::Permission
+      Properties:
+        Action: lambda:InvokeFunction
+        FunctionName: arn:aws:lambda:${self:provider.region}:${self:custom.accountId}:function:users-service-dev-listUsers
+        Principal: apigateway.amazonaws.com
+        SourceArn: !Sub 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:${GatewayHttpApi}/*'
+
+package:
+  individually: false

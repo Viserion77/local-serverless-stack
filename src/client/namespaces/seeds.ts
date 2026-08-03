@@ -2,7 +2,7 @@ import type { Http } from '../http';
 import type { ClearResult, SeedResult, SeedsListResult } from '../types';
 
 export interface SeedsApi {
-  /** GET /api/seeds — seed files on disk + the tables currently live in LocalStack. */
+  /** GET /api/seeds — seed files on disk + the tables currently live in the engine. */
   list(region?: string): Promise<SeedsListResult>;
   /** POST /api/seeds/run — apply seed file(s). No tableName seeds every matching table. */
   run(tableName?: string, region?: string): Promise<{ results: SeedResult[] }>;

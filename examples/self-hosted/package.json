@@ -2,17 +2,18 @@
   "name": "self-hosted",
   "version": "0.0.0",
   "private": true,
-  "description": "Four microservices (orders → billing → notifications pipeline + product catalog) running entirely on the LSS self engine: DynamoDB, SQS, S3, EventBridge and OpenSearch Serverless emulated in-process — no Docker, no LocalStack, no auth token.",
+  "description": "Four microservices (orders \u2192 billing \u2192 notifications pipeline + product catalog) running entirely on the LSS self engine: DynamoDB, SQS, S3, EventBridge and OpenSearch Serverless emulated in-process \u2014 no Docker, no LocalStack, no auth token.",
   "scripts": {
-    "lss:start": "node ../../bin/cli.js start --self-engine",
+    "lss:start": "node ../../bin/cli.js start",
     "lss:stop": "node ../../bin/cli.js stop",
     "lss:status": "node ../../bin/cli.js status",
-    "register:orders": "npm --prefix orders-service run package",
-    "register:billing": "npm --prefix billing-service run package",
-    "register:notifications": "npm --prefix notifications-service run package",
-    "register:catalog": "npm --prefix catalog-service run package",
-    "register:all": "npm run register:orders && npm run register:billing && npm run register:notifications && npm run register:catalog",
+    "register:orders": "node ../../bin/cli.js register orders-service",
+    "register:billing": "node ../../bin/cli.js register billing-service",
+    "register:notifications": "node ../../bin/cli.js register notifications-service",
+    "register:catalog": "node ../../bin/cli.js register catalog-service",
+    "register:all": "node ../../bin/cli.js register orders-service billing-service notifications-service catalog-service",
     "setup": "npm --prefix orders-service install && npm --prefix billing-service install && npm --prefix notifications-service install && npm --prefix catalog-service install",
-    "console": "npx -y http-server . -p 8622 -c-1"
+    "console": "npx -y http-server . -p 8622 -c-1",
+    "scan": "node ../../bin/cli.js scan"
   }
 }

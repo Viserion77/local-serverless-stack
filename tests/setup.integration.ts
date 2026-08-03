@@ -1,5 +1,5 @@
 // Integration-test setup: shared matchers + the orchestrator lifecycle that
-// ensures a clean slate before/after the Docker-backed suites run.
+// ensures a clean slate before/after the suites run.
 import './setup.matchers';
 import { exec } from 'child_process';
 import { promisify } from 'util';

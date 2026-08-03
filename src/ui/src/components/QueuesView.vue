@@ -3,12 +3,15 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink, useRouter } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TTag, TSpinner, TAlert, TText, TLink,
+  TTag, TSpinner, TAlert, TText, TLink, TIcon,
 } from '@treeui/vue';
-import type { TreeBadgeTone } from '@treeui/vue';
+import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
 import type { QueueSnapshot } from '../services/api';
+import { ENGINE_LABEL } from '../services/engine';
+import { useI18n } from '../i18n';
 
+const { t } = useI18n();
 const router = useRouter();
 const queues = ref<QueueSnapshot[]>([]);
 const ownersByQueue = ref<Record<string, string>>({});
@@ -16,15 +19,17 @@ const loading = ref(true);
 const error = ref<string | null>(null);
 let refreshTimer: number | null = null;
 
-const columns = [
-  { key: 'name', label: 'Queue' },
-  { key: 'service', label: 'Service' },
-  { key: 'available', label: 'Available', align: 'right' as const },
-  { key: 'inFlight', label: 'In flight', align: 'right' as const },
-  { key: 'processed', label: 'Processed', align: 'right' as const },
-  { key: 'consumers', label: 'Consumers' },
+// Computed rather than a module const: the labels have to be re-read on a
+// language switch, and `t()` is only reactive at call time.
+const columns = computed(() => [
+  { key: 'name', label: t('queues.colQueue') },
+  { key: 'service', label: t('common.service') },
+  { key: 'available', label: t('queues.colAvailable'), align: 'right' as const },
+  { key: 'inFlight', label: t('queues.colInFlight'), align: 'right' as const },
+  { key: 'processed', label: t('queues.colProcessed'), align: 'right' as const },
+  { key: 'consumers', label: t('queues.colConsumers') },
   { key: 'actions', label: '', align: 'right' as const },
-];
+]);
 
 const rows = computed(() =>
   queues.value.map(q => ({
@@ -53,7 +58,7 @@ async function loadQueues() {
     ownersByQueue.value = map;
     error.value = null;
   } catch (err: any) {
-    error.value = err.message || 'Failed to load queues';
+    error.value = err.message || t('queues.loadListError');
   } finally {
     loading.value = false;
   }
@@ -63,7 +68,7 @@ function openDetail(name: string) {
   router.push(`/queues/${encodeURIComponent(name)}`);
 }
 
-function activityTone(queue: QueueSnapshot): TreeBadgeTone {
+function activityTone(queue: QueueSnapshot): TBadgeTone {
   if (queue.available > 0) return 'warning';
   if (queue.inFlight > 0) return 'info';
   if (queue.consumers.some(c => c.enabled)) return 'success';
@@ -71,10 +76,10 @@ function activityTone(queue: QueueSnapshot): TreeBadgeTone {
 }
 
 function activityLabel(queue: QueueSnapshot): string {
-  if (queue.available > 0) return 'Backlog';
-  if (queue.inFlight > 0) return 'Processing';
-  if (!queue.consumers.length) return 'No consumers';
-  return 'Idle';
+  if (queue.available > 0) return t('queues.activityBacklog');
+  if (queue.inFlight > 0) return t('queues.activityProcessing');
+  if (!queue.consumers.length) return t('queues.noConsumers');
+  return t('queues.activityIdle');
 }
 
 onMounted(() => {
@@ -91,25 +96,25 @@ onBeforeUnmount(() => {
   <TStack direction="vertical" gap="1.25rem">
     <TGrid :columns="4" gap="1rem">
       <TStat
-        label="Queues"
+        :label="t('queues.statQueues')"
         :value="totals.queues"
         tone="info"
         :loading="loading"
       />
       <TStat
-        label="Available messages"
+        :label="t('queues.statAvailable')"
         :value="totals.available"
         tone="warning"
         :loading="loading"
       />
       <TStat
-        label="In flight"
+        :label="t('queues.statInFlight')"
         :value="totals.inFlight"
         tone="info"
         :loading="loading"
       />
       <TStat
-        label="Processed"
+        :label="t('queues.statProcessed')"
         :value="totals.processed"
         tone="success"
         :loading="loading"
@@ -123,22 +128,31 @@ onBeforeUnmount(() => {
     <TCard variant="outline">
       <template #header>
         <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-          <TText weight="semibold">SQS Queues</TText>
-          <TText tone="muted">Live · refreshes every 4s</TText>
+          <!-- Queues are Amazon SQS throughout the app (engine service id
+               'sqs'); the identity goes on the card header once. -->
+          <TStack direction="horizontal" gap="0.5rem" align="center">
+            <TIcon name="aws-sqs" />
+            <TText weight="semibold">{{ t('queues.cardTitle') }}</TText>
+          </TStack>
+          <TText tone="muted">{{ t('queues.liveRefresh') }}</TText>
         </TStack>
       </template>
 
       <TStack v-if="loading" direction="horizontal" justify="center" align="center">
-        <TSpinner label="Loading queues..." />
+        <TSpinner :label="t('queues.loadingList')" />
       </TStack>
 
       <TEmptyState
         v-else-if="!queues.length"
-        title="No queues found"
-        description="Register a microservice that defines SQS resources or create queues directly in LocalStack."
-      />
+        :title="t('queues.emptyTitle')"
+        :description="t('queues.emptyDescription', { engine: ENGINE_LABEL })"
+      >
+        <template #icon>
+          <TIcon name="aws-sqs" />
+        </template>
+      </TEmptyState>
 
-      <TTable v-else :columns="columns" :rows="rows" aria-label="SQS queues">
+      <TTable v-else :columns="columns" :rows="rows" :aria-label="t('queues.tableAria')">
         <template #cell-name="{ row }">
           <TStack direction="vertical" gap="0.125rem">
             <TLink
@@ -161,7 +175,7 @@ onBeforeUnmount(() => {
           >
             <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
           </RouterLink>
-          <TText v-else tone="muted" size="xs">unmanaged</TText>
+          <TText v-else tone="muted" size="xs">{{ t('queues.unmanaged') }}</TText>
         </template>
 
         <template #cell-available="{ row }">
@@ -186,6 +200,10 @@ onBeforeUnmount(() => {
           <TBadge tone="success" variant="soft">{{ row.processed }}</TBadge>
         </template>
 
+        <!-- Consumers are Lambda functions wired by event-source mappings — a
+             cross-service reference, which is the strongest case for a mark
+             inside a table cell. Decorative (the tag names the function), and
+             sized down so the filled tile does not outweigh a `sm` tag. -->
         <template #cell-consumers="{ row }">
           <TStack direction="horizontal" gap="0.25rem" wrap>
             <template v-if="(row.consumers as any[]).length">
@@ -195,10 +213,11 @@ onBeforeUnmount(() => {
                 size="sm"
                 :variant="c.enabled ? 'solid' : 'outline'"
               >
+                <template #icon><TIcon name="aws-lambda" size="14" /></template>
                 {{ c.functionName }}
               </TTag>
             </template>
-            <TBadge v-else tone="neutral" variant="soft">No consumers</TBadge>
+            <TBadge v-else tone="neutral" variant="soft">{{ t('queues.noConsumers') }}</TBadge>
           </TStack>
         </template>
 
@@ -208,7 +227,7 @@ onBeforeUnmount(() => {
               {{ activityLabel(row as any) }}
             </TBadge>
             <TButton size="sm" variant="ghost" @click="openDetail(String(row.name))">
-              Open
+              {{ t('queues.open') }}
             </TButton>
           </TStack>
         </template>

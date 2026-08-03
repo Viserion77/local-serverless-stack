@@ -6,10 +6,12 @@ import {
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { DynamoTableDetail } from '../../services/api';
+import { useI18n } from '../../i18n';
 
 const props = defineProps<{ table: DynamoTableDetail }>();
 const emit = defineEmits<{ (e: 'refresh'): void }>();
 
+const { t } = useI18n();
 const toast = useToast();
 const ttlEnabled = ref<boolean>(props.table.ttl.enabled);
 const ttlAttribute = ref<string>(props.table.ttl.attributeName || '');
@@ -26,7 +28,7 @@ watch(
 
 async function applyTtl() {
   if (ttlEnabled.value && !ttlAttribute.value.trim()) {
-    error.value = 'Attribute name is required to enable TTL';
+    error.value = t('dynamo.ttlAttrRequired');
     return;
   }
   saving.value = true;
@@ -34,13 +36,15 @@ async function applyTtl() {
   try {
     await api.setDynamoTtl(props.table.name, ttlEnabled.value, ttlAttribute.value.trim() || undefined);
     toast.add({
-      title: ttlEnabled.value ? 'TTL enabled' : 'TTL disabled',
-      description: ttlEnabled.value ? `Attribute: ${ttlAttribute.value}` : undefined,
+      title: ttlEnabled.value ? t('dynamo.ttlEnabledToast') : t('dynamo.ttlDisabledToast'),
+      description: ttlEnabled.value
+        ? t('dynamo.attributeLabel', { name: ttlAttribute.value })
+        : undefined,
       variant: 'success',
     });
     emit('refresh');
   } catch (err: any) {
-    error.value = err.message || 'Failed to update TTL';
+    error.value = err.message || t('dynamo.ttlUpdateFailed');
   } finally {
     saving.value = false;
   }
@@ -56,14 +60,14 @@ function formatBytes(n: number): string {
 <template>
   <TStack direction="vertical" gap="1rem">
     <TGrid :columns="4" gap="0.75rem">
-      <TStat label="Items" :value="props.table.itemCount" tone="info" />
-      <TStat label="Size" :value="formatBytes(props.table.sizeBytes)" tone="neutral" />
+      <TStat :label="t('dynamo.items')" :value="props.table.itemCount" tone="info" />
+      <TStat :label="t('common.size')" :value="formatBytes(props.table.sizeBytes)" tone="neutral" />
       <TStat
-        label="Status"
+        :label="t('common.status')"
         :value="props.table.status || 'UNKNOWN'"
         :tone="props.table.status === 'ACTIVE' ? 'success' : 'warning'"
       />
-      <TStat label="Billing" :value="props.table.billingMode || '—'" tone="neutral" />
+      <TStat :label="t('dynamo.billing')" :value="props.table.billingMode || '—'" tone="neutral" />
     </TGrid>
 
     <TCard variant="outline">
@@ -77,27 +81,27 @@ function formatBytes(n: number): string {
 
       <TStack direction="vertical" gap="0.75rem">
         <TText tone="muted" size="sm">
-          When TTL is enabled, items are automatically deleted by DynamoDB after the timestamp in the configured attribute (epoch seconds). Items are eventually consistent and may take time to be removed.
+          {{ t('dynamo.ttlDescription') }}
         </TText>
 
-        <TFormField label="Enable TTL">
+        <TFormField :label="t('dynamo.enableTtl')">
           <TSwitch v-model="ttlEnabled" />
         </TFormField>
 
         <TFormField
-          label="Attribute name"
-          :hint="ttlEnabled ? 'Required when enabling TTL' : 'Disabled — value retained for reference'"
+          :label="t('dynamo.attributeName')"
+          :hint="ttlEnabled ? t('dynamo.ttlHintRequired') : t('dynamo.ttlHintDisabled')"
         >
           <TInput
             v-model="ttlAttribute"
-            placeholder="e.g. expiresAt"
+            :placeholder="t('dynamo.ttlAttrPlaceholder')"
             :disabled="!ttlEnabled"
           />
         </TFormField>
 
         <TStack direction="horizontal" justify="flex-end">
           <TButton size="sm" variant="solid" :loading="saving" @click="applyTtl">
-            Apply
+            {{ t('dynamo.apply') }}
           </TButton>
         </TStack>
       </TStack>
@@ -110,7 +114,7 @@ function formatBytes(n: number): string {
       <TStack direction="vertical" gap="0.5rem">
         <TStack direction="horizontal" gap="0.5rem" align="center">
           <TBadge :tone="props.table.streamEnabled ? 'success' : 'neutral'" variant="soft">
-            {{ props.table.streamEnabled ? 'Enabled' : 'Disabled' }}
+            {{ props.table.streamEnabled ? t('dynamo.enabled') : t('dynamo.disabled') }}
           </TBadge>
           <TTag v-if="props.table.streamViewType" size="sm" variant="soft">
             {{ props.table.streamViewType }}
@@ -120,21 +124,21 @@ function formatBytes(n: number): string {
           {{ props.table.streamArn }}
         </TText>
         <TText v-else tone="muted" size="xs">
-          Streams configuration is set at table creation time and cannot be changed from here.
+          {{ t('dynamo.streamsNote') }}
         </TText>
       </TStack>
     </TCard>
 
     <TCard variant="outline">
       <template #header>
-        <TText weight="semibold">Identifier</TText>
+        <TText weight="semibold">{{ t('dynamo.identifier') }}</TText>
       </template>
       <TStack direction="vertical" gap="0.25rem">
         <TText tone="muted" family="mono" size="xs">
           ARN: {{ props.table.arn || '—' }}
         </TText>
         <TText tone="muted" size="xs">
-          Created: {{ props.table.createdAt ? new Date(props.table.createdAt).toLocaleString() : '—' }}
+          {{ t('common.created') }}: {{ props.table.createdAt ? new Date(props.table.createdAt).toLocaleString() : '—' }}
         </TText>
       </TStack>
     </TCard>

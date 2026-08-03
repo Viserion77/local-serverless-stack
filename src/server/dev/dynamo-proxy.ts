@@ -1,6 +1,7 @@
 import http from 'http';
+import { getBindHost } from '../services/bind-host.js';
 
-// Temporary DynamoDB proxy: forwards http://localhost:8000 -> LocalStack (e.g., http://localhost:4566)
+// Temporary DynamoDB proxy: forwards http://localhost:8000 -> the engine (e.g., http://localhost:14566)
 // Controlled by ENABLE_DYNAMO_PROXY env var; remove when no longer needed.
 export function startDynamoProxy(targetEndpoint: string, port = 8000) {
   const targetBase = targetEndpoint.replace(/\/$/, '');
@@ -41,8 +42,22 @@ export function startDynamoProxy(targetEndpoint: string, port = 8000) {
     req.pipe(upstream);
   });
 
-  server.listen(port, () => {
+  // Same bind host as every other listener (services/bind-host.ts). This is a
+  // credential-free, unauthenticated pass-through to the engine's DynamoDB
+  // surface, so a bare `listen(port)` — which binds `::` — republished every
+  // table on the network the moment `enableDynamoProxy` was turned on, however
+  // carefully the orchestrator itself was fenced.
+  server.listen(port, getBindHost(), () => {
     console.log(`✅ DynamoDB proxy listening on http://localhost:${port} -> ${targetBase}`);
+  });
+
+  // The proxy is an optional convenience: a busy port must degrade to a warning,
+  // never take the orchestrator down with an unhandled 'error' event.
+  server.on('error', (error: NodeJS.ErrnoException) => {
+    const detail = error.code === 'EADDRINUSE'
+      ? `port ${port} is already in use — set dynamoProxyPort to a free port or disable enableDynamoProxy`
+      : error.message;
+    console.warn(`⚠️  DynamoDB proxy disabled: ${detail}`);
   });
 
   return server;

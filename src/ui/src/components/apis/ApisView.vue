@@ -3,12 +3,14 @@ import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
-  TTag, TSpinner, TAlert, TDivider, TText, TLink, useToast,
+  TTag, TSpinner, TAlert, TDivider, TText, TLink, TIcon, useToast,
 } from '@treeui/vue';
-import type { TreeBadgeTone } from '@treeui/vue';
+import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { ApiRouteInfo, ServiceApiInfo } from '../../services/api';
+import { useI18n } from '../../i18n';
 
+const { t } = useI18n();
 const toast = useToast();
 const apis = ref<ServiceApiInfo[]>([]);
 const loading = ref(true);
@@ -16,23 +18,26 @@ const error = ref<string | null>(null);
 const clearingCache = ref<Record<string, boolean>>({});
 let refreshTimer: number | null = null;
 
-const routeColumns = [
-  { key: 'method', label: 'Method' },
-  { key: 'path', label: 'Path' },
-  { key: 'functionName', label: '→ Function' },
-  { key: 'eventType', label: 'Type' },
-  { key: 'authorizerName', label: 'Auth' },
+// Computed rather than module consts: the labels have to be re-read on a
+// language switch, and a plain array would freeze the first locale's strings.
+const routeColumns = computed(() => [
+  { key: 'method', label: t('apis.colMethod') },
+  { key: 'path', label: t('apis.colPath') },
+  { key: 'functionName', label: `→ ${t('apis.colFunction')}` },
+  { key: 'eventType', label: t('common.type') },
+  { key: 'authorizerName', label: t('apis.colAuth') },
   { key: 'actions', label: '', align: 'right' as const },
-];
+]);
 
-const authorizerColumns = [
-  { key: 'name', label: 'Name' },
-  { key: 'type', label: 'Type' },
-  { key: 'payloadVersion', label: 'Payload' },
+const authorizerColumns = computed(() => [
+  { key: 'name', label: t('common.name') },
+  { key: 'type', label: t('common.type') },
+  { key: 'payloadVersion', label: t('apis.colPayload') },
+  // TTL is the AWS field name (`resultTtlInSeconds`) — left untranslated.
   { key: 'resultTtlInSeconds', label: 'TTL', align: 'right' as const },
-  { key: 'identitySource', label: 'Identity source' },
-  { key: 'target', label: 'Function / ARN' },
-];
+  { key: 'identitySource', label: t('apis.colIdentitySource') },
+  { key: 'target', label: t('apis.colTarget') },
+]);
 
 const totals = computed(() => ({
   services: apis.value.length,
@@ -57,7 +62,7 @@ async function loadApis() {
     apis.value = await api.listApis();
     error.value = null;
   } catch (err: any) {
-    error.value = err.message || 'Failed to load APIs';
+    error.value = err.message || t('apis.loadError');
   } finally {
     loading.value = false;
   }
@@ -69,13 +74,15 @@ async function clearCache(service: string) {
   try {
     const res = await api.clearAuthorizerCache({ service });
     toast.add({
-      title: 'Authorizer cache cleared',
-      description: `${res.removed} cached result${res.removed === 1 ? '' : 's'} removed`,
+      title: t('apis.cacheCleared'),
+      description: res.removed === 1
+        ? t('apis.cacheClearedOne', { count: res.removed })
+        : t('apis.cacheClearedMany', { count: res.removed }),
       variant: 'success',
     });
   } catch (err: any) {
     toast.add({
-      title: 'Failed to clear authorizer cache',
+      title: t('apis.cacheClearFailed'),
       description: err.message,
       variant: 'danger',
     });
@@ -87,11 +94,11 @@ async function clearCache(service: string) {
 function copyCurl(svc: ServiceApiInfo, route: ApiRouteInfo) {
   const cmd = `curl -X ${route.method} http://localhost:${svc.apiPort}${route.path}`;
   navigator.clipboard?.writeText(cmd).then(() => {
-    toast.add({ title: 'curl command copied', description: cmd, variant: 'success' });
+    toast.add({ title: t('apis.curlCopied'), description: cmd, variant: 'success' });
   });
 }
 
-function listenerTone(status: string): TreeBadgeTone {
+function listenerTone(status: string): TBadgeTone {
   switch (status) {
     case 'online': return 'success';
     case 'port-conflict': return 'warning';
@@ -99,7 +106,19 @@ function listenerTone(status: string): TreeBadgeTone {
   }
 }
 
-function methodTone(method: string): TreeBadgeTone {
+// The listener status arrives as a `GatewayListenerStatus` literal; the badge
+// shows the translated word, not the wire value.
+function listenerLabel(status: string): string {
+  switch (status) {
+    case 'online': return t('common.online');
+    case 'stopped': return t('common.stopped');
+    case 'disabled': return t('common.disabled');
+    case 'port-conflict': return t('apis.statusPortConflict');
+    default: return t('common.unknown');
+  }
+}
+
+function methodTone(method: string): TBadgeTone {
   return method === 'ANY' ? 'info' : 'neutral';
 }
 
@@ -117,19 +136,26 @@ onBeforeUnmount(() => {
   <TStack direction="vertical" gap="1.25rem">
     <TGrid :columns="3" gap="1rem">
       <TStat
-        label="Services with APIs"
+        :label="t('apis.statServices')"
         :value="totals.services"
         tone="info"
         :loading="loading"
       />
+      <!-- Routes are the Amazon API Gateway resource, so this tile carries the
+           brand. Its neighbours count LSS microservices and LSS gateway
+           listeners and deliberately stay unbranded. -->
       <TStat
-        label="Routes"
+        :label="t('apis.statRoutes')"
         :value="totals.routes"
         tone="info"
         :loading="loading"
-      />
+      >
+        <template #icon>
+          <TIcon name="aws-api-gateway" />
+        </template>
+      </TStat>
       <TStat
-        label="Listeners online"
+        :label="t('apis.statListenersOnline')"
         :value="totals.online"
         tone="success"
         :loading="loading"
@@ -141,14 +167,18 @@ onBeforeUnmount(() => {
     </TAlert>
 
     <TStack v-if="loading && !apis.length" direction="horizontal" justify="center" align="center">
-      <TSpinner label="Loading APIs..." />
+      <TSpinner :label="t('apis.loadingApis')" />
     </TStack>
 
     <TEmptyState
       v-else-if="!apis.length"
-      title="No APIs registered"
-      description="Register a microservice that defines http or httpApi events to see its routes here."
-    />
+      :title="t('apis.emptyTitle')"
+      :description="t('apis.emptyDescription')"
+    >
+      <template #icon>
+        <TIcon name="aws-api-gateway" />
+      </template>
+    </TEmptyState>
 
     <TCard
       v-for="svc in apis"
@@ -162,7 +192,9 @@ onBeforeUnmount(() => {
               <TText weight="semibold">{{ svc.service }}</TText>
             </TLink>
             <TBadge v-if="svc.apiPort" tone="info" variant="soft">:{{ svc.apiPort }}</TBadge>
-            <TBadge :tone="listenerTone(svc.status)" variant="soft">{{ svc.status }}</TBadge>
+            <TBadge :tone="listenerTone(svc.status)" variant="soft">
+              {{ listenerLabel(svc.status) }}
+            </TBadge>
             <TBadge
               v-if="svc.invokePort"
               :tone="listenerTone(svc.invokeStatus)"
@@ -178,13 +210,18 @@ onBeforeUnmount(() => {
             :loading="clearingCache[svc.service]"
             @click="clearCache(svc.service)"
           >
-            Clear authorizer cache
+            {{ t('apis.clearCache') }}
           </TButton>
         </TStack>
       </template>
 
       <TStack direction="vertical" gap="0.75rem">
-        <TTable v-if="svc.routes.length" :columns="routeColumns" :rows="routeRows(svc)" aria-label="API routes">
+        <TTable
+          v-if="svc.routes.length"
+          :columns="routeColumns"
+          :rows="routeRows(svc)"
+          :aria-label="t('apis.routesTableLabel')"
+        >
           <template #cell-method="{ row }">
             <TBadge :tone="methodTone(String(row.method))" variant="soft">
               {{ row.method }}
@@ -195,12 +232,19 @@ onBeforeUnmount(() => {
             <TText family="mono">{{ row.path }}</TText>
           </template>
 
+          <!-- Every route target is a Lambda function: the mark makes the
+               API Gateway -> Lambda hop legible inside the table. Decorative
+               (the tag names the function), and sized down so the filled tile
+               does not outweigh a `sm` tag. -->
           <template #cell-functionName="{ row }">
             <RouterLink
               :to="`/lambdas/${encodeURIComponent(String(row.functionName))}`"
               style="text-decoration: none;"
             >
-              <TTag size="sm" variant="soft" clickable>{{ row.functionName }}</TTag>
+              <TTag size="sm" variant="soft" clickable>
+                <template #icon><TIcon name="aws-lambda" size="14" /></template>
+                {{ row.functionName }}
+              </TTag>
             </RouterLink>
           </template>
 
@@ -224,7 +268,7 @@ onBeforeUnmount(() => {
                 variant="ghost"
                 @click="copyCurl(svc, row as unknown as ApiRouteInfo)"
               >
-                Copy curl
+                {{ t('apis.copyCurl') }}
               </TButton>
             </TStack>
           </template>
@@ -232,14 +276,18 @@ onBeforeUnmount(() => {
 
         <TEmptyState
           v-else
-          title="No routes"
-          description="This service exposes no http or httpApi routes."
+          :title="t('apis.noRoutesTitle')"
+          :description="t('apis.noRoutesDescription')"
         />
 
         <template v-if="svc.authorizers.length">
           <TDivider />
-          <TText weight="semibold" size="sm">Authorizers</TText>
-          <TTable :columns="authorizerColumns" :rows="authorizerRows(svc)" aria-label="Authorizers">
+          <TText weight="semibold" size="sm">{{ t('apis.authorizers') }}</TText>
+          <TTable
+            :columns="authorizerColumns"
+            :rows="authorizerRows(svc)"
+            :aria-label="t('apis.authorizers')"
+          >
             <template #cell-name="{ row }">
               <TText family="mono" size="sm">{{ row.name }}</TText>
             </template>

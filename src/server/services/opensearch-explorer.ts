@@ -2,9 +2,7 @@ import {
   OpenSearchServerlessClient,
   ListCollectionsCommand,
 } from '@aws-sdk/client-opensearchserverless';
-import { LocalStackManager } from './localstack-manager.js';
-import { ConfigManager } from './config-manager.js';
-import { aossEndpoint } from './resource-provisioner.js';
+import { EngineManager } from '../engine/engine-manager.js';
 
 export interface OpenSearchCollectionSummary {
   name: string;
@@ -53,7 +51,13 @@ export class OpenSearchExplorer {
   private clients = new Map<string, OpenSearchServerlessClient>();
   private defaultRegion: string = 'us-east-1';
 
-  private constructor() {}
+  // Seeded from the active engine config so a caller that omits `?region=`
+  // (CLI, LssClient, curl) still reads the project's own region — see the
+  // matching note in DynamoExplorer.
+  private constructor() {
+    const region = EngineManager.getInstance().getConfig().region;
+    if (region) this.defaultRegion = region;
+  }
 
   static getInstance(): OpenSearchExplorer {
     if (!OpenSearchExplorer.instance) OpenSearchExplorer.instance = new OpenSearchExplorer();
@@ -64,19 +68,18 @@ export class OpenSearchExplorer {
     if (region) this.defaultRegion = region;
   }
 
-  // aoss does not answer on the engine endpoint when the sidecar runs (no
-  // LocalStack edition provides aoss). Both planes target the base
-  // aossEndpoint() picks: the sidecar when enabled, else the engine itself
-  // (the self engine serves aoss natively).
+  // The engine serves the aoss control plane and the OpenSearch data plane
+  // natively, both on its own endpoint — 0.x needed a sidecar here only because
+  // no LocalStack edition provides aoss at all.
   private aossBase(): string {
-    return aossEndpoint(ConfigManager.getInstance(), LocalStackManager.getInstance().getConfig().endpoint);
+    return EngineManager.getInstance().getConfig().endpoint;
   }
 
   private clientFor(region?: string): OpenSearchServerlessClient {
     const r = region || this.defaultRegion;
     let client = this.clients.get(r);
     if (!client) {
-      const baseConfig = LocalStackManager.getInstance().getConfig();
+      const baseConfig = EngineManager.getInstance().getConfig();
       client = new OpenSearchServerlessClient({ ...baseConfig, region: r, endpoint: this.aossBase() });
       this.clients.set(r, client);
     }

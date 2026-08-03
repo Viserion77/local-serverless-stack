@@ -209,7 +209,7 @@ export interface EngineBusEvents {
 
 // Absorbed Lambda function metadata (real functions run in the LSS runtime;
 // LocalStack-era proxy functions are stored so their INVOKE_URL keeps working
-// as an HTTP fallback for services still on serverless-offline).
+// as an HTTP fallback for functions that only exist behind an invoke URL).
 export interface EngineFunctionRecord {
   functionName: string;
   arn: string;

@@ -31,7 +31,7 @@ import {
   DeleteCollectionCommand,
   ListCollectionsCommand,
 } from '@aws-sdk/client-opensearchserverless';
-import { LocalStackManager } from './localstack-manager.js';
+import { EngineManager } from '../engine/engine-manager.js';
 import { ConfigManager } from './config-manager.js';
 import { SeedManager } from './seed-manager.js';
 import { resolveGeneratedSecretString } from './secret-value.js';
@@ -53,14 +53,6 @@ import AdmZip from 'adm-zip';
 // logs) must target: the in-process sidecar when it is enabled — no LocalStack
 // edition provides aoss — else the active engine (the self engine serves aoss
 // natively). Exported so tests can pin the choice directly.
-export function aossEndpoint(
-  config: Pick<ConfigManager, 'getAossSidecarConfig'>,
-  engineEndpoint: string,
-): string {
-  const sidecar = config.getAossSidecarConfig();
-  return sidecar.enabled ? sidecar.endpoint : engineEndpoint;
-}
-
 export class ResourceProvisioner {
   private static instance: ResourceProvisioner;
   private dynamoClient!: DynamoDBClient;
@@ -91,7 +83,7 @@ export class ResourceProvisioner {
   }
 
   private initializeClients(region: string): void {
-    const baseConfig = LocalStackManager.getInstance().getConfig();
+    const baseConfig = EngineManager.getInstance().getConfig();
     const config = {
       ...baseConfig,
       region: region,
@@ -108,7 +100,6 @@ export class ResourceProvisioner {
     // aoss lives on the sidecar when enabled, not on the engine endpoint.
     this.openSearchClient = new OpenSearchServerlessClient({
       ...config,
-      endpoint: aossEndpoint(ConfigManager.getInstance(), baseConfig.endpoint),
     });
   }
 
@@ -754,7 +745,7 @@ export const handler = async (event, context) => {
       );
       // The same base the client above targeted, so the logged data-plane URL
       // is the one that actually answers.
-      const base = aossEndpoint(ConfigManager.getInstance(), LocalStackManager.getInstance().getConfig().endpoint);
+      const base = EngineManager.getInstance().getConfig().endpoint;
       const endpoint = `${base}/_aoss/${resource.name}`;
       console.log(`  ✓ Created OpenSearch collection: ${resource.name} (endpoint: ${endpoint})`);
     } catch (error: any) {
@@ -1070,7 +1061,7 @@ export const handler = async (event, context) => {
     buckets: string[];
     collections: string[];
   }> {
-    const baseConfig = LocalStackManager.getInstance().getConfig();
+    const baseConfig = EngineManager.getInstance().getConfig();
     const config = region ? { ...baseConfig, region } : { ...baseConfig, region: this.currentRegion };
     const dynamo = region && region !== this.currentRegion ? new DynamoDBClient(config) : this.dynamoClient;
     const sqs = region && region !== this.currentRegion ? new SQSClient(config) : this.sqsClient;
@@ -1081,8 +1072,7 @@ export const handler = async (event, context) => {
     const aoss = region && region !== this.currentRegion
       ? new OpenSearchServerlessClient({
           ...config,
-          endpoint: aossEndpoint(ConfigManager.getInstance(), baseConfig.endpoint),
-        })
+            })
       : this.openSearchClient;
 
     const [tables, queues, topics, buckets, collections] = await Promise.all([
@@ -1096,19 +1086,35 @@ export const handler = async (event, context) => {
     return { tables, queues, topics, buckets, collections };
   }
 
+  // Paginated: ListTables caps a page at 100 names, and GET /api/resources is
+  // built from this list — a 40-service monorepo would show only its first 100
+  // tables in the dashboard and in the client.
   private async listDynamoDBTables(client: DynamoDBClient = this.dynamoClient): Promise<string[]> {
     try {
-      const response = await client.send(new ListTablesCommand({}));
-      return response.TableNames || [];
+      const names: string[] = [];
+      let exclusiveStartTableName: string | undefined;
+      do {
+        const response = await client.send(new ListTablesCommand({ ExclusiveStartTableName: exclusiveStartTableName }));
+        names.push(...(response.TableNames || []));
+        exclusiveStartTableName = response.LastEvaluatedTableName;
+      } while (exclusiveStartTableName);
+      return names;
     } catch {
       return [];
     }
   }
 
+  // Paginated for the same reason as the tables above (ListQueues caps at 1000).
   private async listSQSQueues(client: SQSClient = this.sqsClient): Promise<string[]> {
     try {
-      const response = await client.send(new ListQueuesCommand({}));
-      return response.QueueUrls?.map(url => url.split('/').pop()!) || [];
+      const urls: string[] = [];
+      let nextToken: string | undefined;
+      do {
+        const response = await client.send(new ListQueuesCommand({ NextToken: nextToken }));
+        urls.push(...(response.QueueUrls || []));
+        nextToken = response.NextToken;
+      } while (nextToken);
+      return urls.map(url => url.split('/').pop()!);
     } catch {
       return [];
     }

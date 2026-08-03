@@ -12,6 +12,7 @@ import {
   ServerlessStateParser,
   RegisteredFunction,
   sanitizeEnvironmentValues,
+  type ParsedServerlessState,
 } from './serverless-state-parser.js';
 import { CacheManager, ServiceMetadata } from './cache-manager.js';
 import { ResourceProvisioner } from './resource-provisioner.js';
@@ -76,7 +77,6 @@ export class ServiceRegistrar {
 
     const resolvedPath = path.resolve(input.servicePath);
     const dirName = path.basename(resolvedPath);
-    const effectiveRegion = input.region || configManager.getConfig().region || 'us-east-1';
 
     const warnings: string[] = [];
     const template = await this.readTemplate(resolvedPath, dirName) as Parameters<CloudFormationParser['parse']>[0];
@@ -99,8 +99,21 @@ export class ServiceRegistrar {
 
     const cfnLambdas = resources.filter((r): r is LambdaResource => r.type === 'lambda');
 
+    // Registration is self-serving: everything the retired 0.x plugin used to
+    // POST alongside the request — provider.region and the custom.lss port
+    // hints — is read from the packaged state, so `POST /register
+    // {servicePath}` (or `lss register <dir>`) is enough.
+    // An explicit request value still wins as a deliberate override.
+    let parsed: ParsedServerlessState | null = null;
     if (state) {
-      const parsed = stateParser.parse(state);
+      parsed = stateParser.parse(state);
+    }
+    const effectiveRegion = input.region
+      || parsed?.region
+      || configManager.getConfig().region
+      || 'us-east-1';
+
+    if (parsed) {
       if (parsed.serviceName) serviceName = parsed.serviceName;
       warnings.push(...parsed.warnings);
       stage = parsed.stage;
@@ -148,13 +161,16 @@ export class ServiceRegistrar {
     // Record this stack's exports so a later service's Fn::ImportValue resolves.
     collectStackExports(cfnParser, resources, template.Outputs as Record<string, unknown> | undefined, effectiveRegion, this.exportMap);
 
-    // Port resolution: lss.config.json serviceRuntime > plugin payload >
-    // invokePortOffset rule (apiPort 30xx → invokePort 130xx).
+    // Port resolution: lss.config.json serviceRuntime > request payload >
+    // custom.lss hints from the packaged state > invokePortOffset rule
+    // (apiPort 30xx → invokePort 130xx).
     const runtimeConfig = configManager.getRuntimeConfigForService(resolvedPath);
-    const apiPort = runtimeConfig.apiPort ?? input.apiPort;
+    const apiPort = runtimeConfig.apiPort ?? input.apiPort ?? parsed?.apiPort;
     const invokePort = runtimeConfig.invokePort
       ?? input.invokePort
+      ?? parsed?.invokePort
       ?? (apiPort ? apiPort + configManager.getInvokePortOffset() : undefined);
+    console.log(`   Ports: api ${apiPort ?? '—'} · invoke ${invokePort ?? '—'} · region ${effectiveRegion}`);
 
     // 0.5.x keyed the cache by directory basename. When the real service name
     // differs, migrate: drop the legacy entry for this same root (data plane +

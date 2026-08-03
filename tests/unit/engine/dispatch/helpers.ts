@@ -48,9 +48,23 @@ export function makeCtx(overrides: Partial<SelfEngineResolvedConfig> = {}): Test
   return {
     ctx,
     dir,
+    // Root cause of the intermittent `ENOTEMPTY: rmdir '/tmp/lss-engine-dispatch-*'`:
+    // catalog writes are debounced (20 ms) and WAL appends are buffered, so the
+    // old cleanup raced the store — rm walked the tree while a flush was still
+    // creating files in it. flushAll() drains both; the retry covers the tail a
+    // dispatch loop's synchronous stop() can still emit under parallel load.
     cleanup: async () => {
       store.stopSweeper();
-      await fs.promises.rm(dir, { recursive: true, force: true });
+      await store.flushAll();
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await fs.promises.rm(dir, { recursive: true, force: true });
+          return;
+        } catch (err) {
+          if ((err as NodeJS.ErrnoException).code !== 'ENOTEMPTY' || attempt >= 4) throw err;
+          await new Promise(resolve => setTimeout(resolve, 25));
+        }
+      }
     },
   };
 }

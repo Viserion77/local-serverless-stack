@@ -4,6 +4,9 @@ import {
   TModal, TButton, TStack, TTextarea, TAlert, TBadge, TText, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
+import { useI18n } from '../../i18n';
+
+const { t } = useI18n();
 
 type Mode = 'create' | 'edit' | 'view';
 
@@ -36,9 +39,9 @@ const isOpen = computed({
 });
 
 const title = computed(() => {
-  if (props.mode === 'create') return `Create item · ${props.tableName}`;
-  if (props.mode === 'view') return `View item · ${props.tableName}`;
-  return `Edit item · ${props.tableName}`;
+  if (props.mode === 'create') return t('dynamo.editorCreateTitle', { table: props.tableName });
+  if (props.mode === 'view') return t('dynamo.editorViewTitle', { table: props.tableName });
+  return t('dynamo.editorEditTitle', { table: props.tableName });
 });
 
 const readOnly = computed(() => props.mode === 'view');
@@ -61,7 +64,7 @@ function tryParse(): Record<string, unknown> | null {
   try {
     const parsed = JSON.parse(draft.value);
     if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-      parseError.value = 'Item must be a JSON object';
+      parseError.value = t('dynamo.errItemNotObject');
       return null;
     }
     parseError.value = null;
@@ -89,13 +92,13 @@ async function save() {
     }
     await api.putDynamoItem(props.tableName, parsed);
     toast.add({
-      title: props.mode === 'create' ? 'Item created' : 'Item saved',
+      title: props.mode === 'create' ? t('dynamo.itemCreated') : t('dynamo.itemSaved'),
       variant: 'success',
     });
     emit('saved');
     isOpen.value = false;
   } catch (err: any) {
-    toast.add({ title: 'Save failed', description: err.message, variant: 'danger' });
+    toast.add({ title: t('dynamo.saveFailed'), description: err.message, variant: 'danger' });
   } finally {
     saving.value = false;
   }
@@ -116,9 +119,9 @@ function formatDraft() {
 
       <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
         <TText tone="muted" size="xs">
-          JSON object. Types are inferred — numbers, booleans, strings, arrays, nested objects are all supported.
+          {{ t('dynamo.editorHint') }}
         </TText>
-        <TBadge v-if="readOnly" tone="neutral" variant="soft">read-only</TBadge>
+        <TBadge v-if="readOnly" tone="neutral" variant="soft">{{ t('dynamo.readOnly') }}</TBadge>
       </TStack>
 
       <TTextarea
@@ -135,17 +138,17 @@ function formatDraft() {
       <TStack direction="horizontal" gap="0.5rem" justify="space-between">
         <TStack direction="horizontal" gap="0.5rem">
           <TButton v-if="!readOnly" size="sm" variant="ghost" @click="formatDraft">
-            Format JSON
+            {{ t('dynamo.formatJson') }}
           </TButton>
           <template v-if="readOnly">
-            <TButton size="sm" variant="soft" @click="emit('request-edit')">Edit</TButton>
-            <TButton size="sm" variant="ghost" @click="emit('request-clone')">Clone</TButton>
-            <TButton size="sm" variant="ghost" tone="danger" @click="emit('request-delete')">Delete</TButton>
+            <TButton size="sm" variant="soft" @click="emit('request-edit')">{{ t('dynamo.edit') }}</TButton>
+            <TButton size="sm" variant="ghost" @click="emit('request-clone')">{{ t('dynamo.clone') }}</TButton>
+            <TButton size="sm" variant="ghost" tone="danger" @click="emit('request-delete')">{{ t('common.delete') }}</TButton>
           </template>
         </TStack>
         <TStack direction="horizontal" gap="0.5rem">
           <TButton size="sm" variant="ghost" @click="isOpen = false">
-            {{ readOnly ? 'Close' : 'Cancel' }}
+            {{ readOnly ? t('common.close') : t('common.cancel') }}
           </TButton>
           <TButton
             v-if="!readOnly"
@@ -155,7 +158,7 @@ function formatDraft() {
             :disabled="!!parseError"
             @click="save"
           >
-            {{ mode === 'create' ? 'Create' : 'Save' }}
+            {{ mode === 'create' ? t('dynamo.create') : t('common.save') }}
           </TButton>
         </TStack>
       </TStack>
