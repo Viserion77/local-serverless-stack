@@ -21,8 +21,10 @@
   "packageArgs": [],
   "packageEnv": {},
   "servicePackaging": {
-    "users-service": { "packageArgs": ["--param=custom-stage=offline"] }
+    "users-service": { "packageArgs": ["--param=custom-stage=offline"] },
+    "infra/shared": { "packageCommand": "npm run package:local:infra", "packageCwd": "." }
   },
+  "scanIgnore": ["infra/bootstrap", "infra/global"],
   "lambdaRuntime": {
     "enabled": true,
     "execution": "auto",

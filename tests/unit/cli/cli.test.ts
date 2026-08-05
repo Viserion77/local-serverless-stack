@@ -170,6 +170,11 @@ describe('bin/cli.js helpers', () => {
 
   afterEach(() => {
     jest.restoreAllMocks();
+    // Drop anything still scheduled BEFORE restoring real timers: startOrchestrator
+    // leaves a 2s liveness timer behind, and since that timer can now exit the
+    // process, letting it survive into the next test made an unrelated case fail
+    // with `process.exit(1)`.
+    jest.clearAllTimers();
     // Always drop back to real timers so a failed fake-timer test can't leave
     // setImmediate/setTimeout stubbed and hang every subsequent async test.
     jest.useRealTimers();
@@ -671,13 +676,44 @@ describe('bin/cli.js helpers', () => {
   // showStatus
   // ---------------------------------------------------------------------------
   describe('showStatus', () => {
-    it('reports NOT RUNNING when there is no pid file', () => {
+    it('reports NOT RUNNING when there is no pid file and nothing answers the port', async () => {
       mockFs.existsSync.mockReturnValue(false);
+      installHttp({ GET: { err: Object.assign(new Error('connect ECONNREFUSED'), { code: 'ECONNREFUSED' }) } });
       const cli = loadCli();
-      cli.showStatus();
+      await cli.showStatus();
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('NOT RUNNING'));
     });
-    it('reports RUNNING (with proxy line) when the process is alive', () => {
+
+    // The whole point of item 5: under --net=host the port belongs to the
+    // machine, so "no pid file here" and "nothing is listening" are different
+    // facts, and reporting the first as the second sends the operator hunting
+    // in this project for a process that belongs to another one.
+    it('names the other project when the port answers for a different root', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+      installHttp({ GET: { status: 200, body: JSON.stringify({ projectRoot: '/other/project' }) } });
+      const cli = loadCli();
+      await cli.showStatus();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('/other/project'));
+      expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining('NOT RUNNING'));
+    });
+
+    it('says the port answers for THIS project when the root matches the cwd', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+      installHttp({ GET: { status: 200, body: JSON.stringify({ projectRoot: process.cwd() }) } });
+      const cli = loadCli();
+      await cli.showStatus();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('answers for this project'));
+    });
+
+    it('falls back to NOT RUNNING when the answer carries no projectRoot', async () => {
+      mockFs.existsSync.mockReturnValue(false);
+      installHttp({ GET: { status: 200, body: JSON.stringify({ serverPort: 14566 }) } });
+      const cli = loadCli();
+      await cli.showStatus();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('NOT RUNNING'));
+    });
+
+    it('reports RUNNING (with proxy line) when the process is alive', async () => {
       mockFs.existsSync.mockImplementation((p: any) => {
         const s = String(p);
         if (s.endsWith('lss.config.json')) return true;
@@ -690,33 +726,36 @@ describe('bin/cli.js helpers', () => {
         return '4242\n' as any;
       });
       const cli = loadCli();
-      cli.showStatus();
+      await cli.showStatus();
       expect(killSpy).toHaveBeenCalledWith('4242', 0);
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('RUNNING (PID: 4242)'));
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('DynamoDB Proxy'));
     });
-    it('reports RUNNING without a proxy line when the proxy is disabled', () => {
+
+    it('reports RUNNING without a proxy line when the proxy is disabled', async () => {
       mockFs.existsSync.mockReturnValue(true); // pid file + no config file matters
       mockFs.readFileSync.mockReturnValue('4242');
       const cli = loadCli();
-      cli.showStatus();
+      await cli.showStatus();
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('RUNNING (PID: 4242)'));
       expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining('DynamoDB Proxy'));
     });
-    it('reports a stale pid file when the process is dead', () => {
+
+    it('reports a stale pid file when the process is dead, and who holds the port', async () => {
       mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('4242');
       killSpy.mockImplementation(() => {
         throw new Error('ESRCH');
       });
+      installHttp({ GET: { status: 200, body: JSON.stringify({ projectRoot: '/other/project' }) } });
       const cli = loadCli();
-      cli.showStatus();
+      await cli.showStatus();
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('stale PID file'));
       expect(mockFs.unlinkSync).toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('/other/project'));
     });
   });
 
-  // ---------------------------------------------------------------------------
   // startOrchestrator
   // ---------------------------------------------------------------------------
   describe('startOrchestrator', () => {
@@ -887,7 +926,7 @@ describe('bin/cli.js helpers', () => {
       jest.useRealTimers();
     });
 
-    it('runs the 2s liveness timer failure path (process died) and clears the pid file', () => {
+    it('runs the 2s liveness timer failure path (process died), clears the pid file and exits 1', async () => {
       jest.useFakeTimers();
       // existsSync: false for pid at gate, true for index.js. Inside the timer
       // catch, the pidFile existsSync must be true so it gets unlinked.
@@ -914,19 +953,22 @@ describe('bin/cli.js helpers', () => {
       });
       mockSpawn.mockReturnValue(makeChild() as any);
       const cli = loadCli(['node', 'cli.js', 'start']);
-      cli.startOrchestrator();
+      const started = cli.startOrchestrator();
       killSpy.mockClear();
       mockFs.unlinkSync.mockClear();
       killSpy.mockImplementation(() => {
         throw new Error('died');
       });
       jest.advanceTimersByTime(2000);
+      // A dead orchestrator is a FAILED step: exiting 0 here is what let a
+      // sequential chain run `register` fifteen times against nothing.
+      expect(await expectExit(() => started)).toBe(1);
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('failed to start'));
       expect(mockFs.unlinkSync).toHaveBeenCalled();
       jest.useRealTimers();
     });
 
-    it('handles the timer failure path when the pid file is already gone', () => {
+    it('handles the timer failure path when the pid file is already gone', async () => {
       jest.useFakeTimers();
       mockFs.existsSync.mockImplementation((p: any) => {
         const s = String(p);
@@ -935,16 +977,89 @@ describe('bin/cli.js helpers', () => {
       });
       mockSpawn.mockReturnValue(makeChild() as any);
       const cli = loadCli(['node', 'cli.js', 'start']);
-      cli.startOrchestrator();
+      const started = cli.startOrchestrator();
       killSpy.mockClear();
       mockFs.unlinkSync.mockClear();
       killSpy.mockImplementation(() => {
         throw new Error('died');
       });
       jest.advanceTimersByTime(2000);
+      expect(await expectExit(() => started)).toBe(1);
       expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('failed to start'));
       expect(mockFs.unlinkSync).not.toHaveBeenCalled();
       jest.useRealTimers();
+    });
+  });
+
+  // `lss start --wait` — the missing half of item 4: a step in a sequential
+  // chain has to be able to fail. Without it the CLI daemonizes, prints a PID,
+  // and the child only then discovers the port is taken.
+  describe('start --wait', () => {
+    function makeChild() {
+      return { pid: 4321, unref: jest.fn() };
+    }
+
+    function spawnable() {
+      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('index.js'));
+      mockSpawn.mockReturnValue(makeChild() as any);
+    }
+
+    it('returns as soon as /api/health answers', async () => {
+      spawnable();
+      installHttp({ GET: { status: 200, body: '{"status":"ok"}' } });
+      const cli = loadCli(['node', 'cli.js', 'start', '--wait']);
+      await cli.startOrchestrator();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Service is running'));
+    });
+
+    it('exits 1 with the log tail when the child dies before answering', async () => {
+      spawnable();
+      mockFs.readFileSync.mockReturnValue('boot line\nEADDRINUSE :14577\n');
+      installHttp({ GET: { err: new Error('ECONNREFUSED') } });
+      killSpy.mockImplementation(() => { throw new Error('died'); });
+      const cli = loadCli(['node', 'cli.js', 'start', '--wait']);
+      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('EADDRINUSE'));
+    });
+
+    // The exact --net=host case: the port answers, but for another checkout.
+    // The liveness check runs before the health poll, so the only request made
+    // here is the one that asks who owns the port.
+    it('names the project holding the port when the boot fails', async () => {
+      spawnable();
+      mockFs.readFileSync.mockReturnValue('');
+      installHttp({ GET: { status: 200, body: JSON.stringify({ projectRoot: '/other/project' }) } });
+      killSpy.mockImplementation(() => { throw new Error('died'); });
+      const cli = loadCli(['node', 'cli.js', 'start', '--wait']);
+      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('/other/project'));
+    });
+
+    it('gives up after the deadline, with --wait=<seconds> honoured', async () => {
+      spawnable();
+      mockFs.readFileSync.mockReturnValue('');
+      installHttp({ GET: { err: new Error('ECONNREFUSED') } });
+      const cli = loadCli(['node', 'cli.js', 'start', '--wait=1']);
+      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('did not answer within 1s'));
+    });
+
+    it('a non-numeric --wait value falls back to the default timeout', async () => {
+      spawnable();
+      installHttp({ GET: { status: 200, body: '{}' } });
+      const cli = loadCli(['node', 'cli.js', 'start', '--wait=abc']);
+      await cli.startOrchestrator();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('up to 30s'));
+    });
+
+    it('an unreadable log file simply contributes no tail', async () => {
+      spawnable();
+      mockFs.readFileSync.mockImplementation(() => { throw new Error('EACCES'); });
+      installHttp({ GET: { err: new Error('ECONNREFUSED') } });
+      killSpy.mockImplementation(() => { throw new Error('died'); });
+      const cli = loadCli(['node', 'cli.js', 'start', '--wait']);
+      expect(await expectExit(() => cli.startOrchestrator())).toBe(1);
+      expect(errorSpy).not.toHaveBeenCalledWith(expect.stringContaining('last lines of the log'));
     });
   });
 

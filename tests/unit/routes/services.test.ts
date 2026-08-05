@@ -360,7 +360,42 @@ describe('GET /api/services/scan', () => {
         packageCommand: 'npx serverless package',
       }],
     });
-    expect(scanForServices).toHaveBeenCalledWith('/abs', ['/abs/registered-svc']);
+    expect(scanForServices).toHaveBeenCalledWith('/abs', ['/abs/registered-svc'], {
+      isIgnored: expect.any(Function),
+      autoPackage: false,
+    });
+    // The predicate must be wired to the config, not just present: a scanIgnore
+    // that is never consulted is the same as no scanIgnore at all.
+    const ignoreSpy = jest.spyOn(ConfigManager.getInstance(), 'isScanIgnored').mockReturnValue(true);
+    const { isIgnored } = (scanForServices as jest.Mock).mock.calls[0][2];
+    expect(isIgnored('/abs/infra/global')).toBe(true);
+    expect(ignoreSpy).toHaveBeenCalledWith('/abs/infra/global');
+  });
+
+  // What the scan can only guess from a yml scrape, the packaged state has
+  // already settled for a registered service — so the cached metadata wins.
+  it('overlays hasFunctions/routeCount from the cache for a registered service', async () => {
+    jest.spyOn(CacheManager.prototype, 'listServices').mockResolvedValue([
+      { ...META, root: '/abs/orders', functions: [{ name: 'a' }], routes: [{ method: 'GET' }, { method: 'POST' }] } as never,
+      { ...META, root: '/abs/shared', functions: [], routes: [] } as never,
+      // Cached before functions/routes were recorded: absent, not empty.
+      { ...META, root: '/abs/legacy', functions: undefined, routes: undefined } as never,
+    ]);
+    jest.spyOn(ConfigManager.getInstance(), 'getProjectRoot').mockReturnValue('/abs');
+    (scanForServices as jest.Mock).mockReturnValue([
+      { name: 'orders', root: '/abs/orders', relPath: 'orders', registered: true, hasFunctions: undefined },
+      { name: 'shared', root: '/abs/shared', relPath: 'shared', registered: true, hasFunctions: true },
+      { name: 'legacy', root: '/abs/legacy', relPath: 'legacy', registered: true, hasFunctions: true },
+      { name: 'new', root: '/abs/new', relPath: 'new', registered: false, hasFunctions: false },
+    ]);
+    const res = await request(appWith()).get('/api/services/scan');
+    expect(res.body.services.map((s: any) => [s.name, s.hasFunctions, s.routeCount])).toEqual([
+      ['orders', true, 2],
+      ['shared', false, 0],
+      ['legacy', false, undefined],
+      // Never registered: the scan's own hint is all there is.
+      ['new', false, undefined],
+    ]);
   });
 
   it('serviceRuntime ports from the config override the yml hints', async () => {
@@ -635,6 +670,7 @@ describe('POST /api/services/install and /package', () => {
     dirExists();
     (ConfigManager.getInstance().getPackageConfigForService as jest.Mock).mockReturnValue({
       command: 'npm run package:custom', args: ['--stage', 'local'], env: { SLS_DEBUG: '1' }, timeoutMs: 60000,
+      cwd: '/abs/orders',
     });
     const res = await request(appWith()).post('/api/services/package').send({ servicePath: '/abs/orders' });
     expect(res.status).toBe(200);

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
 import {
-  TCard, TButton, TStack, TGrid, TStat, TEmptyState,
+  TCard, TButton, TStack, TStackItem, TGrid, TStat, TEmptyState,
   TSpinner, TAlert, TTag, TTable, TInput, TModal, TBadge, TText, TCodeBlock, TIcon, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
@@ -150,7 +150,15 @@ onBeforeUnmount(() => {
             <TText weight="semibold">Secrets Manager</TText>
           </TStack>
           <TStack direction="horizontal" align="center" gap="1rem">
-            <TInput v-model="search" :placeholder="t('secrets.filterPlaceholder')" style="min-width: 16rem;" />
+            <!-- The floor is the flex item's, not the field's: TInput's `width`
+                 is a cap (TFieldWidth), never a minimum. -->
+            <TStackItem min-width="16rem">
+              <TInput
+                v-model="search"
+                :placeholder="t('secrets.filterPlaceholder')"
+                :aria-label="t('secrets.filterLabel')"
+              />
+            </TStackItem>
             <TText tone="muted" size="xs">{{ t('secrets.autoRefresh') }}</TText>
           </TStack>
         </TStack>
@@ -184,6 +192,10 @@ onBeforeUnmount(() => {
       <TTable v-else :columns="columns" :rows="filteredRows" :aria-label="t('secrets.tableLabel')">
         <template #cell-name="{ row }">
           <TStack direction="horizontal" align="center" gap="0.5rem">
+            <!-- Left as-is on purpose: this is row activation, and TTable has no
+                 row-activation API (no `rowHref`, no `@row-activate`). Any local
+                 fix would be a hand-rolled button/role — the gap belongs to
+                 TreeUI, so the interim style stays until it lands there. -->
             <TText
               weight="semibold"
               style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;"
@@ -224,8 +236,13 @@ onBeforeUnmount(() => {
 
       <TStack v-else-if="detail" direction="vertical" gap="1rem">
         <TStack direction="vertical" gap="0.35rem">
-          <TText tone="muted" family="mono" size="xs" style="word-break: break-all;">{{ detail.arn }}</TText>
-          <span v-if="detail.description">{{ detail.description }}</span>
+          <!-- An ARN is one ~80-character token with no break opportunity, and
+               `truncate` is the wrong answer here: the suffix is what
+               identifies the version. `wrap="anywhere"` also sets
+               `min-inline-size: 0`, without which this flex child refuses to
+               shrink below the longest word and never wraps. -->
+          <TText tone="muted" family="mono" size="xs" wrap="anywhere">{{ detail.arn }}</TText>
+          <TText v-if="detail.description">{{ detail.description }}</TText>
         </TStack>
 
         <div>
@@ -253,7 +270,17 @@ onBeforeUnmount(() => {
 
         <div>
           <TStack direction="horizontal" gap="0.5rem" align="center">
-            <TButton size="sm" variant="solid" :loading="revealing" @click="reveal">
+            <!-- `loading-label`: TButton's spinner label defaults to the
+                 English literal "Loading" and is read as part of the button's
+                 accessible name while busy — an untranslated string in a
+                 trilingual UI (rule 6). -->
+            <TButton
+              size="sm"
+              variant="solid"
+              :loading="revealing"
+              :loading-label="t('common.loading')"
+              @click="reveal"
+            >
               {{ revealed ? t('secrets.refreshValue') : t('secrets.revealValue') }}
             </TButton>
             <TButton v-if="revealed" size="sm" variant="ghost" @click="copyValue">{{ t('common.copy') }}</TButton>

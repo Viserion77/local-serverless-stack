@@ -7,6 +7,16 @@
     "noEmit": true,
     "jsx": "preserve"
   },
+  // `vueCompilerOptions.strictTemplates` fica DESLIGADO de propósito, e a
+  // decisão é registrada no TREEUX-011 de src/ui/treeUxPatterns.md. Ligá-lo é o
+  // que ativa o augment de `GlobalComponents` que a TreeUI publicou na 0.28.0
+  // para pegar prop inexistente (`<TTag clickable>` etc.) — mas medido nesta
+  // árvore ele produz 89 erros, dos quais 2 são reais e 87 são atrito de tipo
+  // da própria lib: `aria-label`/atributo nativo em componente com
+  // `inheritAttrs: false` (40), `modelModifiers` não declarado em quem aceita
+  // v-model (14, e o runtime do Vue aplica `.number` de qualquer jeito) e
+  // `modelValue` largo emitindo para ref estreita (33). Religar quando a lib
+  // tipar essas três coisas.
   "include": [
     "src/**/*.ts",
     "src/**/*.tsx",

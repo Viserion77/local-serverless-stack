@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, watch } from 'vue';
-import { RouterLink, useRouter } from 'vue-router';
+import { useRouter } from 'vue-router';
 import {
   TCard, TButton, TBadge, TStack, TGrid, TStat, TSpinner, TAlert,
-  TTag, TEmptyState, TModal, TConfirmDialog, TText, TIcon, TCodeBlock, useToast,
+  TTag, TEmptyState, TModal, TConfirmDialog, TText, TIcon, TLink, TCodeBlock, useToast,
   TDescriptionList, TDescriptionItem,
 } from '@treeui/vue';
 import type { TBadgeTone } from '@treeui/vue';
@@ -163,9 +163,18 @@ watch(() => props.serviceName, load);
   <TStack direction="vertical" gap="1.25rem">
     <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
       <TStack direction="horizontal" gap="0.5rem" align="center">
-        <RouterLink to="/services" style="text-decoration: none;">
-          <TButton size="sm" variant="ghost"><TIcon name="arrow-left" /> {{ t('nav.services') }}</TButton>
-        </RouterLink>
+        <!-- Back is navigation, so it is a link: `to` (0.28) makes TButton
+             resolve the RouterLink and render one <a> with a real href — role
+             `link`, ctrl/middle-click and "open in new tab" included. The two
+             shapes it replaces both lost something: a TButton inside a
+             RouterLink was `<a><button>` (invalid markup, two tab stops, and an
+             inline `text-decoration:none` to hide the wrapper's underline), and
+             the `router.push` handler that followed it was a button pretending
+             to be a link. `as="a" :href` is still wrong here — it would leave
+             the SPA and reload the page. -->
+        <TButton size="sm" variant="ghost" to="/services">
+          <TIcon name="arrow-left" /> {{ t('nav.services') }}
+        </TButton>
         <TText weight="semibold" size="lg">{{ serviceName }}</TText>
         <TBadge v-if="service?.status" :tone="statusTone(service.status)" variant="soft">
           {{ statusLabel(service.status) }}
@@ -283,18 +292,24 @@ watch(() => props.serviceName, load);
               <TBadge tone="info" variant="soft">{{ t('services.groupTables') }}</TBadge>
               <TText tone="muted">{{ grouped.dynamodb.length }}</TText>
             </TStack>
+            <!-- TLink resolves the RouterLink itself, and `underline="none"` is
+                 the library's own axis for what the inline
+                 `text-decoration:none` was doing by hand. The tags dropped
+                 `clickable`: TTag has never had that prop in any version, so
+                 Vue was discarding it — the affordance always came from the
+                 link around it. -->
             <TStack direction="horizontal" gap="0.375rem" wrap>
-              <RouterLink
+              <TLink
                 v-for="r in grouped.dynamodb"
                 :key="`db-${r.name}`"
                 :to="`/dynamo/${encodeURIComponent(r.name)}`"
-                style="text-decoration: none;"
+                underline="none"
               >
-                <TTag size="sm" variant="soft" clickable>
+                <TTag size="sm" variant="soft">
                   <template #icon><TIcon :name="resourceTypeIcons.dynamodb" /></template>
                   {{ r.name }}
                 </TTag>
-              </RouterLink>
+              </TLink>
             </TStack>
           </TStack>
 
@@ -304,17 +319,17 @@ watch(() => props.serviceName, load);
               <TText tone="muted">{{ grouped.sqs.length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
-              <RouterLink
+              <TLink
                 v-for="r in grouped.sqs"
                 :key="`q-${r.name}`"
                 to="/queues"
-                style="text-decoration: none;"
+                underline="none"
               >
-                <TTag size="sm" variant="soft" clickable>
+                <TTag size="sm" variant="soft">
                   <template #icon><TIcon :name="resourceTypeIcons.sqs" /></template>
                   {{ r.name }}
                 </TTag>
-              </RouterLink>
+              </TLink>
             </TStack>
           </TStack>
 
@@ -342,17 +357,17 @@ watch(() => props.serviceName, load);
               <TText tone="muted">{{ grouped.s3.length }}</TText>
             </TStack>
             <TStack direction="horizontal" gap="0.375rem" wrap>
-              <RouterLink
+              <TLink
                 v-for="r in grouped.s3"
                 :key="`b-${r.name}`"
                 :to="`/buckets/${encodeURIComponent(r.name)}`"
-                style="text-decoration: none;"
+                underline="none"
               >
-                <TTag size="sm" variant="soft" clickable>
+                <TTag size="sm" variant="soft">
                   <template #icon><TIcon :name="resourceTypeIcons.s3" /></template>
                   {{ r.name }}
                 </TTag>
-              </RouterLink>
+              </TLink>
             </TStack>
           </TStack>
 

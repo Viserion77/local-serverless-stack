@@ -20,7 +20,7 @@
 //   - No dual axis: parallelism (count) and duration (ms) are two charts, not
 //     two scales on one.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { TCard, TStack, TText, TStat, TGrid, TBadge, TTag, TSpinner, TToggleGroup } from '@treeui/vue';
+import { TCard, TStack, TText, TStat, TGrid, TBadge, TTag, TIcon, TSpinner, TToggleGroup } from '@treeui/vue';
 import { api } from '../services/api';
 import type { ActivitySnapshot } from '../services/api';
 import { useI18n } from '../i18n';
@@ -194,23 +194,30 @@ onBeforeUnmount(() => {
       </TStack>
 
       <template v-else>
-        <TText v-if="error" tone="muted" size="sm">⚠ {{ error }}</TText>
+        <TStack v-if="error" direction="horizontal" gap="0.375rem" align="center">
+          <TIcon name="triangle-alert" />
+          <TText tone="muted" size="sm">{{ error }}</TText>
+        </TStack>
 
+        <!-- The second line of each tile is `meta`, not `hint`: TStat has no
+             `hint` prop and sets `inheritAttrs: false`, so what looked like a
+             caption was an attribute the component dropped on the floor — three
+             languages of copy that never reached a pixel. -->
         <TGrid :columns="4" gap="0.75rem">
           <TStat
             :label="t('activity.workersWarm')"
             :value="`${residency?.warm ?? 0} / ${residency?.maxWarmWorkers ?? 0}`"
-            :hint="t('activity.workersWarmHint')"
+            :meta="t('activity.workersWarmHint')"
           />
           <TStat
             :label="t('activity.peakConcurrency')"
             :value="String(totals?.peakConcurrency ?? 0)"
-            :hint="t('activity.peakConcurrencyHint')"
+            :meta="t('activity.peakConcurrencyHint')"
           />
           <TStat
             :label="t('activity.hostMemory')"
             :value="`${memoryUsedPct}%`"
-            :hint="t('activity.hostMemoryHint', {
+            :meta="t('activity.hostMemoryHint', {
               used: formatBytes((host?.totalMemBytes ?? 0) - (host?.freeMemBytes ?? 0)),
               total: formatBytes(host?.totalMemBytes),
             })"
@@ -218,7 +225,7 @@ onBeforeUnmount(() => {
           <TStat
             :label="t('activity.hostLoad')"
             :value="`${loadPct}%`"
-            :hint="t('activity.hostLoadHint', {
+            :meta="t('activity.hostLoadHint', {
               load: (host?.loadAvg1m ?? 0).toFixed(2),
               cpus: host?.cpuCount ?? 0,
             })"
@@ -232,9 +239,19 @@ onBeforeUnmount(() => {
           <TTag v-if="(totals?.coldStarts ?? 0) > 0" size="sm" variant="soft">
             {{ t('activity.coldStarts', { count: totals?.coldStarts ?? 0 }) }}
           </TTag>
-          <TBadge v-if="(totals?.errors ?? 0) > 0" tone="danger" variant="soft">
-            ✕ {{ t('activity.errors', { count: totals?.errors ?? 0 }) }}
-          </TBadge>
+          <!-- One row, one component. This counter used to be a TBadge purely
+               because TTag had no colour axis; 0.27 gave TTag `tone`, so the
+               failure count keeps its red without breaking the row's shape.
+               The cross moves into the `#icon` slot — TTag hides that slot from
+               assistive tech, which is right: "3 failed" already says it in
+               words, and the mark is the non-chromatic signal for a reader who
+               cannot separate the red from the neutrals. -->
+          <TTag v-if="(totals?.errors ?? 0) > 0" size="sm" variant="soft" tone="danger">
+            <template #icon>
+              <TIcon name="x" />
+            </template>
+            {{ t('activity.errors', { count: totals?.errors ?? 0 }) }}
+          </TTag>
         </TStack>
 
         <template v-if="(totals?.invocations ?? 0) === 0">

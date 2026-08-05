@@ -29,7 +29,10 @@ export const apis: AreaMessages = {
     routesTableLabel: 'API routes',
     colMethod: 'Method',
     colPath: 'Path',
-    colFunction: 'Function',
+    // "Target", not just "Function": this column is the destination of the
+    // route on its left. That direction used to be drawn with a literal `→`
+    // in front of the header, which ui-ux.md rule 3 forbids — it is copy now.
+    colFunction: 'Target function',
     colAuth: 'Auth',
     copyCurl: 'Copy curl',
     curlCopied: 'curl command copied',
@@ -64,7 +67,7 @@ export const apis: AreaMessages = {
     routesTableLabel: 'Rotas da API',
     colMethod: 'Método',
     colPath: 'Caminho',
-    colFunction: 'Função',
+    colFunction: 'Função de destino',
     colAuth: 'Auth',
     copyCurl: 'Copiar curl',
     curlCopied: 'Comando curl copiado',
@@ -99,7 +102,7 @@ export const apis: AreaMessages = {
     routesTableLabel: 'Rutas de la API',
     colMethod: 'Método',
     colPath: 'Ruta',
-    colFunction: 'Función',
+    colFunction: 'Función de destino',
     colAuth: 'Auth',
     copyCurl: 'Copiar curl',
     curlCopied: 'Comando curl copiado',

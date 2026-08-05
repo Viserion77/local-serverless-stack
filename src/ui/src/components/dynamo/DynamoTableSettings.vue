@@ -120,7 +120,7 @@ function formatBytes(n: number): string {
             {{ props.table.streamViewType }}
           </TTag>
         </TStack>
-        <TText v-if="props.table.streamArn" tone="muted" family="mono" style="font-size: 0.7rem;">
+        <TText v-if="props.table.streamArn" tone="muted" family="mono" size="xs">
           {{ props.table.streamArn }}
         </TText>
         <TText v-else tone="muted" size="xs">

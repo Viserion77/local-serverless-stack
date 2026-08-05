@@ -1,24 +1,27 @@
 * {
   margin: 0;
   padding: 0;
-  box-sizing: border-box;
 }
 
+/* No `font-family` here on purpose. The library already sets the face at the
+   root — `@treeui/vue/style.css` declares `html { font-family:
+   var(--tree-font-family-sans) }` — and everything inherits it. `body` used to
+   declare a hand-written system stack instead; because the product sheet loads
+   AFTER the library's (see main.ts), that rule won for every element that only
+   inherits, which is the whole of `.t-app-shell`'s subtree except the shell
+   itself (`.t-app-shell` re-declares the token) and, more visibly, every
+   `Teleport`ed surface — modals, toasts, dropdown menus render under `<body>`,
+   outside the shell, so they came out in Segoe UI while the app was in the
+   TreeUI face. Dropping the declaration restores the token as the single source
+   of truth; restating it here would be dead CSS (ui-ux.md rule 2). */
 body {
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
   background: var(--tree-color-bg-primary);
   color: var(--tree-color-text-primary);
   line-height: 1.6;
 }
 
-#app {
-  min-height: 100vh;
-  width: 100%;
-}
-
-/* Mono shim, token-backed. TText uses `family="mono"` and code/log blocks use TCodeBlock now; this
-   class only remains on the raw code/JSON <textarea>s (editable input) and one clickable mono
-   table cell — neither is a TText, so `family` doesn't apply. */
-.mono {
-  font-family: var(--tree-font-family-mono);
-}
+/* The `.mono` shim that used to live here is gone. It survived only because
+   `TTextarea` and `TLink` had no family axis, so the three editable code/JSON
+   textareas and one mono table cell had no way to ask for the face; both gained
+   `family="mono"` in @treeui/vue 0.28.0 (TREEUX-005). With it, the product has
+   no typography class of its own — which was the stated target. */

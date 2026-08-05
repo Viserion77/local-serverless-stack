@@ -1,9 +1,9 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import {
-  TCard, TButton, TStack, TInput, TTextarea, TFormField, TAlert, TBadge,
+  TCard, TButton, TStack, TStackItem, TInput, TTextarea, TFormField, TAlert, TBadge,
   TDivider, TTable, TEmptyState, TSpinner, TConfirmDialog, TSelect,
-  TText, TIcon, TCodeBlock, useToast,
+  TText, TIcon, TLink, TCodeBlock, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type {
@@ -227,31 +227,26 @@ function copyToClipboard(text: string) {
           />
         </TFormField>
 
+        <!-- TFormField has no flex axis of its own, so the share of the row
+             lives on TStackItem. `basis="0"` is not optional: TStackItem
+             defaults to `auto`, and only `grow` + `basis: 0` reproduces the
+             `flex: N` shorthand these fields used to carry inline. -->
         <TStack direction="horizontal" gap="1rem">
-          <TFormField
-            v-if="!isFifo"
-            :label="t('queues.delayLabel')"
-            hint="0–900"
-            style="flex: 1;"
-          >
-            <TInput v-model.number="delaySeconds" type="number" min="0" max="900" />
-          </TFormField>
-          <TFormField
-            v-if="isFifo"
-            label="MessageGroupId"
-            :hint="t('queues.groupIdHint')"
-            style="flex: 1;"
-          >
-            <TInput v-model="messageGroupId" placeholder="default" />
-          </TFormField>
-          <TFormField
-            v-if="isFifo"
-            label="MessageDeduplicationId"
-            :hint="t('queues.dedupIdHint')"
-            style="flex: 1;"
-          >
-            <TInput v-model="messageDeduplicationId" placeholder="auto" />
-          </TFormField>
+          <TStackItem v-if="!isFifo" :grow="1" basis="0">
+            <TFormField :label="t('queues.delayLabel')" hint="0–900">
+              <TInput v-model.number="delaySeconds" type="number" min="0" max="900" />
+            </TFormField>
+          </TStackItem>
+          <TStackItem v-if="isFifo" :grow="1" basis="0">
+            <TFormField label="MessageGroupId" :hint="t('queues.groupIdHint')">
+              <TInput v-model="messageGroupId" placeholder="default" />
+            </TFormField>
+          </TStackItem>
+          <TStackItem v-if="isFifo" :grow="1" basis="0">
+            <TFormField label="MessageDeduplicationId" :hint="t('queues.dedupIdHint')">
+              <TInput v-model="messageDeduplicationId" placeholder="auto" />
+            </TFormField>
+          </TStackItem>
         </TStack>
 
         <TStack direction="vertical" gap="0.5rem">
@@ -268,15 +263,21 @@ function copyToClipboard(text: string) {
             gap="0.5rem"
             align="end"
           >
-            <TFormField :label="t('common.name')" style="flex: 1.4;">
-              <TInput v-model="a.name" placeholder="contentType" />
-            </TFormField>
-            <TFormField :label="t('common.type')" style="flex: 0.9;">
-              <TSelect v-model="a.type" :options="attrTypeOptions" />
-            </TFormField>
-            <TFormField :label="t('queues.value')" style="flex: 2;">
-              <TInput v-model="a.value" placeholder="application/json" />
-            </TFormField>
+            <TStackItem :grow="1.4" basis="0">
+              <TFormField :label="t('common.name')">
+                <TInput v-model="a.name" placeholder="contentType" />
+              </TFormField>
+            </TStackItem>
+            <TStackItem :grow="0.9" basis="0">
+              <TFormField :label="t('common.type')">
+                <TSelect v-model="a.type" :options="attrTypeOptions" />
+              </TFormField>
+            </TStackItem>
+            <TStackItem :grow="2" basis="0">
+              <TFormField :label="t('queues.value')">
+                <TInput v-model="a.value" placeholder="application/json" />
+              </TFormField>
+            </TStackItem>
             <TButton size="sm" variant="outline" @click="removeAttr(i)">
               {{ t('queues.remove') }}
             </TButton>
@@ -319,23 +320,24 @@ function copyToClipboard(text: string) {
       </template>
 
       <TStack direction="horizontal" gap="1rem">
-        <TFormField :label="t('queues.maxMessages')" hint="1–10" style="flex: 1;">
-          <TInput v-model.number="maxMessages" type="number" min="1" max="10" />
-        </TFormField>
-        <TFormField
-          :label="t('queues.visibilityTimeoutSeconds')"
-          :hint="t('queues.visibilityTimeoutHint')"
-          style="flex: 1;"
-        >
-          <TInput v-model.number="visibilityTimeout" type="number" min="0" />
-        </TFormField>
-        <TFormField
-          :label="t('queues.waitTime')"
-          :hint="t('queues.waitTimeHint')"
-          style="flex: 1;"
-        >
-          <TInput v-model.number="waitTimeSeconds" type="number" min="0" max="20" />
-        </TFormField>
+        <TStackItem :grow="1" basis="0">
+          <TFormField :label="t('queues.maxMessages')" hint="1–10">
+            <TInput v-model.number="maxMessages" type="number" min="1" max="10" />
+          </TFormField>
+        </TStackItem>
+        <TStackItem :grow="1" basis="0">
+          <TFormField
+            :label="t('queues.visibilityTimeoutSeconds')"
+            :hint="t('queues.visibilityTimeoutHint')"
+          >
+            <TInput v-model.number="visibilityTimeout" type="number" min="0" />
+          </TFormField>
+        </TStackItem>
+        <TStackItem :grow="1" basis="0">
+          <TFormField :label="t('queues.waitTime')" :hint="t('queues.waitTimeHint')">
+            <TInput v-model.number="waitTimeSeconds" type="number" min="0" max="20" />
+          </TFormField>
+        </TStackItem>
       </TStack>
 
       <template #footer>
@@ -348,7 +350,11 @@ function copyToClipboard(text: string) {
               {{ t('queues.clearResults') }}
             </TButton>
           </TStack>
-          <TButton size="sm" variant="outline" tone="danger" @click="confirmPurgeOpen = true">
+          <!-- `tone` is not a TButton prop in any version — it landed on the
+               DOM node and the destructive intent never rendered. `danger` is
+               the variant TreeUI ships for it, and the one ServicesList
+               already uses for a row-level delete. -->
+          <TButton size="sm" variant="danger" @click="confirmPurgeOpen = true">
             {{ t('queues.purgeQueue') }}
           </TButton>
         </TStack>
@@ -387,17 +393,25 @@ function copyToClipboard(text: string) {
         :rows="messagesRows"
         :aria-label="t('queues.receivedMessagesAria')"
       >
+        <!-- The row toggle is a disclosure, so it announces `aria-expanded`.
+             It stays an anchor rather than becoming a TButton: `.t-button` is
+             `min-width: max-content` with a fixed control height, which an
+             80-character body preview would stretch into a column no viewport
+             can hold. TLink drops the hand-written `text-decoration:none`;
+             the missing piece — a text-level disclosure control that wraps —
+             is a TreeUI gap, not something to patch with local CSS. -->
         <template #cell-preview="{ row }">
-          <a
+          <TLink
             href="#"
-            style="text-decoration: none;"
+            underline="none"
+            :aria-expanded="expanded[String((row as any).messageId)] ? 'true' : 'false'"
             @click.prevent="toggleExpanded(String((row as any).messageId))"
           >
             <TText family="mono" size="sm">
               <TIcon :name="expanded[String((row as any).messageId)] ? 'chevron-down' : 'chevron-right'" />
               {{ (row as any).preview }}
             </TText>
-          </a>
+          </TLink>
         </template>
         <template #cell-messageId="{ row }">
           <TText family="mono" size="xs">{{ (row as any).messageId }}</TText>
@@ -426,8 +440,7 @@ function copyToClipboard(text: string) {
             </TButton>
             <TButton
               size="sm"
-              variant="outline"
-              tone="danger"
+              variant="danger"
               :loading="deleting[String((row as any).messageId)]"
               @click="deleteOne((row as any).__raw)"
             >
@@ -437,11 +450,15 @@ function copyToClipboard(text: string) {
         </template>
       </TTable>
 
+      <!-- One surface per expanded message. The card body of the enclosing
+           TCard is a grid with its own gap, so the separation the old
+           `padding` + `border-top` provided comes from the layout now. That
+           rule also hardcoded `#e5e7eb` as the fallback of
+           `--tree-color-border` — a token that does not exist (the real one is
+           `--tree-color-border-default`), so the light hex was what actually
+           rendered, dark theme included. -->
       <template v-for="m in messages" :key="`detail-${m.messageId}`">
-        <div
-          v-if="m.messageId && expanded[m.messageId]"
-          style="padding: 0.75rem 1rem; border-top: 1px solid var(--tree-color-border, #e5e7eb);"
-        >
+        <TCard v-if="m.messageId && expanded[m.messageId]" variant="soft">
           <TStack direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" wrap>
               <TBadge tone="neutral" variant="soft">id: {{ m.messageId }}</TBadge>
@@ -458,7 +475,11 @@ function copyToClipboard(text: string) {
               </TBadge>
             </TStack>
 
-            <div v-if="m.messageAttributes && Object.keys(m.messageAttributes).length">
+            <TStack
+              v-if="m.messageAttributes && Object.keys(m.messageAttributes).length"
+              direction="vertical"
+              gap="0.375rem"
+            >
               <TText weight="semibold" size="sm">{{ t('queues.messageAttributes') }}</TText>
               <TStack direction="horizontal" gap="0.375rem" wrap>
                 <TBadge
@@ -470,7 +491,7 @@ function copyToClipboard(text: string) {
                   {{ k }} ({{ v.type || 'String' }}): {{ v.value }}
                 </TBadge>
               </TStack>
-            </div>
+            </TStack>
 
             <TDivider />
             <TCodeBlock
@@ -481,7 +502,7 @@ function copyToClipboard(text: string) {
               copyable
             />
           </TStack>
-        </div>
+        </TCard>
       </template>
     </TCard>
 
@@ -491,7 +512,7 @@ function copyToClipboard(text: string) {
       :description="t('queues.purgeConfirmDescription', { queue: props.queue.name })"
       :confirm-label="t('queues.purgeConfirmLabel')"
       :cancel-label="t('common.cancel')"
-      tone="danger"
+      confirm-variant="danger"
       :loading="purging"
       @confirm="doPurge"
     />

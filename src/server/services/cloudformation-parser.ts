@@ -342,9 +342,9 @@ export class CloudFormationParser {
       case 'AWS::Events::Rule':
         return this.parseEventRule(key, resource);
       case 'AWS::Events::Archive':
-        // LocalStack mocks Archives: CFN reports CREATE_COMPLETE but ListArchives
-        // stays empty, so provisioning one locally would only fake success.
-        warnings?.push(`AWS::Events::Archive "${key}" is not provisioned locally — LocalStack mocks Archives (created but never listed/replayable).`);
+        // The engine does not implement archives, and pretending to create one
+        // would only fake success: nothing would ever be listed or replayable.
+        warnings?.push(`AWS::Events::Archive "${key}" is not provisioned locally — the engine does not implement event archives (nothing to list or replay).`);
         return null;
       case 'AWS::OpenSearchServerless::Collection':
         return this.parseOpenSearchCollection(key, resource);

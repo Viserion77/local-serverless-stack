@@ -49,10 +49,54 @@ import type {
 } from './cloudformation-parser.js';
 import AdmZip from 'adm-zip';
 
+// What a provisioning pass did, and — the part that used to exist only in the
+// daemon log — everything it could not do. The register route hands `warnings`
+// straight to its caller.
+export interface ProvisionOutcome {
+  provisioned: number;
+  warnings: string[];
+}
+
+// An event rule parked until the stack that owns its bus registers.
+//
+// The logical-id map travels WITH it. `resourcesByLogicalId` is per-call state,
+// rebuilt for whichever service is being provisioned, and the retry runs inside
+// a *different* service's call — so without the snapshot a target
+// `Fn::GetAtt OnOrderBilledLambdaFunction` resolves against the bus owner's
+// resources, misses, and falls through to the legacy `<svc>-api-<fn>` guess.
+// The rule then exists, points at a function name that was never registered,
+// and every event dies in a 404: the original silent failure with extra steps.
+interface DeferredEventRule {
+  serviceName: string;
+  rule: EventRuleResource;
+  invokeUrl?: string;
+  resourcesByLogicalId: Map<string, Resource>;
+}
+
+// An empty message counts as no message: "was NOT provisioned: " with nothing
+// after the colon is worse than saying the cause is unknown.
+function errorMessageOf(error: unknown): string {
+  const message = (error as { message?: unknown })?.message;
+  return typeof message === 'string' && message.trim() ? message : 'Unknown error';
+}
+
+/**
+ * "The bus isn't there (yet)". EventBridge answers a PutRule against an unknown
+ * bus with ResourceNotFoundException; the message is matched as well because
+ * the engine's own error carries the bus name and the SDK does not always
+ * preserve the exception name through a fallback endpoint.
+ */
+function isMissingBusError(error: unknown): boolean {
+  const name = (error as { name?: unknown })?.name;
+  if (name === 'ResourceNotFoundException') return true;
+  const message = errorMessageOf(error).toLowerCase();
+  return message.includes('bus') && message.includes('does not exist');
+}
+
 // Which base endpoint aoss clients (and the collection data-plane URLs LSS
-// logs) must target: the in-process sidecar when it is enabled — no LocalStack
-// edition provides aoss — else the active engine (the self engine serves aoss
-// natively). Exported so tests can pin the choice directly.
+// logs) must target: the in-process sidecar when it is enabled, else the active
+// engine (the self engine serves aoss natively). Exported so tests can pin the
+// choice directly.
 export class ResourceProvisioner {
   private static instance: ResourceProvisioner;
   private dynamoClient!: DynamoDBClient;
@@ -91,8 +135,9 @@ export class ResourceProvisioner {
     this.dynamoClient = new DynamoDBClient(config);
     this.sqsClient = new SQSClient(config);
     this.snsClient = new SNSClient(config);
-    // forcePathStyle is required so LocalStack receives bucket name in the URL path
-    // rather than as a virtual-host subdomain (which resolves to host.docker.internal).
+    // forcePathStyle is required so the engine receives the bucket name in the
+    // URL path rather than as a virtual-host subdomain (`bucket.localhost`,
+    // which does not resolve to the engine's listener).
     this.s3Client = new S3Client({ ...config, forcePathStyle: true });
     this.lambdaClient = new LambdaClient(config);
     this.eventBridgeClient = new EventBridgeClient(config);
@@ -111,11 +156,18 @@ export class ResourceProvisioner {
     return this.currentRegion;
   }
 
+  /**
+   * Retry an event rule whose bus did not exist yet, once the owning stack
+   * shows up. Keyed by bus name; each entry keeps the service it belongs to so
+   * the retry provisions it exactly as its own registration would have.
+   */
+  private deferredEventRules = new Map<string, DeferredEventRule[]>();
+
   async provisionResources(
     serviceName: string,
     resources: Resource[],
     metadata?: { invokePort?: number; invokeUrl?: string; region?: string },
-  ): Promise<void> {
+  ): Promise<ProvisionOutcome> {
     // Update clients if region has changed
     if (metadata?.region && metadata.region !== this.currentRegion) {
       this.currentRegion = metadata.region;
@@ -139,9 +191,24 @@ export class ResourceProvisioner {
     }
 
     let provisionedCount = 0;
+    // Everything that failed here has to reach the CALLER, not just the log.
+    // Provisioning is deliberately non-fatal — one broken resource must not
+    // abort a boot — but "non-fatal" was being read as "silent": a rule that
+    // never got created left the service up and mute, and the only trace was a
+    // line in the daemon log nobody was tailing. These land in the register
+    // response's `warnings[]`, which the CLI and the dashboard already print.
+    const warnings: string[] = [];
+    // The log lines keep their exact wording — they are what an operator greps
+    // and what the docs quote; `fail` only adds the copy that travels back.
+    const fail = (what: string, error: unknown): void => {
+      warnings.push(`${what} was NOT provisioned: ${errorMessageOf(error)}`);
+    };
+    // Buses created in the first pass below, so rules parked by an earlier
+    // registration can be retried as soon as their owner shows up.
+    const busesCreated: string[] = [];
 
     // First pass: Create infrastructure resources (DynamoDB, SQS, SNS, S3)
-    // Lambda functions are handled by Serverless Offline, not LocalStack
+    // Lambda functions are handled by the in-process runtime, not the engine.
     for (const resource of resources) {
       try {
         switch (resource.type) {
@@ -167,6 +234,7 @@ export class ResourceProvisioner {
             break;
           case 'eventbus':
             await this.createEventBus(resource);
+            busesCreated.push(resource.name);
             provisionedCount++;
             break;
           case 'opensearch':
@@ -178,8 +246,16 @@ export class ResourceProvisioner {
         if (!error.message?.includes('already exists')) {
           const resourceName = 'name' in resource ? resource.name : resource.functionName;
           console.error(`Failed to provision ${resource.type}:${resourceName}:`, error.message);
+          fail(`${resource.type} "${resourceName}"`, error);
         }
       }
+    }
+
+    // A bus this stack owns may be the one an earlier registration's rules were
+    // waiting for. Flush them before this service's own rules so a mixed batch
+    // ends up in the same state whatever order the operator registered in.
+    for (const busName of busesCreated) {
+      await this.flushDeferredEventRules(busName, warnings);
     }
 
     // Second pass: Create event source mappings (which will create Lambda proxies if needed)
@@ -189,24 +265,44 @@ export class ResourceProvisioner {
         await this.createEventSourceMapping(serviceName, eventSource, invokeUrl);
         provisionedCount++;
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+        const errorMessage = errorMessageOf(error);
         const errorName = error instanceof Error && 'name' in error ? (error as {name: string}).name : '';
         if (!errorMessage.includes('already exists') && errorName !== 'ResourceConflictException') {
           console.error(`Failed to provision event-source for ${eventSource.functionName}:`, errorMessage);
+          fail(`event-source for "${eventSource.functionName}"`, error);
         }
       }
     }
 
     // EventBridge rules ride the same proxy model as event source mappings:
-    // rule + pattern on the bus → Lambda proxy in LocalStack → LSS invoke API.
+    // rule + pattern on the bus → Lambda proxy → LSS invoke API.
     const eventRules = resources.filter(r => r.type === 'event-rule') as EventRuleResource[];
     for (const rule of eventRules) {
       try {
         await this.createEventRule(serviceName, rule, invokeUrl);
         provisionedCount++;
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        console.error(`Failed to provision event-rule ${rule.name}:`, errorMessage);
+        // A consumer registered before the stack that owns the custom bus is
+        // the common case in a monorepo, not an error: park the rule and put it
+        // back when the bus appears. `lss register a b c` and the dashboard's
+        // checkbox list both hand us an arbitrary order, so requiring the
+        // operator to know the dependency graph is not a fix.
+        const busName = this.resolveEventBusName(rule.eventBusRef);
+        if (busName && isMissingBusError(error)) {
+          this.deferEventRule(busName, {
+            serviceName,
+            rule,
+            invokeUrl,
+            resourcesByLogicalId: new Map(this.resourcesByLogicalId),
+          });
+          console.warn(`  ⏳ Deferred EventBridge rule ${rule.name}: bus "${busName}" does not exist yet`);
+          warnings.push(
+            `event-rule "${rule.name}" is waiting for event bus "${busName}" — it will be provisioned when the stack that owns the bus registers`,
+          );
+          continue;
+        }
+        console.error(`Failed to provision event-rule ${rule.name}:`, errorMessageOf(error));
+        fail(`event-rule "${rule.name}"`, error);
       }
     }
 
@@ -219,12 +315,59 @@ export class ResourceProvisioner {
       try {
         await this.configureS3Notifications(serviceName, bucket, invokeUrl);
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        console.error(`Failed to configure S3 notifications for ${bucket.name}:`, errorMessage);
+        console.error(`Failed to configure S3 notifications for ${bucket.name}:`, errorMessageOf(error));
+        fail(`S3 notifications for "${bucket.name}"`, error);
       }
     }
 
     console.log(`✅ Provisioned ${provisionedCount} resources for ${serviceName}`);
+    return { provisioned: provisionedCount, warnings };
+  }
+
+  private deferEventRule(busName: string, entry: DeferredEventRule): void {
+    const queue = this.deferredEventRules.get(busName) ?? [];
+    // Re-registering the same service must not queue the rule twice.
+    const existing = queue.findIndex(q => q.serviceName === entry.serviceName && q.rule.name === entry.rule.name);
+    if (existing >= 0) queue[existing] = entry;
+    else queue.push(entry);
+    this.deferredEventRules.set(busName, queue);
+  }
+
+  /**
+   * Provision every rule parked on `busName`, now that the bus exists. A rule
+   * that fails again for the same reason stays parked (the bus creation may
+   * have raced); any other failure is reported and dropped, so a permanently
+   * broken rule cannot be retried on every future registration.
+   */
+  private async flushDeferredEventRules(busName: string, warnings: string[]): Promise<void> {
+    const queue = this.deferredEventRules.get(busName);
+    if (!queue || queue.length === 0) return;
+    this.deferredEventRules.delete(busName);
+    // The caller's own map is restored before its remaining passes run.
+    const callerResources = this.resourcesByLogicalId;
+    let recovered = 0;
+    for (const entry of queue) {
+      // Resolve the rule's targets and bus exactly as its own registration
+      // would have — against the resources of the service that declared it.
+      this.resourcesByLogicalId = entry.resourcesByLogicalId;
+      try {
+        await this.createEventRule(entry.serviceName, entry.rule, entry.invokeUrl);
+        recovered++;
+      } catch (error) {
+        if (isMissingBusError(error)) {
+          this.deferEventRule(busName, entry);
+          continue;
+        }
+        const message = errorMessageOf(error);
+        console.error(`Failed to provision deferred event-rule ${entry.rule.name} (${entry.serviceName}):`, message);
+        warnings.push(`deferred event-rule "${entry.rule.name}" of service "${entry.serviceName}" was NOT provisioned: ${message}`);
+      } finally {
+        this.resourcesByLogicalId = callerResources;
+      }
+    }
+    if (recovered > 0) {
+      console.log(`🔁 Provisioned ${recovered} deferred EventBridge rule(s) now that bus "${busName}" exists`);
+    }
   }
 
   private async createDynamoDBTable(resource: DynamoDBResource): Promise<void> {

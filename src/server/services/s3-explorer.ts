@@ -72,7 +72,7 @@ export class S3Explorer {
     let client = this.clients.get(r);
     if (!client) {
       const base = EngineManager.getInstance().getConfig();
-      // forcePathStyle is required so LocalStack receives the bucket name in
+      // forcePathStyle is required so the engine receives the bucket name in
       // the URL path instead of as a virtual-host subdomain.
       client = new S3Client({ ...base, region: r, forcePathStyle: true });
       this.clients.set(r, client);

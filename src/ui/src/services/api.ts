@@ -206,6 +206,12 @@ export interface ScannedService {
   invokePort?: number;
   // Effective package command for this service (servicePackaging else global).
   packageCommand: string;
+  // Whether the service declares any function. `false` = resources-only, so
+  // ports mean nothing for it; `undefined` = the scan could not tell (a TS
+  // config, a `${file(…)}` reference) and the caller must assume it might.
+  hasFunctions?: boolean;
+  // Routes on record for an already-registered service (undefined otherwise).
+  routeCount?: number;
   warnings: ScanWarning[];
 }
 
@@ -400,7 +406,10 @@ export interface LssConfigUpdate {
   stateDir?: string | null;
   autoPackage?: boolean;
   packageCommand?: string | null;
-  packageArgs?: string[];
+  // Null, not `[]`: an emptied arg list is the blank state of the field, and a
+  // top-level null deletes the key instead of baking `"packageArgs": []` into
+  // the file the human reviews. Same convention as packageCommand above.
+  packageArgs?: string[] | null;
   packageTimeoutMs?: number;
   lambdaRuntime?: {
     enabled?: boolean;
@@ -424,6 +433,18 @@ export interface LssConfigUpdate {
     title?: string | null;
     subtitle?: string | null;
     defaultTheme?: 'dark' | 'light';
+    // Token maps the server has always accepted (config-manager's
+    // EDITABLE_CONFIG_KEYS declares both as `stringRecord`) — only this type
+    // stopped short of the API. Each map is REPLACED wholesale, because the
+    // merge above is one level deep and `colors`/`themeColors` are that level:
+    // sending `{ themeColors: { dark } }` deletes `themeColors.light`, and
+    // dropping a token means resending the map without it (a null *inside* a
+    // map is rejected — null only deletes at the level the merge reads).
+    colors?: Record<string, string> | null;
+    themeColors?: {
+      dark?: Record<string, string>;
+      light?: Record<string, string>;
+    } | null;
   };
   // Map entries merge per service on the server: sending one subkey never
   // drops that entry's siblings; null deletes an entry (or one subkey).

@@ -2062,3 +2062,191 @@ describe('EventBridge defensive branches (non-Error rejections and permission fa
     expect(eventBridgeMock.commandCalls(PutTargetsCommand)).toHaveLength(1);
   });
 });
+
+// The failure that produced this feature: a consumer registered BEFORE the
+// stack owning its custom bus got a clean ✓ — full resource count, no warning —
+// while both of its rules had failed. The only trace was a line in the daemon
+// log, and the visible symptom was a service that silently received no events.
+describe('provisioning failures reach the caller', () => {
+  it('returns a warning for every resource that could not be provisioned', async () => {
+    dynamoMock.on(CreateTableCommand).rejects(new Error('disk on fire'));
+    const outcome = await provisioner.provisionResources('svc', [dynamoResource()]);
+    expect(outcome.provisioned).toBe(0);
+    expect(outcome.warnings).toEqual([
+      expect.stringContaining('dynamodb "orders-table" was NOT provisioned: disk on fire'),
+    ]);
+  });
+
+  it('says nothing about a resource that already exists — that is the idempotent path', async () => {
+    dynamoMock.on(CreateTableCommand).rejects(new Error('Table already exists'));
+    const outcome = await provisioner.provisionResources('svc', [dynamoResource()]);
+    expect(outcome.warnings).toEqual([]);
+  });
+
+  it('reports event-source and S3-notification failures too', async () => {
+    lambdaMock.on(GetFunctionCommand).rejects(new Error('boom'));
+    const outcome = await provisioner.provisionResources(
+      'svc',
+      [eventSource(), s3Resource({ notifications: [{ events: ['s3:ObjectCreated:*'], functionRef: 'Missing' }] })],
+      { invokeUrl: 'http://host:13070' },
+    );
+    expect(outcome.warnings.join('\n')).toContain('event-source for "ProcessOrderLambdaFunction" was NOT provisioned');
+  });
+
+  it('a rule that fails for its own reasons is reported, not deferred', async () => {
+    eventBridgeMock.on(PutRuleCommand).rejects(new Error('ValidationException: bad pattern'));
+    const outcome = await provisioner.provisionResources('svc', [eventRuleResource()]);
+    expect(outcome.warnings).toEqual([
+      expect.stringContaining('event-rule "relay-rule" was NOT provisioned: ValidationException'),
+    ]);
+  });
+
+  it('falls back to "Unknown error" for a non-Error rejection', async () => {
+    eventBridgeMock.on(PutRuleCommand).rejects({ toString: () => 'nope' } as never);
+    const outcome = await provisioner.provisionResources('svc', [eventRuleResource()]);
+    expect(outcome.warnings[0]).toContain('Unknown error');
+  });
+});
+
+// Registration order is whatever the operator typed (`lss register a b c`) or
+// whatever boxes they ticked in the dashboard — so a rule waiting for a bus is
+// not an error, it is a "not yet". Making the operator learn the dependency
+// graph is not a fix.
+describe('event rules deferred until their bus exists', () => {
+  const missingBus = Object.assign(new Error('Event bus domain-events does not exist.'), {
+    name: 'ResourceNotFoundException',
+  });
+  // A consumer in another stack can only name the bus literally: a logical id
+  // resolves inside the template that declares it, and nowhere else.
+  const consumerRule = () => eventRuleResource({ eventBusRef: 'domain-events' });
+
+  it('parks the rule with a warning that says what it is waiting for', async () => {
+    eventBridgeMock.on(PutRuleCommand).rejects(missingBus);
+    const outcome = await provisioner.provisionResources('consumer', [consumerRule()]);
+    expect(outcome.warnings).toEqual([
+      expect.stringContaining('event-rule "relay-rule" is waiting for event bus "domain-events"'),
+    ]);
+  });
+
+  it('provisions it as soon as the owning stack registers the bus', async () => {
+    eventBridgeMock.on(PutRuleCommand).rejects(missingBus);
+    await provisioner.provisionResources('consumer', [consumerRule()], { invokeUrl: 'http://host:13070' });
+
+    eventBridgeMock.reset();
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    eventBridgeMock.on(PutTargetsCommand).resolves({});
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:13070' } } } });
+    lambdaMock.on(AddPermissionCommand).resolves({});
+
+    const outcome = await provisioner.provisionResources('infra', [eventBusResource()]);
+    expect(eventBridgeMock.commandCalls(PutRuleCommand)).toHaveLength(1);
+    expect(eventBridgeMock.commandCalls(PutRuleCommand)[0].args[0].input).toMatchObject({
+      Name: 'relay-rule',
+      EventBusName: 'domain-events',
+    });
+    expect(outcome.warnings).toEqual([]);
+  });
+
+  it('queues one entry per rule, replacing a re-registration of the same one', async () => {
+    eventBridgeMock.on(PutRuleCommand).rejects(missingBus);
+    await provisioner.provisionResources('consumer', [consumerRule()]);
+    await provisioner.provisionResources('consumer', [consumerRule()]);
+
+    eventBridgeMock.reset();
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    eventBridgeMock.on(PutTargetsCommand).resolves({});
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://x' } } } });
+    lambdaMock.on(AddPermissionCommand).resolves({});
+    await provisioner.provisionResources('infra', [eventBusResource()]);
+    expect(eventBridgeMock.commandCalls(PutRuleCommand)).toHaveLength(1);
+  });
+
+  it('stays parked when the retry hits the same missing bus (a racing creation)', async () => {
+    eventBridgeMock.on(PutRuleCommand).rejects(missingBus);
+    await provisioner.provisionResources('consumer', [consumerRule()]);
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    const first = await provisioner.provisionResources('infra', [eventBusResource()]);
+    expect(first.warnings).toEqual([]);
+
+    // Still queued: the next bus creation retries it rather than losing it.
+    eventBridgeMock.reset();
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    eventBridgeMock.on(PutTargetsCommand).resolves({});
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://x' } } } });
+    lambdaMock.on(AddPermissionCommand).resolves({});
+    await provisioner.provisionResources('infra', [eventBusResource()]);
+    expect(eventBridgeMock.commandCalls(PutRuleCommand)).toHaveLength(1);
+  });
+
+  // Caught by the self-hosted example, not by the unit suite that shipped with
+  // the feature: `resourcesByLogicalId` is per-call state, so a retry running
+  // inside the BUS OWNER's registration resolved the consumer's target logical
+  // id against the owner's resources, missed, and fell back to the legacy
+  // `<svc>-api-<fn>` guess. The rule existed, pointed at a function that was
+  // never registered, and every event died in a 404 — the original silent
+  // failure with extra steps.
+  it('resolves a deferred rule against the resources of the service that declared it', async () => {
+    eventBridgeMock.on(PutRuleCommand).rejects(missingBus);
+    await provisioner.provisionResources(
+      'notifications',
+      [
+        lambdaResource({ logicalId: 'OnOrderBilledLambdaFunction', name: 'notifications-dev-onOrderBilled' }),
+        eventRuleResource({
+          eventBusRef: 'domain-events',
+          targets: [{ id: 'consumer', functionRef: 'OnOrderBilledLambdaFunction' }],
+        }),
+      ],
+      { invokeUrl: 'http://host:13633' },
+    );
+
+    eventBridgeMock.reset();
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    eventBridgeMock.on(PutTargetsCommand).resolves({});
+    lambdaMock.on(GetFunctionCommand).resolves({ Configuration: { Environment: { Variables: { INVOKE_URL: 'http://host:13633' } } } });
+    lambdaMock.on(AddPermissionCommand).resolves({});
+
+    // The owner's template knows nothing about that logical id.
+    await provisioner.provisionResources('billing', [eventBusResource()]);
+
+    const targets = eventBridgeMock.commandCalls(PutTargetsCommand)[0].args[0].input as any;
+    expect(targets.Targets[0].Arn).toBe('arn:aws:lambda:us-east-1:000000000000:function:notifications-dev-onOrderBilled');
+  });
+
+  it('drops a deferred rule that fails for a NEW reason, and says whose it was', async () => {
+    eventBridgeMock.on(PutRuleCommand).rejects(missingBus);
+    await provisioner.provisionResources('consumer', [consumerRule()]);
+
+    eventBridgeMock.reset();
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    eventBridgeMock.on(PutRuleCommand).rejects(new Error('ValidationException: bad pattern'));
+    const outcome = await provisioner.provisionResources('infra', [eventBusResource()]);
+    expect(outcome.warnings).toEqual([
+      expect.stringContaining('deferred event-rule "relay-rule" of service "consumer" was NOT provisioned'),
+    ]);
+
+    // Dropped, so a later registration does not retry it for ever.
+    eventBridgeMock.reset();
+    eventBridgeMock.on(CreateEventBusCommand).resolves({});
+    eventBridgeMock.on(PutRuleCommand).resolves({});
+    await provisioner.provisionResources('infra', [eventBusResource()]);
+    expect(eventBridgeMock.commandCalls(PutRuleCommand)).toHaveLength(0);
+  });
+
+  it('does not defer a rule on the default bus (there is no bus to wait for)', async () => {
+    eventBridgeMock.on(PutRuleCommand).rejects(missingBus);
+    const outcome = await provisioner.provisionResources('svc', [
+      eventRuleResource({ eventBusRef: undefined }),
+    ]);
+    expect(outcome.warnings[0]).toContain('was NOT provisioned');
+  });
+
+  it('recognises the missing bus by message when the exception name is generic', async () => {
+    eventBridgeMock.on(PutRuleCommand).rejects(new Error('Event bus domain-events does not exist.'));
+    const outcome = await provisioner.provisionResources('consumer', [consumerRule()]);
+    expect(outcome.warnings[0]).toContain('is waiting for event bus');
+  });
+});

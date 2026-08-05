@@ -10,12 +10,12 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import {
-  TCard, TStack, TText, TButton, TInput, TFormField, TGrid, TBadge, TAlert,
+  TCard, TStack, TText, TButton, TInput, TFormField, TGrid, TBadge, TAlert, TIcon,
   TSteps, TCheckbox, TSpinner, TToggleGroup, TDivider, TTag,
 } from '@treeui/vue';
 import type { TStepItem } from '@treeui/vue';
 import { api } from '../services/api';
-import type { LssConfigSnapshot, ScannedService } from '../services/api';
+import type { LssConfigSnapshot, LssConfigUpdate, ScannedService } from '../services/api';
 import { loadBranding } from '../services/branding';
 import { markOnboardingDone } from '../services/onboarding';
 import { useI18n } from '../i18n';
@@ -55,7 +55,11 @@ async function savePorts(): Promise<void> {
   ports.saving = true;
   error.value = null;
   try {
-    const patch: Record<string, unknown> = {};
+    // `Record<string, unknown>` satisfies an all-optional interface with no
+    // complaint from TS, so it was not "loose typing" here — it was no typing
+    // at all on the way into updateConfig. All three patches in this file are
+    // built as LssConfigUpdate now.
+    const patch: LssConfigUpdate = {};
     if (config.value && ports.serverPort !== config.value.serverPort) patch.serverPort = ports.serverPort;
     if (config.value && ports.enginePort !== config.value.selfEngine.port) {
       patch.selfEngine = { port: ports.enginePort };
@@ -85,10 +89,10 @@ async function saveBrand(): Promise<void> {
   brand.saving = true;
   error.value = null;
   try {
-    const branding: Record<string, unknown> = {
+    const branding: NonNullable<LssConfigUpdate['branding']> = {
       title: brand.title.trim() || null,
       subtitle: brand.subtitle.trim() || null,
-      defaultTheme: brand.theme,
+      defaultTheme: brand.theme as 'dark' | 'light',
     };
     // `branding.colors` is replaced wholesale by the config merge (it merges
     // one level, and `colors` IS that level), so the existing token map has to
@@ -97,7 +101,7 @@ async function saveBrand(): Promise<void> {
     if (brand.primary.trim()) {
       branding.colors = { ...(config.value?.branding.colors ?? {}), 'brand-primary': brand.primary.trim() };
     }
-    const res = await api.updateConfig({ branding } as never);
+    const res = await api.updateConfig({ branding });
     config.value = res.config;
     // Branding is hot: re-pull it so the new identity shows immediately.
     await loadBranding();
@@ -200,15 +204,65 @@ function parsePort(value: string): number | null | 'invalid' {
   return Number.isInteger(port) && String(port) === trimmed && port >= 1024 && port <= 65535 ? port : 'invalid';
 }
 
+// A stack with no functions has no listener to give a port to. `undefined`
+// means the scan could not tell (TS config, `${file(…)}`) — show the fields,
+// because hiding them from a service that does have functions is the mistake
+// that costs an afternoon, and an extra field costs nothing.
+function showsPorts(row: Row): boolean {
+  return row.hasFunctions !== false;
+}
+
+// A port edit that looks like a typo rather than a decision: same digits as the
+// current value plus one more at the end (3072 → 30729). This exact slip put
+// three services on dead ports here, silently — nothing downstream can tell it
+// apart from a deliberate change, so the only place to catch it is the moment
+// it is typed.
+function suspiciousPortEdit(current: number | undefined, next: number | null): string | null {
+  if (!current || next === null) return null;
+  const from = String(current);
+  const to = String(next);
+  return to.length === from.length + 1 && to.startsWith(from) ? `${from} → ${to}` : null;
+}
+
+// Every suspicious edit currently in the form, as "<service>: 3072 → 30729".
+const suspiciousEdits = computed(() => rows.value.flatMap(row => {
+  if (!showsPorts(row)) return [];
+  return ([
+    [row.apiPort, parsePort(row.editApiPort)],
+    [row.invokePort, parsePort(row.editInvokePort)],
+  ] as Array<[number | undefined, number | null | 'invalid']>)
+    .map(([current, next]) => (next === 'invalid' ? null : suspiciousPortEdit(current, next)))
+    .filter((change): change is string => change !== null)
+    .map(change => `${row.name}: ${change}`);
+}));
+
+// Cleared when the set of suspicious edits changes, so acknowledging one typo
+// never signs off on the next one.
+const confirmedEdits = ref<string>('');
+const needsPortConfirmation = computed(() =>
+  suspiciousEdits.value.length > 0 && confirmedEdits.value !== suspiciousEdits.value.join('|'));
+
+function confirmPortEdits(): void {
+  confirmedEdits.value = suspiciousEdits.value.join('|');
+  error.value = null;
+}
+
 // Persist edited ports/commands into lss.config.json so registration (now and
 // on every future boot) sees them. Called before package/register and on
 // Finish; a no-edit run writes nothing. Returns false when an edit is invalid.
 async function persistOverrides(): Promise<boolean> {
+  if (needsPortConfirmation.value) {
+    error.value = t('onboarding.portTypoConfirm', { changes: suspiciousEdits.value.join(', ') });
+    return false;
+  }
   const serviceRuntime: Record<string, { apiPort?: number | null; invokePort?: number | null }> = {};
   const servicePackaging: Record<string, { packageCommand?: string | null }> = {};
   for (const row of rows.value) {
-    const apiPort = parsePort(row.editApiPort);
-    const invokePort = parsePort(row.editInvokePort);
+    // A resources-only stack gets no port written for it at all: an
+    // apiPort/invokePort on a service with no listener is a number that looks
+    // configured and means nothing.
+    const apiPort = showsPorts(row) ? parsePort(row.editApiPort) : null;
+    const invokePort = showsPorts(row) ? parsePort(row.editInvokePort) : null;
     if (apiPort === 'invalid' || invokePort === 'invalid') {
       error.value = t('onboarding.portRangeError', { name: row.name });
       return false;
@@ -227,12 +281,15 @@ async function persistOverrides(): Promise<boolean> {
       servicePackaging[configKey(row)] = { packageCommand: null };
     }
   }
-  const patch: Record<string, unknown> = {};
+  // Typed, not `Record<string, unknown>` + `as never`: LssConfigUpdate already
+  // describes both map blocks with exactly these entry shapes, and the cast was
+  // switching off the only check that catches a subkey the server would reject.
+  const patch: LssConfigUpdate = {};
   if (Object.keys(serviceRuntime).length > 0) patch.serviceRuntime = serviceRuntime;
   if (Object.keys(servicePackaging).length > 0) patch.servicePackaging = servicePackaging;
   if (Object.keys(patch).length === 0) return true;
   try {
-    await api.updateConfig(patch as never);
+    await api.updateConfig(patch);
     // Re-read rather than guess: clearing an override falls back to the
     // service's own yml hint (or the global command), which only the server
     // can resolve. Guessing here is how a row ends up claiming "no API port"
@@ -520,17 +577,26 @@ onMounted(async () => {
                   <TTag v-if="row.region" size="sm" variant="soft">{{ row.region }}</TTag>
                 </TStack>
                 <TText tone="muted" size="sm" family="mono">{{ row.relPath }}/{{ row.configFile }}</TText>
-                <TGrid :columns="3" gap="0.5rem">
-                  <TFormField :label="t('onboarding.apiPortLabel')" :hint="t('onboarding.apiPortHint')">
-                    <TInput v-model="row.editApiPort" type="number" min="1024" max="65535" placeholder="3000" />
-                  </TFormField>
-                  <TFormField :label="t('onboarding.invokePortLabel')" :hint="t('onboarding.invokePortHint')">
-                    <TInput v-model="row.editInvokePort" type="number" min="1024" max="65535" placeholder="13000" />
-                  </TFormField>
+                <!-- Ports only for a stack that has functions to serve them:
+                     a resources-only stack (infra/shared and friends) opens no
+                     listener, so offering it an apiPort invites a number that
+                     will never be used — and, worse, believed. -->
+                <TGrid :columns="showsPorts(row) ? 3 : 1" gap="0.5rem">
+                  <template v-if="showsPorts(row)">
+                    <TFormField :label="t('onboarding.apiPortLabel')" :hint="t('onboarding.apiPortHint')">
+                      <TInput v-model="row.editApiPort" type="number" min="1024" max="65535" placeholder="3000" />
+                    </TFormField>
+                    <TFormField :label="t('onboarding.invokePortLabel')" :hint="t('onboarding.invokePortHint')">
+                      <TInput v-model="row.editInvokePort" type="number" min="1024" max="65535" placeholder="13000" />
+                    </TFormField>
+                  </template>
                   <TFormField :label="t('onboarding.packageCommandLabel')" :hint="t('onboarding.packageCommandHint')">
                     <TInput v-model="row.editPackageCommand" placeholder="npx serverless package" />
                   </TFormField>
                 </TGrid>
+                <TText v-if="!showsPorts(row)" size="sm" tone="muted">
+                  {{ t('onboarding.resourcesOnly') }}
+                </TText>
                 <TText v-if="row.resultMessage && row.status !== 'failed'" size="sm" tone="muted">
                   {{ row.resultMessage }}
                 </TText>
@@ -540,13 +606,43 @@ onMounted(async () => {
                 <TText v-if="row.resultOutput" size="sm" tone="muted" family="mono">
                   {{ row.resultOutput }}
                 </TText>
-                <TText v-for="warning in [...displayWarnings(row), ...row.resultWarnings]" :key="warning" size="sm" tone="muted">
-                  ⚠ {{ warning }}
-                </TText>
+                <!-- align="flex-start", not center: a scan warning routinely
+                     wraps to two or three lines, and a mark centred on the
+                     whole block stops reading as the marker of the first. -->
+                <TStack
+                  v-for="warning in [...displayWarnings(row), ...row.resultWarnings]"
+                  :key="warning"
+                  direction="horizontal"
+                  gap="0.375rem"
+                  align="flex-start"
+                >
+                  <TIcon name="triangle-alert" />
+                  <TText size="sm" tone="muted">{{ warning }}</TText>
+                </TStack>
               </TStack>
             </TStack>
           </TStack>
         </template>
+
+        <!-- One digit too many at the end of a port is the classic slip in a
+             numeric field, and it is indistinguishable from a deliberate
+             choice without asking. Asking is the whole feature. -->
+        <TAlert v-if="suspiciousEdits.length > 0" variant="warning">
+          <TStack direction="vertical" gap="0.5rem">
+            <TText size="sm">{{ t('onboarding.portTypoConfirm', { changes: suspiciousEdits.join(', ') }) }}</TText>
+            <TStack direction="horizontal" gap="0.5rem" wrap>
+              <TButton
+                v-if="needsPortConfirmation"
+                size="sm"
+                variant="outline"
+                @click="confirmPortEdits"
+              >
+                {{ t('onboarding.portTypoConfirmAction') }}
+              </TButton>
+              <TBadge v-else tone="success" variant="soft">{{ t('onboarding.portTypoConfirmed') }}</TBadge>
+            </TStack>
+          </TStack>
+        </TAlert>
 
         <TStack direction="horizontal" gap="0.5rem" justify="space-between" wrap>
           <TButton variant="ghost" :disabled="working !== null" @click="step = 'brand'">{{ t('common.back') }}</TButton>

@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { RouterLink } from 'vue-router';
 import {
-  TCard, TButton, TStack, TGrid, TStat, TEmptyState,
-  TSpinner, TAlert, TTag, TTable, TText, TInput, TIcon,
+  TCard, TButton, TStack, TStackItem, TGrid, TStat, TEmptyState,
+  TSpinner, TAlert, TTag, TTable, TText, TInput, TLink, TIcon,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { OpenSearchCollectionSummary, ResourceOwnersResponse } from '../../services/api';
@@ -103,11 +102,15 @@ onBeforeUnmount(() => {
             <TText weight="semibold">{{ t('opensearch.listTitle') }}</TText>
           </TStack>
           <TStack direction="horizontal" align="center" gap="1rem">
-            <TInput
-              v-model="search"
-              :placeholder="t('opensearch.filterPlaceholder')"
-              style="min-width: 16rem;"
-            />
+            <!-- The floor is the flex item's, not the field's: TInput's `width`
+                 is a cap (TFieldWidth), never a minimum. -->
+            <TStackItem min-width="16rem">
+              <TInput
+                v-model="search"
+                :placeholder="t('opensearch.filterPlaceholder')"
+                :aria-label="t('opensearch.filterLabel')"
+              />
+            </TStackItem>
             <TText tone="muted" size="xs">{{ t('opensearch.refreshHint') }}</TText>
           </TStack>
         </TStack>
@@ -140,6 +143,10 @@ onBeforeUnmount(() => {
 
       <TTable v-else :columns="columns" :rows="filteredRows" :aria-label="t('opensearch.listTitle')">
         <template #cell-name="{ row }">
+          <!-- Left as-is on purpose: this is row activation, and TTable has no
+               row-activation API (no `rowHref`, no `@row-activate`). Any local
+               fix would be a hand-rolled button/role — the gap belongs to
+               TreeUI, so the interim style stays until it lands there. -->
           <TText
             weight="semibold"
             style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;"
@@ -150,13 +157,16 @@ onBeforeUnmount(() => {
         </template>
 
         <template #cell-service="{ row }">
-          <RouterLink
+          <!-- TLink resolves RouterLink itself from `to`. `clickable` is not a
+               TTag prop in any version — it was dropped silently, so the tag
+               never gained an affordance; the link is what carries it. -->
+          <TLink
             v-if="row.service"
             :to="`/services/${encodeURIComponent(String(row.service))}`"
-            style="text-decoration: none;"
+            underline="none"
           >
-            <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
-          </RouterLink>
+            <TTag size="sm" variant="soft">{{ row.service }}</TTag>
+          </TLink>
           <TText v-else tone="muted" size="xs">{{ t('opensearch.unmanaged') }}</TText>
         </template>
 

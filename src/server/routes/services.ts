@@ -133,19 +133,28 @@ router.get('/', async (_req: Request, res: Response) => {
 router.get('/scan', async (_req: Request, res: Response) => {
   try {
     await ensureCacheInit();
-    const registeredRoots = (await cache.listServices()).map(s => s.root);
+    const registeredServices = await cache.listServices();
+    const byRoot = new Map(registeredServices.map(s => [path.resolve(s.root), s]));
     const cm = ConfigManager.getInstance();
     const projectRoot = cm.getProjectRoot();
     // Overlay the config on the yml hints: `serviceRuntime` ports win (same
     // precedence registration applies), and the effective package command is
     // what onboarding shows/edits (a `servicePackaging` entry, else global).
-    const services = scanForServices(projectRoot, registeredRoots).map(svc => {
+    const services = scanForServices(projectRoot, [...byRoot.keys()], {
+      isIgnored: dir => cm.isScanIgnored(dir),
+      autoPackage: cm.isAutoPackage(),
+    }).map(svc => {
       const runtime = cm.getRuntimeConfigForService(svc.root);
+      // For a service already registered, the packaged state has settled what
+      // the yml scrape could only guess — prefer it.
+      const cached = byRoot.get(path.resolve(svc.root));
       return {
         ...svc,
         apiPort: runtime.apiPort ?? svc.apiPort,
         invokePort: runtime.invokePort ?? svc.invokePort,
         packageCommand: cm.getPackageConfigForService(svc.root).command,
+        hasFunctions: cached ? (cached.functions?.length ?? 0) > 0 : svc.hasFunctions,
+        routeCount: cached?.routes?.length,
       };
     });
     return res.json({ projectRoot, services });
@@ -347,14 +356,18 @@ router.post('/package', async (req: Request, res: Response) => {
   if (!dir) return;
   const pkg = ConfigManager.getInstance().getPackageConfigForService(dir);
   const displayCmd = [pkg.command, ...pkg.args].join(' ');
-  console.log(`📦 Packaging ${dir} ('${displayCmd}')`);
+  console.log(`📦 Packaging ${dir} ('${displayCmd}' in ${pkg.cwd})`);
   const startedAt = Date.now();
   try {
     const result = await runServerlessPackage({
       command: pkg.command,
       args: pkg.args,
       env: pkg.env,
-      cwd: dir,
+      // `packageCwd` may point the command at a directory above the service
+      // (a root-level script packaging a resources-only stack); it is fenced to
+      // the project root by ConfigManager, the same fence resolveServiceDir
+      // applies to the request's own path.
+      cwd: pkg.cwd,
       timeoutMs: pkg.timeoutMs,
     });
     return res.json({ success: true, exitCode: result.exitCode, durationMs: Date.now() - startedAt, output: outputTail(result.stdout, result.stderr) });

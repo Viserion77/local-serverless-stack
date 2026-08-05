@@ -467,6 +467,7 @@ describe('getPackageConfigForService', () => {
       args: [],
       env: {},
       timeoutMs: 300000,
+      cwd: '/abs/some/access',
     });
   });
 
@@ -477,6 +478,7 @@ describe('getPackageConfigForService', () => {
       args: ['--g'],
       env: { A: '1' },
       timeoutMs: 300000,
+      cwd: '/abs/whatever',
     });
   });
 
@@ -491,6 +493,7 @@ describe('getPackageConfigForService', () => {
       args: ['--param=custom-stage=offline'],
       env: {},
       timeoutMs: 60000,
+      cwd: '/abs/microservices/access',
     });
   });
 
@@ -504,6 +507,7 @@ describe('getPackageConfigForService', () => {
       args: [],
       env: {},
       timeoutMs: 300000,
+      cwd: '/abs/constructor',
     });
   });
 
@@ -520,6 +524,7 @@ describe('getPackageConfigForService', () => {
       args: ['--by-relpath'],
       env: {},
       timeoutMs: 300000,
+      cwd: svc,
     });
   });
 
@@ -534,6 +539,7 @@ describe('getPackageConfigForService', () => {
       args: ['--g', '--s'],
       env: { A: '1', B: '9', C: '3' },
       timeoutMs: 300000,
+      cwd: '/abs/access',
     });
   });
 
@@ -547,6 +553,7 @@ describe('getPackageConfigForService', () => {
       args: ['--g'],
       env: {},
       timeoutMs: 300000,
+      cwd: '/abs/other',
     });
   });
 
@@ -559,7 +566,79 @@ describe('getPackageConfigForService', () => {
       args: [],
       env: {},
       timeoutMs: 120000,
+      cwd: '/abs/access',
     });
+  });
+});
+
+// `packageCwd` is the answer to a stack with no package.json of its own: the
+// script that packages it lives at the monorepo root, and the command grammar
+// (rightly) forbids --prefix/--cwd/--dir, so the working directory has to be
+// declared rather than emerge from npm walking up the tree.
+describe('packageCwd', () => {
+  function cmWith(config: Record<string, unknown>): CM {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify(config));
+    return freshConfigManager();
+  }
+
+  it('defaults to the service directory', () => {
+    expect(cmWith({}).getPackageConfigForService('/abs/infra/shared').cwd).toBe('/abs/infra/shared');
+  });
+
+  it('resolves against the PROJECT ROOT, not the service dir — that is the point', () => {
+    const cm = cmWith({ servicePackaging: { 'infra/shared': { packageCwd: '.' } } });
+    jest.spyOn(cm, 'getProjectRoot').mockReturnValue(process.cwd());
+    expect(cm.getPackageConfigForService(path.join(process.cwd(), 'infra/shared')).cwd).toBe(process.cwd());
+  });
+
+  it('accepts a sibling directory inside the project', () => {
+    const cm = cmWith({ servicePackaging: { 'infra/shared': { packageCwd: 'tools/packaging' } } });
+    jest.spyOn(cm, 'getProjectRoot').mockReturnValue('/repo');
+    expect(cm.getPackageConfigForService('/repo/infra/shared').cwd).toBe('/repo/tools/packaging');
+  });
+
+  // The value becomes the cwd of a spawned child, so escaping the project is
+  // refused at USE time too — the lexical check on write cannot see symlinks.
+  it('refuses a value that escapes the project root and falls back to the service dir', () => {
+    const cm = cmWith({ servicePackaging: { shared: { packageCwd: '../elsewhere' } } });
+    jest.spyOn(cm, 'getProjectRoot').mockReturnValue('/repo');
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => undefined);
+    expect(cm.getPackageConfigForService('/repo/shared').cwd).toBe('/repo/shared');
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('outside the project root'));
+  });
+
+  it('refuses a symlink that lands outside, even though the string looks inside', () => {
+    const cm = cmWith({ servicePackaging: { shared: { packageCwd: 'tools' } } });
+    jest.spyOn(cm, 'getProjectRoot').mockReturnValue('/repo');
+    fs.realpathSync.mockImplementation(((p: string) => (p === '/repo/tools' ? '/etc' : p)) as never);
+    expect(cm.getPackageConfigForService('/repo/shared').cwd).toBe('/repo/shared');
+  });
+});
+
+// The stacks a monorepo never registers locally. Permanent noise in `lss scan`
+// is how a real warning goes unread, so silencing them is a feature about
+// signal, not about tidiness.
+describe('isScanIgnored', () => {
+  function cmWith(config: Record<string, unknown>): CM {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify(config));
+    return freshConfigManager();
+  }
+
+  it('is false when the key is absent or empty', () => {
+    expect(cmWith({}).isScanIgnored('/repo/infra/global')).toBe(false);
+    expect(cmWith({ scanIgnore: [] }).isScanIgnored('/repo/infra/global')).toBe(false);
+  });
+
+  it('matches by project-relative path, by basename, and tolerates ./ and trailing slashes', () => {
+    const cm = cmWith({ scanIgnore: ['./infra/bootstrap/', 'global'] });
+    jest.spyOn(cm, 'getProjectRoot').mockReturnValue(process.cwd());
+    expect(cm.isScanIgnored(path.join(process.cwd(), 'infra/bootstrap'))).toBe(true);
+    expect(cm.isScanIgnored(path.join(process.cwd(), 'infra/global'))).toBe(true);
+    expect(cm.isScanIgnored(path.join(process.cwd(), 'services/orders'))).toBe(false);
   });
 });
 
@@ -1179,6 +1258,29 @@ describe('updateConfig', () => {
     const err = updateErr(setupFile({}), ['not', 'an', 'object']);
     expect(err.name).toBe('ConfigValidationError');
     expect(err.details[0]).toContain('JSON object');
+  });
+
+  it('validates scanIgnore as a list of non-empty strings', () => {
+    const cm = setupFile({});
+    expect(updateErr(cm, { scanIgnore: 'infra/global' }).details[0]).toContain('array of non-empty strings');
+    expect(updateErr(cm, { scanIgnore: ['ok', ''] }).details[0]).toContain('array of non-empty strings');
+    cm.updateConfig({ scanIgnore: ['infra/bootstrap', 'infra/global'] });
+    expect(written().scanIgnore).toEqual(['infra/bootstrap', 'infra/global']);
+  });
+
+  // packageCwd becomes a spawned child's working directory, so the write path
+  // refuses anything that is not a plain path inside the project — the realpath
+  // fence at resolution time is the second half of the same rule.
+  it('validates packageCwd as a project-relative path', () => {
+    const cm = setupFile({});
+    const errs = (patch: unknown) => updateErr(cm, patch).details[0];
+    expect(errs({ servicePackaging: { shared: { packageCwd: '/etc' } } })).toContain('inside the project root');
+    expect(errs({ servicePackaging: { shared: { packageCwd: '../up' } } })).toContain('inside the project root');
+    expect(errs({ servicePackaging: { shared: { packageCwd: 'a/../../b' } } })).toContain('inside the project root');
+    expect(errs({ servicePackaging: { shared: { packageCwd: '' } } })).toContain('non-empty string');
+    expect(errs({ servicePackaging: { shared: { packageCwd: 7 } } })).toContain('non-empty string');
+    cm.updateConfig({ servicePackaging: { shared: { packageCwd: 'tools/packaging' } } });
+    expect(written().servicePackaging).toEqual({ shared: { packageCwd: 'tools/packaging' } });
   });
 
   it('rejects the blocked secrets key and unknown keys', () => {

@@ -11,6 +11,7 @@ export const onboarding: AreaMessages = {
   en: {
     'warning.not-installed': 'dependencies not installed — packaging needs an install first',
     'warning.not-packaged': 'not packaged yet — registering packages it for you (autoPackage)',
+    'warning.not-packaged-manual': 'not packaged yet — autoPackage is off, so package it before registering',
     'warning.ts-config': 'TypeScript service config — name, region and ports resolve at packaging time',
     'warning.unreadable-config': 'could not read {file}',
     'warning.invalid-json': 'serverless.json is not valid JSON',
@@ -74,6 +75,11 @@ export const onboarding: AreaMessages = {
     invokePortHint: 'blank = api port + 10000',
     packageCommandLabel: 'Package command',
     packageCommandHint: 'blank restores the global one',
+    resourcesOnly: 'resources-only stack (no functions) — it serves no HTTP, so it takes no ports',
+    portTypoConfirm: 'Check these port changes — each adds one digit to the end of the current value, '
+      + 'which is what a typo looks like: {changes}',
+    portTypoConfirmAction: 'Yes, these are intentional',
+    portTypoConfirmed: 'port changes confirmed',
 
     installSelected: 'Install selected',
     packageSelected: 'Package selected',
@@ -104,6 +110,7 @@ export const onboarding: AreaMessages = {
   'pt-BR': {
     'warning.not-installed': 'dependências não instaladas — empacotar exige instalar antes',
     'warning.not-packaged': 'ainda não empacotado — registrar empacota para você (autoPackage)',
+    'warning.not-packaged-manual': 'ainda não empacotado — autoPackage está desligado, empacote antes de registrar',
     'warning.ts-config': 'config em TypeScript — nome, região e portas só resolvem no empacotamento',
     'warning.unreadable-config': 'não consegui ler {file}',
     'warning.invalid-json': 'serverless.json não é um JSON válido',
@@ -165,6 +172,11 @@ export const onboarding: AreaMessages = {
     invokePortHint: 'em branco = porta da API + 10000',
     packageCommandLabel: 'Comando de package',
     packageCommandHint: 'em branco restaura o global',
+    resourcesOnly: 'stack só de recursos (sem funções) — não atende HTTP, então não recebe portas',
+    portTypoConfirm: 'Confira estas mudanças de porta — cada uma acrescenta um dígito ao fim do valor '
+      + 'atual, que é a cara de um erro de digitação: {changes}',
+    portTypoConfirmAction: 'Sim, é intencional',
+    portTypoConfirmed: 'mudanças de porta confirmadas',
 
     installSelected: 'Instalar selecionados',
     packageSelected: 'Empacotar selecionados',
@@ -195,6 +207,7 @@ export const onboarding: AreaMessages = {
   es: {
     'warning.not-installed': 'dependencias sin instalar — empaquetar requiere instalarlas antes',
     'warning.not-packaged': 'aún sin empaquetar — registrar lo empaqueta por ti (autoPackage)',
+    'warning.not-packaged-manual': 'aún sin empaquetar — autoPackage está desactivado, empaquétalo antes de registrar',
     'warning.ts-config': 'config en TypeScript — nombre, región y puertos se resuelven al empaquetar',
     'warning.unreadable-config': 'no se pudo leer {file}',
     'warning.invalid-json': 'serverless.json no es un JSON válido',
@@ -257,6 +270,11 @@ export const onboarding: AreaMessages = {
     invokePortHint: 'en blanco = puerto de la API + 10000',
     packageCommandLabel: 'Comando de package',
     packageCommandHint: 'en blanco restaura el global',
+    resourcesOnly: 'stack solo de recursos (sin funciones) — no atiende HTTP, así que no lleva puertos',
+    portTypoConfirm: 'Revisa estos cambios de puerto — cada uno añade un dígito al final del valor '
+      + 'actual, que es la forma de una errata: {changes}',
+    portTypoConfirmAction: 'Sí, son intencionales',
+    portTypoConfirmed: 'cambios de puerto confirmados',
 
     installSelected: 'Instalar seleccionados',
     packageSelected: 'Empaquetar seleccionados',

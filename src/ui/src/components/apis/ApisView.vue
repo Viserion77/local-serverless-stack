@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { RouterLink } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
   TTag, TSpinner, TAlert, TDivider, TText, TLink, TIcon, useToast,
@@ -23,7 +22,11 @@ let refreshTimer: number | null = null;
 const routeColumns = computed(() => [
   { key: 'method', label: t('apis.colMethod') },
   { key: 'path', label: t('apis.colPath') },
-  { key: 'functionName', label: `→ ${t('apis.colFunction')}` },
+  // The column used to be prefixed with a literal `→` to say "this is where the
+  // route lands". A glyph standing in for an icon is out (ui-ux.md rule 3) and
+  // `TTable` only takes a plain string here, so the direction now lives in the
+  // copy itself — `colFunction` reads "Target function".
+  { key: 'functionName', label: t('apis.colFunction') },
   { key: 'eventType', label: t('common.type') },
   { key: 'authorizerName', label: t('apis.colAuth') },
   { key: 'actions', label: '', align: 'right' as const },
@@ -234,18 +237,20 @@ onBeforeUnmount(() => {
 
           <!-- Every route target is a Lambda function: the mark makes the
                API Gateway -> Lambda hop legible inside the table. Decorative
-               (the tag names the function), and sized down so the filled tile
-               does not outweigh a `sm` tag. -->
+               (the tag names the function), and unsized: since 0.28 the `#icon`
+               slot provides the tag's own scale (`.t-tag--sm .t-tag__icon` =
+               .875rem), so the filled tile does not outweigh a `sm` tag without
+               a hardcoded 14 here. -->
           <template #cell-functionName="{ row }">
-            <RouterLink
+            <TLink
               :to="`/lambdas/${encodeURIComponent(String(row.functionName))}`"
-              style="text-decoration: none;"
+              underline="none"
             >
-              <TTag size="sm" variant="soft" clickable>
-                <template #icon><TIcon name="aws-lambda" size="14" /></template>
+              <TTag size="sm" variant="soft">
+                <template #icon><TIcon name="aws-lambda" /></template>
                 {{ row.functionName }}
               </TTag>
-            </RouterLink>
+            </TLink>
           </template>
 
           <template #cell-eventType="{ row }">

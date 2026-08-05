@@ -120,92 +120,84 @@ watch(() => props.tableName, load);
       </TTabList>
 
       <TTabPanel value="items">
-        <div style="padding-top: 1rem;">
-          <DynamoItemsExplorer :table="table" />
-        </div>
+        <DynamoItemsExplorer :table="table" />
       </TTabPanel>
 
       <TTabPanel value="indexes">
-        <div style="padding-top: 1rem;">
-          <TEmptyState
-            v-if="!table.gsis.length && !table.lsis.length"
-            :title="t('dynamo.noIndexesTitle')"
-            :description="t('dynamo.noIndexesDesc')"
-          />
-          <TStack v-else direction="vertical" gap="1rem">
-            <TGrid v-if="table.gsis.length" :columns="2" gap="0.75rem">
-              <TCard v-for="idx in table.gsis" :key="idx.IndexName" variant="outline">
-                <template #header>
-                  <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-                    <TText weight="semibold">{{ idx.IndexName }}</TText>
-                    <TBadge tone="info" variant="soft">GSI</TBadge>
-                  </TStack>
-                </template>
-                <TStack direction="vertical" gap="0.5rem">
-                  <TStack direction="horizontal" gap="0.5rem" wrap>
-                    <TTag
-                      v-for="k in idx.KeySchema || []"
-                      :key="k.AttributeName"
-                      size="sm"
-                      variant="soft"
-                    >
-                      {{ k.AttributeName }} ({{ k.KeyType }})
-                    </TTag>
-                  </TStack>
-                  <TText tone="muted" size="xs">
-                    {{ t('dynamo.projection') }}: {{ idx.Projection?.ProjectionType || '—' }}
-                    · {{ t('dynamo.items') }}: {{ idx.ItemCount ?? '—' }}
-                    · {{ t('common.status') }}: {{ idx.IndexStatus || '—' }}
-                  </TText>
+        <TEmptyState
+          v-if="!table.gsis.length && !table.lsis.length"
+          :title="t('dynamo.noIndexesTitle')"
+          :description="t('dynamo.noIndexesDesc')"
+        />
+        <TStack v-else direction="vertical" gap="1rem">
+          <TGrid v-if="table.gsis.length" :columns="2" gap="0.75rem">
+            <TCard v-for="idx in table.gsis" :key="idx.IndexName" variant="outline">
+              <template #header>
+                <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
+                  <TText weight="semibold">{{ idx.IndexName }}</TText>
+                  <TBadge tone="info" variant="soft">GSI</TBadge>
                 </TStack>
-              </TCard>
-            </TGrid>
+              </template>
+              <TStack direction="vertical" gap="0.5rem">
+                <TStack direction="horizontal" gap="0.5rem" wrap>
+                  <TTag
+                    v-for="k in idx.KeySchema || []"
+                    :key="k.AttributeName"
+                    size="sm"
+                    variant="soft"
+                  >
+                    {{ k.AttributeName }} ({{ k.KeyType }})
+                  </TTag>
+                </TStack>
+                <TText tone="muted" size="xs">
+                  {{ t('dynamo.projection') }}: {{ idx.Projection?.ProjectionType || '—' }}
+                  · {{ t('dynamo.items') }}: {{ idx.ItemCount ?? '—' }}
+                  · {{ t('common.status') }}: {{ idx.IndexStatus || '—' }}
+                </TText>
+              </TStack>
+            </TCard>
+          </TGrid>
 
-            <TGrid v-if="table.lsis.length" :columns="2" gap="0.75rem">
-              <TCard v-for="idx in table.lsis" :key="idx.IndexName" variant="outline">
-                <template #header>
-                  <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-                    <TText weight="semibold">{{ idx.IndexName }}</TText>
-                    <TBadge tone="neutral" variant="soft">LSI</TBadge>
-                  </TStack>
-                </template>
-                <TStack direction="vertical" gap="0.5rem">
-                  <TStack direction="horizontal" gap="0.5rem" wrap>
-                    <TTag
-                      v-for="k in idx.KeySchema || []"
-                      :key="k.AttributeName"
-                      size="sm"
-                      variant="soft"
-                    >
-                      {{ k.AttributeName }} ({{ k.KeyType }})
-                    </TTag>
-                  </TStack>
-                  <TText tone="muted" size="xs">
-                    {{ t('dynamo.projection') }}: {{ idx.Projection?.ProjectionType || '—' }}
-                  </TText>
+          <TGrid v-if="table.lsis.length" :columns="2" gap="0.75rem">
+            <TCard v-for="idx in table.lsis" :key="idx.IndexName" variant="outline">
+              <template #header>
+                <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
+                  <TText weight="semibold">{{ idx.IndexName }}</TText>
+                  <TBadge tone="neutral" variant="soft">LSI</TBadge>
                 </TStack>
-              </TCard>
-            </TGrid>
-          </TStack>
-        </div>
+              </template>
+              <TStack direction="vertical" gap="0.5rem">
+                <TStack direction="horizontal" gap="0.5rem" wrap>
+                  <TTag
+                    v-for="k in idx.KeySchema || []"
+                    :key="k.AttributeName"
+                    size="sm"
+                    variant="soft"
+                  >
+                    {{ k.AttributeName }} ({{ k.KeyType }})
+                  </TTag>
+                </TStack>
+                <TText tone="muted" size="xs">
+                  {{ t('dynamo.projection') }}: {{ idx.Projection?.ProjectionType || '—' }}
+                </TText>
+              </TStack>
+            </TCard>
+          </TGrid>
+        </TStack>
       </TTabPanel>
 
       <TTabPanel value="settings">
-        <div style="padding-top: 1rem;">
-          <DynamoTableSettings :table="table" @refresh="load" />
-        </div>
+        <DynamoTableSettings :table="table" @refresh="load" />
       </TTabPanel>
 
       <TTabPanel v-if="seedEntry" value="seed">
-        <div style="padding-top: 1rem;">
-          <DynamoSeedPanel
-            :table-name="table.name"
-            :seed-file="seedEntry.file"
-            :seed-item-count="seedEntry.itemCount"
-            :table-item-count="table.itemCount"
-            @refresh="load"
-          />
-        </div>
+        <DynamoSeedPanel
+          :table-name="table.name"
+          :seed-file="seedEntry.file"
+          :seed-item-count="seedEntry.itemCount"
+          :table-item-count="table.itemCount"
+          @refresh="load"
+        />
       </TTabPanel>
     </TTabs>
   </TStack>

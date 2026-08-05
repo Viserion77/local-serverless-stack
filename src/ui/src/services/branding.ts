@@ -43,9 +43,17 @@ function toDeclarations(colors: Record<string, string>): string {
 function applyColorOverrides(info: BrandingInfo): void {
   const dark = toDeclarations({ ...info.colors, ...info.themeColors.dark });
   const light = toDeclarations({ ...info.colors, ...info.themeColors.light });
-  if (!dark && !light) return;
 
   let el = document.getElementById(STYLE_ELEMENT_ID) as HTMLStyleElement | null;
+  // "No tokens at all" is a reachable state now that Settings can empty the
+  // three maps and re-pull branding in the same page load: bailing out early
+  // (as this did while the maps were file-only) would leave the previous
+  // stylesheet applied, so clearing every token would visibly do nothing.
+  if (!dark && !light) {
+    el?.remove();
+    return;
+  }
+
   if (!el) {
     el = document.createElement('style');
     el.id = STYLE_ELEMENT_ID;

@@ -1,9 +1,8 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { RouterLink } from 'vue-router';
 import {
-  TCard, TButton, TBadge, TStack, TGrid, TStat, TEmptyState,
-  TSpinner, TAlert, TTag, TTable, TInput, TText, TIcon,
+  TCard, TButton, TBadge, TStack, TStackItem, TGrid, TStat, TEmptyState,
+  TSpinner, TAlert, TTag, TTable, TInput, TLink, TText, TIcon,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { DynamoTableSummary, SeedFileEntry } from '../../services/api';
@@ -187,11 +186,12 @@ onBeforeUnmount(() => {
             <TText weight="semibold">{{ t('dynamo.tablesTitle') }}</TText>
           </TStack>
           <TStack direction="horizontal" align="center" gap="1rem">
-            <TInput
-              v-model="search"
-              :placeholder="t('dynamo.filterTablesPlaceholder')"
-              style="min-width: 16rem;"
-            />
+            <TStackItem min-width="16rem">
+              <TInput
+                v-model="search"
+                :placeholder="t('dynamo.filterTablesPlaceholder')"
+              />
+            </TStackItem>
             <TText tone="muted" size="xs">
               {{ t('dynamo.seedOnlyHint') }}
             </TText>
@@ -236,14 +236,18 @@ onBeforeUnmount(() => {
       >
         <template #cell-name="{ row }">
           <TStack direction="vertical" gap="0.125rem">
-            <TText
+            <!-- The name is the row's activation target. TTable has no row-level
+                 href/activation hook, so the affordance lives in this cell as a
+                 real TLink: focusable, keyboard-operable and announced as a link
+                 (it does navigate — the parent routes to /dynamo/:name). -->
+            <TLink
               v-if="row.exists"
+              href="#"
               weight="semibold"
-              style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;"
-              @click="openRow(row as any)"
+              @click.prevent="openRow(row as any)"
             >
               {{ row.name }}
-            </TText>
+            </TLink>
             <TStack v-else direction="horizontal" gap="0.375rem" align="center">
               <TText weight="semibold">{{ row.name }}</TText>
               <TTag size="sm" variant="soft">{{ t('dynamo.seedOnly') }}</TTag>
@@ -255,13 +259,13 @@ onBeforeUnmount(() => {
         </template>
 
         <template #cell-service="{ row }">
-          <RouterLink
+          <TLink
             v-if="row.service"
             :to="`/services/${encodeURIComponent(String(row.service))}`"
-            style="text-decoration: none;"
+            underline="none"
           >
-            <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
-          </RouterLink>
+            <TTag size="sm" variant="soft">{{ row.service }}</TTag>
+          </TLink>
           <TText v-else tone="muted" size="xs">—</TText>
         </template>
 

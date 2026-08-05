@@ -11,14 +11,17 @@ ficam no documento irmão [`treeUxPatterns.md`](./treeUxPatterns.md). O app cons
 implementar silenciosamente uma versão local dessas lacunas.
 
 > Contexto do repositório: o LSS tem **um** frontend (`src/ui/`). A TreeUI mora em **outro
-> repositório** e é consumida via `@treeui/vue@0.25.0` (`@treeui/icons@0.18.0`,
-> `@treeui/tokens@0.15.0`) — **atualizado de 0.14.0 em 2026-07-21**. A biblioteca expõe **69+
-> componentes** e um catálogo **Branchline com ~364 ícones**. O upgrade trouxe (e a migração vai
-> adotar): `TText`, `TStackItem`, `TSpacer`, `TPage`/`TContainer`, `TPageHeader`, `TAvatar`, o slot
-> `#header-start` do `TAppShell` e `TButton icon-only`. Desde 2026-07-31 esse catálogo é estendido
-> **pelo app**: 64 marcas oficiais de serviços AWS (`aws-*`) entram no mesmo registry via
-> `registerTreeIcons()` — o registry deixou de ser só-TreeUI, o catálogo dela continua sendo (ver
-> regra 3).
+> repositório** e é consumida via `@treeui/vue@0.28.0` (`@treeui/tokens@0.28.0`,
+> `@treeui/icons@0.18.0`, `@treeui/utils@0.26.0`) — **atualizado de 0.25.0 → 0.27.0 → 0.28.0 em
+> 2026-08-05**, que por sua vez veio de 0.14.0 em 2026-07-21. A biblioteca expõe **95 componentes** e um catálogo
+> **Branchline com 364 ícones**. Desde 2026-07-31 esse catálogo é estendido **pelo app**: 64 marcas
+> oficiais de serviços AWS (`aws-*`) entram no mesmo registry via `registerAwsIcons()` — o registry
+> deixou de ser só-TreeUI, o catálogo dela continua sendo (ver regra 3).
+>
+> **Números de versão vivem aqui e no cabeçalho de [`treeUxPatterns.md`](./treeUxPatterns.md), em
+> mais lugar nenhum.** Uma versão cravada no meio de uma regra ou de um passo de processo nasce
+> errada no bump seguinte — foi o que aconteceu com a linha que dizia `@treeui/tokens@0.15.0` por
+> quatro minors.
 
 ## Direção inicial — 2026-07-21
 
@@ -70,6 +73,28 @@ O CSS já existente no `src/ui/` (`style.css` global e blocos `<style scoped>`) 
 migração**, não uma autorização para adicionar mais. A remoção acontece por superfície, preservando
 comportamento e acessibilidade.
 
+#### Exceções temporárias em vigor
+
+Uma exceção só existe se estiver **nesta tabela**. Declará-la em
+[`treeUxPatterns.md`](./treeUxPatterns.md) não basta: aquele arquivo é o canal de negociação com a
+biblioteca e itens saem dele quando o contrato fecha — uma exceção registrada só lá desaparece junto
+e passa a ser CSS local silencioso, que é exatamente o que a regra 2 proíbe.
+
+| # | Superfície | O que é | Motivo | Responsável | Condição de remoção |
+|---|---|---|---|---|---|
+| 1 | `components/ActivityPanel.vue` — três `style` inline de dimensionamento (`width:100%;height:64px` na área de paralelismo, `min-width:9rem` no rótulo da faixa, `width:100%;height:14px` em cada faixa) | SVG desenhado no produto: área em degraus do paralelismo + uma faixa de spans por serviço | A TreeUI tem `TChart`/`TSparkline`, mas nenhuma primitiva de **faixas em eixo temporal comum**, e nenhum modo `step` de área — uma curva interpolada desenharia paralelismo que nunca existiu | agente do dashboard LSS | Entrega do **TREEUX-003** |
+| 2 | `components/secrets/SecretsList.vue` e `components/opensearch/OpenSearchCollectionsList.vue` — `style="cursor:pointer; text-decoration:underline dotted; …"` na célula de nome | Afordância de "a linha é clicável" numa tabela cuja linha navega | `TTable` não tem `rowHref`/`rowTo`/`@row-activate`. Toda alternativa local é pior: um `<TLink href="#">` mente sobre o destino (ctrl-clique abre `#`) e um `role="button"` à mão é reimplementar o componente | agente do dashboard LSS | Entrega do **TREEUX-004**. Enquanto isso, as duas telas mantêm um `TButton` real na coluna de ações — o teclado nunca fica sem saída |
+| 3 | `pages/OverviewPage.vue` — `<style scoped> .overview-hero { background: linear-gradient(…) }` | Gradiente decorativo do hero da Overview | Último resquício do CSS pré-migração. O `THero` do 0.27 é candidato, mas é uma **banda `<section>` sem borda de card** e o hero atual é um `TCard variant="outline"` — trocar muda aparência e semântica de container | humano (decisão de design, não de refactor) | Decisão explícita de adotar `THero` (ou de manter o `TCard` e pedir um eixo de fundo decorativo à TreeUI) |
+
+Aprovadas em 2026-08-05, depois de confirmar **nos `.d.ts` instalados** que a versão em uso não
+expressa nenhuma delas. **Não são precedente**: são as três exceções vivas, cada uma amarrada a um
+item do backlog, e **nenhuma superfície nova pode copiar esses padrões**. Fora desta tabela o
+`src/ui/` tem **zero** `style` inline e **zero** bloco `<style>`.
+
+*Saiu da tabela em 2026-08-05:* o `style="word-break:break-all"` do ARN em `SecretsList`, com a
+entrega do `TText wrap="anywhere"` na `0.28.0` (TREEUX-006). Uma exceção sai daqui quando a API
+chega — é o teste de que a tabela é um compromisso e não um depósito.
+
 ### 3. Ícones de interface e marcas têm fontes diferentes
 
 - **Ícones funcionais de interface** — ações, navegação, status, objetos e layout — vêm
@@ -80,8 +105,9 @@ comportamento e acessibilidade.
   copiado à mão como ícone.
 - **Marcas e logotipos** de empresas, produtos e serviços **não** são ícones funcionais e **não**
   pertencem ao catálogo da TreeUI. No LSS isso inclui **AWS e seus serviços** (DynamoDB, S3, SQS,
-  SNS, Lambda, EventBridge, OpenSearch, Secrets Manager, API Gateway), **LocalStack** e **Serverless
-  Framework**.
+  SNS, Lambda, EventBridge, OpenSearch, Secrets Manager, API Gateway) e o **Serverless Framework**.
+  (A marca do **LocalStack** saiu desta lista em 2026-08-05: o engine deixou de existir no produto
+  no v1.0.0, quando o self engine passou a ser o único.)
 - **Marcas de serviços AWS** vêm do pacote oficial **AWS Architecture Service Icons**
   ([`https://aws.amazon.com/architecture/icons/`](https://aws.amazon.com/architecture/icons/)),
   variante de tamanho **16** — cujo `viewBox` é `0 0 24 24`, exatamente a grade em que os ícones
@@ -90,8 +116,9 @@ comportamento e acessibilidade.
   build não depende dele. Isso é **garantido**, não pedido: o destino padrão do unzip (`temp/`) está
   no `.gitignore`, então nenhum `git add -A` redistribui a marca registrada da AWS a partir deste
   repositório público.
-- Essas marcas são **registradas no próprio registry da TreeUI** — `registerTreeIcons()` em
-  `main.ts`, antes do `createApp`, mais uma augmentation de `TIconRegistry`
+- Essas marcas são **registradas no próprio registry da TreeUI** — `registerAwsIcons()` em
+  `main.ts` (que por dentro chama o `registerTreeIcons()` da lib), antes do `createApp`, mais uma
+  augmentation de `TIconRegistry`
   (`registry.generated.d.ts`). O consumo é o de qualquer ícone da biblioteca:
   `<TIcon name="aws-lambda" />`, `icon="aws-sqs"` em qualquer prop `TIconInput`, tipado pelo
   `vue-tsc`, sem import por call site e sem componente local.
@@ -102,7 +129,7 @@ comportamento e acessibilidade.
   full-color, não usa `currentColor` e deliberadamente **não** segue tema nem os overrides de
   `branding.colors`. Corrigir isso com CSS é violar a regra 2 e os termos do pacote — ver
   [`NOTICE.md`](./src/icons/aws/NOTICE.md) do diretório.
-- Para marcas **não-AWS** (LocalStack, Serverless Framework), a fonte padronizada continua sendo
+- Para marcas **não-AWS** (hoje, apenas o Serverless Framework), a fonte padronizada continua sendo
   [`https://simpleicons.org/`](https://simpleicons.org/) (ou o pacote oficial Simple Icons), quando
   o logo existir lá.
 - Nada disso é exceção à regra 3 — **é** a regra 3. Ícone funcional continua vindo só da TreeUI, e o
@@ -149,7 +176,7 @@ de largura por item no `TStack`; layout de duas regiões nativo no header do `TA
 
 A Overview deve permitir entender rapidamente:
 
-- se o backend (LocalStack ou self engine) está de pé e saudável;
+- se o self engine está de pé e saudável;
 - quantos serviços/lambdas estão rodando e quantas rotas/recursos existem;
 - a configuração ativa (região, endpoint, modo, auto-package, persistência);
 - o que o LSS cobre hoje e o atalho para cada área;
@@ -160,9 +187,10 @@ configuração LESC lado a lado → totalizadores (`TStat`) → cobertura de rec
 
 ### 6. Estados e acessibilidade são parte do componente
 
-- Toda busca assíncrona deve apresentar carregamento e erro de forma explícita. Hoje o padrão é um
-  `TSpinner` centralizado à mão (`display:flex;justify-content:center`) — isso é dívida e vira item
-  na TreeUI (estado de tela).
+- Toda busca assíncrona deve apresentar carregamento e erro de forma explícita. O padrão é
+  `TSpinner` dentro de um `TStack justify="center" align="center"` — a centralização à mão
+  (`display:flex;justify-content:center`) que existia aqui foi eliminada no sweep 0.14 → 0.22 e
+  **não** deve voltar.
 - Estados vazios devem explicar o estado e, quando aplicável, oferecer a próxima ação (`TEmptyState`).
 - Controles somente com ícone precisam de nome acessível (`aria-label`).
 - Ordem de foco, retorno de foco, `Escape` e alvos de toque não podem depender de correções frágeis
@@ -200,11 +228,17 @@ Migramos o `src/ui/` para a TreeUI ao longo de `0.14 → 0.19 → 0.20 → 0.21 
   estreito, slot de ações), aposentando o interim `TStack + TText`.
 - **Gate `validate: pre-prod` verde:** lint 0 erros, `vue-tsc`, build, 2345 testes / 100%.
 
-**Backlog da TreeUI zerado** — todas as necessidades (001–012) foram atendidas em `0.14 → 0.22` (ver
-[`treeUxPatterns.md`](./treeUxPatterns.md)). O `style.css` do produto ficou no reset + `.mono` (só nos
-`<textarea>` de input); o único `<style scoped>` restante é o gradiente decorativo `.overview-hero`.
-Eliminados ao longo das rodadas: `.muted`, `.app-main` (011), `.dim-row` (012), `.logs-pre` (003),
-`.brand-logo` (009), o mono de texto (001) e as linhas rótulo⟷valor manuais (005).
+**Backlog da TreeUI zerado nesta rodada** — as doze necessidades daquele ciclo foram atendidas em
+`0.14 → 0.22`. O `style.css` do produto ficou no reset + `.mono`; o único `<style scoped>` restante é
+o gradiente decorativo `.overview-hero`. Eliminados ao longo das rodadas: `.muted`, `.app-main`,
+`.dim-row`, `.logs-pre`, `.brand-logo`, o mono de texto e as linhas rótulo⟷valor manuais.
+
+> **Cuidado com os IDs deste parágrafo.** Os `TREEUX-NNN` daquele ciclo foram removidos do backlog
+> quando aceitos, como o protocolo manda — e a numeração **foi reciclada** depois. `TREEUX-001` aqui
+> significa "fonte mono no `TText`"; em [`treeUxPatterns.md`](./treeUxPatterns.md) hoje significa
+> `TTagInput`. Por isso este parágrafo passou a descrever as entregas **pelo nome**, sem ID: um ID
+> só é confiável dentro do backlog vivo. Zerado aqui não quer dizer zerado hoje — o backlog atual
+> tem itens abertos.
 
 ## Adoção — marcas de serviço AWS (2026-07-31)
 
@@ -235,10 +269,115 @@ genérico.
   zero item novo em [`treeUxPatterns.md`](./treeUxPatterns.md) — marca nunca gera item. Gate
   `validate: pre-prod`: lint 0 erros, `vue-tsc` limpo.
 
+## Adoção — `@treeui/vue` 0.27.0 e quitação do CSS local (2026-08-05)
+
+Subimos de `0.25.0` direto para `0.27.0` (pulando o 0.26.0 — ver TREEUX-001 em
+[`treeUxPatterns.md`](./treeUxPatterns.md)) e usamos a rodada para pagar a dívida da regra 2, que
+nunca tinha sido quantificada.
+
+- **CSS local: 79 → 6.** Havia **79** `style="…"` inline em **18** arquivos e um `<style scoped>`.
+  Sobraram **6 declarações em 3 arquivos**, e as quatro superfícies estão na tabela de exceções da
+  regra 2, cada uma amarrada a um item do backlog. Nenhuma das 73 removidas exigiu API nova da
+  TreeUI — todas eram expressáveis com o que já existia:
+  `style="flex:N"` → `TStackItem :grow basis="0"` (24×), `text-decoration:none` → `TLink
+  underline="none"` / `TButton as="a"` (15×), `font-size` → `TText size` (9×), `min-width` →
+  `TStackItem min-width` (6×), `font-weight` → `TLink weight` (5×), `<p>` cru → `TText as="p"
+  measure="prose"`.
+- **Padding duplicado, 11×.** Um `<div style="padding-top:1rem">` como filho único de `TTabPanel`
+  somava ao `padding: var(--tree-space-4) 0` que o próprio painel já aplica: **2rem em vez de 1rem**,
+  em Lambdas, DynamoDB e Filas. As onze `div` saíram.
+- **Seis props que não existem, 19 ocorrências.** `TTag clickable` (9×), `TStat :hint` (4×),
+  `TInput :label` (2×), `TButton tone` (2×), `TCheckbox :label` (1×), `TConfirmDialog tone` (1×).
+  O Vue aceita todas em silêncio; duas matavam nome acessível e uma matava copy traduzida nos três
+  idiomas. É a origem da regra "confira no `.d.ts`" no passo 2 do fluxo abaixo, e do TREEUX-008.
+- **Cinco glifos Unicode fazendo papel de ícone** (`⚠` ×2, `✕`, `✓`, `→`) viraram `TIcon` ou saíram.
+  A regra 3 já os proibia e este documento os dava como migrados desde 0.22 — não estavam.
+- **Ganhos do 0.27 adotados:** `TAppShell skipLinkLabel` — **o app não tinha skip link nenhum**, e a
+  mesma mudança levou ao `t()` as cinco strings de a11y da shell, que eram os defaults ingleses da
+  lib (`"Open menu"`, `"Sidebar"`, …); `TTag tone`, que aposentou um `TBadge tone="danger"` intruso
+  no meio de uma fileira de `TTag` no `ActivityPanel` (a troca de componente só existia porque o
+  `TTag` não tinha eixo de cor); `TTag removeLabel`, que torna localizável o nome acessível do `x`.
+- **Dois tokens escritos errado**, silenciosamente caindo no fallback: `--tree-font-mono` (o token é
+  `--tree-font-family-mono`) e `--tree-color-border` (é `--tree-color-border-default`, e o fallback
+  `#e5e7eb` renderizava claro no tema escuro).
+- **Um bug de tema global:** o `body { font-family: … 'Segoe UI' … }` do `style.css` do produto vencia
+  o da TreeUI (o `main.ts` importa a folha da lib **antes** da nossa) e, como nenhuma regra
+  `.t-modal*` declara família e o `TModal` usa `Teleport`, **todo conteúdo de modal renderizava em
+  Segoe UI**. A declaração saiu: `html` já recebe `--tree-font-family-sans` da própria lib.
+- **Uma regressão declarada, não mascarada:** três CTAs que eram `<RouterLink><TButton/></RouterLink>`
+  (`<a><button>` aninhado, markup inválido, dois tab stops, mais `text-decoration:none`) viraram
+  `<TButton @click="router.push(…)">`. Ganhamos markup válido; **perdemos ctrl/meio-clique e "abrir
+  em nova aba"**. Reimplementar o guard de modificadores do `RouterLink` à mão seria a versão local
+  silenciosa da lacuna que a regra 2 proíbe — então foi registrada como **TREEUX-007**.
+  *(Desfeita na rodada seguinte: o `TButton to` saiu na 0.28.0 e os CTAs voltaram a ser `<a>` de
+  verdade — ver a seção 0.28.0 abaixo. O parágrafo fica porque o padrão vale: quando a saída certa
+  não existe, a escolha se declara, não se disfarça.)*
+- **Não adotamos** `TTagInput` nem `TKeyValueEditor`, apesar de terem sido entregues nesta faixa de
+  versões: os dois falharam na validação contra o caso real (TREEUX-001 e TREEUX-002). Adotar
+  qualquer um exigiria um contorno no consumidor, que é justamente o que este contrato não permite.
+- Gate `validate: pre-prod` verde: lint **0 erros** (2181 warnings, abaixo do baseline), os quatro
+  typechecks, `vue-tsc` limpo, **2601 testes / 100% de cobertura**, build.
+
+## Adoção — `@treeui/vue` 0.28.0: os dois editores e o fim da tipografia local (2026-08-05)
+
+Segunda rodada no mesmo dia. A 0.28.0 trouxe as correções dos dois componentes que tínhamos
+**rejeitado na validação** e mais cinco eixos; adotamos tudo.
+
+- **O dashboard passou a editar `packageArgs` e os tokens de cor.** Eram os dois alvos que os
+  TREEUX-001 e 002 perseguiam desde o começo, e ambos exigiam correção na lib antes de existirem:
+  - `packageArgs` ganhou um `TTagInput` com `:allow-duplicates="true"` e `:separator="null"`. **Os
+    dois são obrigatórios e o motivo é o produto, não o gosto**: a lista é appendada verbatim ao
+    `argv` de um `spawn()`, então repetir `--param` é significativo e `--param=tags=a,b` precisa
+    continuar sendo um argumento só.
+  - `branding.colors`, `branding.themeColors.dark` e `branding.themeColors.light` ganharam três
+    `TKeyValueEditor`, e o card Branding deixou de ser file-only para tokens de cor (logo e favicon
+    continuam). O `LssConfigUpdate` do dashboard foi alargado para aceitá-los — o servidor já
+    aceitava desde antes.
+  - **Duas armadilhas do nosso próprio backend, agora documentadas no código**: o `PUT /api/config`
+    faz merge de um nível só, então `themeColors` é **substituído inteiro** e o formulário tem de
+    mandar os dois temas juntos; e remover uma chave é mandar o mapa completo sem ela, porque `null`
+    por chave é recusado com 400.
+- **A tipografia local acabou.** `TLink` ganhou `family`/`size` e `TTextarea` ganhou `family`
+  (TREEUX-005), então a classe `.mono` saiu do `src/ui/src/style.css`. **O produto não tem mais
+  nenhuma classe de tipografia própria** — que era o alvo declarado desde a primeira rodada. O
+  `style.css` ficou em três regras: reset de margem/padding, cor e `line-height` do `body`.
+- **A regressão da rodada anterior foi desfeita.** `TButton to` (TREEUX-007) chegou, e os CTAs de
+  navegação voltaram a ser `<a>` de verdade — com ctrl/meio-clique, "abrir em nova aba" e papel
+  `link`. A revisão encontrou mais dois sítios do mesmo padrão que a rodada anterior não tinha
+  listado; foram junto. Consequência correta e registrada: **Espaço deixa de ativá-los**, porque é
+  assim que um link se comporta.
+- **Identidade e rotulagem de formulário** (TREEUX-009): `TCheckbox` ganhou `label`, o `TFormField`
+  passou a gerar o `id` e provê-lo ao controle — os ids escritos à mão saíram do `BucketDetail` — e
+  o item de `TDropdown` ganhou `selected`, que virou `role="menuitemradio"` + `aria-checked` no
+  seletor de idioma. **O ícone do item não foi adotado**: a calha não é reservada e o menu desalinha
+  quando só alguns itens têm ícone (TREEUX-014).
+- **O ARN quebra** (TREEUX-006) e **o slot `#icon` herda a escala do `TTag`** (TREEUX-010): saíram o
+  último `style` de tipografia e os quatro `size="14"` mágicos.
+- **`strictTemplates` continua desligado, e agora com motivo escrito.** A 0.28.0 trouxe um augment de
+  `GlobalComponents` para o `vue-tsc` pegar prop inexistente — o conserto que pedimos no TREEUX-008.
+  Ele só age com `vueCompilerOptions.strictTemplates: true`, e medimos o que acontece ao ligar:
+  **89 erros, 2 reais e 87 falsos positivos** (`aria-label` e atributo nativo em componente com
+  `inheritAttrs: false`, `modelModifiers` não declarado, `modelValue` largo emitindo para ref
+  estreita). Não vamos remover nome acessível para satisfazer typecheck. A decisão e os números
+  estão em `src/ui/tsconfig.json`, e o que falta virou TREEUX-011.
+- **Uma regressão da lib, reportada:** o `TFormField` da 0.28 emite `for` **sempre**, mas só cinco
+  controles adotam o id gerado — `TSelect` não. Três campos ficaram com `<label for>` apontando para
+  um id inexistente. Não corrigimos localmente (seria reintroduzir exatamente o que o TREEUX-009
+  matou); virou TREEUX-012.
+- Gate `validate: pre-prod` verde: lint **0 erros** (2160 warnings, abaixo do baseline), os quatro
+  typechecks, `vue-tsc` limpo, **2601 testes / 100% de cobertura**, build.
+
+**Placar do CSS local nas duas rodadas:** 79 `style` inline em 18 arquivos → **5 em 3 arquivos**,
+todos na tabela de exceções da regra 2; um `<style scoped>`, também na tabela; e zero classe de
+tipografia no produto.
+
 ## Fluxo para novas solicitações
 
 1. Registrar a orientação neste documento se for uma regra transversal.
-2. Verificar a API pública da versão instalada da TreeUI (`@treeui/vue@0.25.0`).
+2. Verificar a API pública da versão instalada da TreeUI — **lendo os `.d.ts` de
+   `node_modules/@treeui/vue/dist/components/`**, não de memória nem do que um documento afirma.
+   Prop que não existe é descartada em silêncio pelo Vue: já perdemos copy traduzida assim
+   (`TStat :hint`) e carregamos uma prop inexistente por três minors (`TTag clickable`).
 3. Compor a solução com componentes existentes quando a API já for suficiente.
 4. Registrar em [`treeUxPatterns.md`](./treeUxPatterns.md) somente o que realmente pertence à TreeUI.
 5. Sincronizar o arquivo com a TreeUI e responder no próprio item às perguntas/refutações do agente
@@ -248,20 +387,23 @@ genérico.
 7. Validar comportamento, acessibilidade, responsividade e telas largas — e passar o gate
    `validate: pre-prod` do repositório (lint, `vue-tsc`, build).
 
-## Situação inicial observada
+## Situação inicial observada — snapshot de 2026-07-21 (histórico, **não** é o estado atual)
 
-- Único frontend: `src/ui/`, sobre `@treeui/vue@0.25.0` (atualizado de 0.14.0). Catálogo Branchline
-  com ~364 ícones.
-- Há CSS local legado a migrar: `style.css` global (`muted`, `mono`, `logs-pre`, `brand-logo`,
-  `dim-row`, `app-main`) e dois `<style scoped>` (`OverviewPage` hero, `SecretsList`). Migração
-  incremental, guiada pelas superfícies revisadas — agora com as APIs 0.19 disponíveis para removê-las.
-- Tipografia é feita com CSS: `class="muted"` (74×), `class="mono"` (39×), `muted mono` (14×) e
-  `style="font-size:…"`. O `TText` (tom/tamanho/peso) já existe desde 0.15 e absorve isso; sobra só o
-  `mono` (sem prop de família hoje — ver TREEUX-001).
-- Vários glyphs Unicode fazem papel de ícone (`⚡ ⏳ → ← ▶ ▼ ⋮ ⚠ …`) e emojis marcam tipos de recurso
-  em `ServicesList.vue`. Com o catálogo 0.18 quase todos têm equivalente (`zap`, `clock`,
-  `arrow-right`, `arrow-left`, `chevron-*`, `ellipsis-vertical`, `triangle-alert`, `database`,
-  `inbox`, `megaphone`, `archive`, `shuffle`, `target`) — migração glyph→`TIcon` pendente.
-- Blocos `<pre>` / `.logs-pre` (9×) exibem logs/código sem componente dedicado, e há um `<textarea>`
-  cru em `BucketDetail.vue` (deveria ser `TTextarea`).
-- O `main` já é full-width; o ponto de compressão do LSS era o header (corrigido).
+> Esta seção é o diagnóstico que abriu o trabalho. Ficou aqui porque explica *por que* as regras
+> existem — mas é uma foto de 2026-07-21, e quase tudo nela já foi resolvido. **Não use como
+> inventário de pendências**: um agente que a leia como estado atual refaz trabalho feito. O que
+> ainda está aberto vive em [`treeUxPatterns.md`](./treeUxPatterns.md) e nas seções de adoção acima.
+
+- Único frontend: `src/ui/`, então sobre `@treeui/vue@0.14.0`. Catálogo Branchline com 364 ícones.
+- Havia CSS local legado a migrar: `style.css` global (`muted`, `mono`, `logs-pre`, `brand-logo`,
+  `dim-row`, `app-main`) e dois `<style scoped>` (`OverviewPage` hero, `SecretsList`).
+  *Hoje: resta um só `<style scoped>` (`OverviewPage`, exceção #3 da regra 2) e nenhuma classe de
+  tipografia — `.mono` saiu com a 0.28.0.*
+- Tipografia era feita com CSS: `class="muted"` (74×), `class="mono"` (39×), `muted mono` (14×) e
+  `style="font-size:…"`. *Hoje: zero classe de tipografia — texto usa `TText family="mono"`, link
+  usa `TLink family="mono"` e textarea usa `TTextarea family="mono"`.*
+- Vários glyphs Unicode faziam papel de ícone (`⚡ ⏳ → ← ▶ ▼ ⋮ ⚠ …`) e emojis marcavam tipos de
+  recurso em `ServicesList.vue`. *Hoje: migrados para `TIcon` e para as marcas `aws-*`.*
+- Blocos `<pre>` / `.logs-pre` (9×) exibiam logs/código sem componente dedicado, e havia um
+  `<textarea>` cru em `BucketDetail.vue`. *Hoje: `TCodeBlock` e `TTextarea`.*
+- O `main` já era full-width; o ponto de compressão do LSS era o header (corrigido).

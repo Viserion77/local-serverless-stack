@@ -5,7 +5,6 @@ import {
   TCard, TStack, TBadge, TGrid, TStat, TTag, TDivider, TButton, TSpinner, TText, TIcon,
   TDescriptionList, TDescriptionItem,
 } from '@treeui/vue';
-import { RouterLink } from 'vue-router';
 import ActivityPanel from '../components/ActivityPanel.vue';
 import { api } from '../services/api';
 import { isOnboardingDone } from '../services/onboarding';
@@ -187,9 +186,13 @@ onBeforeUnmount(() => {
             <TText tone="muted">{{ t('overview.heroTagline') }}</TText>
           </TStack>
         </TStack>
-        <p style="max-width: 70ch; line-height: 1.55;">
+        <!-- `measure="prose"` is the library's reading width (~68ch) — the same
+             cap the hand-written 70ch was after, expressed on the closed axis
+             so every prose block on every screen lands on one number. The
+             line-height goes with it: `body` already sets 1.6. -->
+        <TText as="p" measure="prose">
           {{ t('overview.heroParagraph') }}
-        </p>
+        </TText>
         <TStack direction="horizontal" gap="0.5rem" wrap>
           <TBadge :tone="engineTone" variant="soft">
             {{ engineRunning ? t('overview.engineBadgeRunning') : t('overview.engineBadgeOffline') }}
@@ -271,9 +274,18 @@ onBeforeUnmount(() => {
           <template #header>
             <TStack direction="horizontal" justify="space-between" align="center">
               <TText weight="semibold">{{ t('overview.lssConfiguration') }}</TText>
-              <RouterLink to="/settings" style="text-decoration: none;">
-                <TButton size="sm" variant="ghost">{{ t('overview.edit') }} <TIcon name="arrow-right" /></TButton>
-              </RouterLink>
+              <!-- `to` (0.28) is the shape this CTA always wanted: TButton
+                   resolves the RouterLink itself, so the control is one <a>
+                   with a real href — ctrl/middle-click, "open in new tab" and
+                   the status-bar preview work again, and the accessible role is
+                   `link`. It replaces two worse shapes: a TButton wrapped in a
+                   RouterLink (`<a><button>` — invalid markup, two tab stops,
+                   plus an inline `text-decoration:none` that only existed
+                   because of the wrapper) and then a `router.push` handler,
+                   which was valid markup but a button pretending to navigate. -->
+              <TButton size="sm" variant="ghost" to="/settings">
+                {{ t('overview.edit') }} <TIcon name="arrow-right" />
+              </TButton>
             </TStack>
           </template>
           <TDescriptionList>
@@ -464,13 +476,19 @@ onBeforeUnmount(() => {
                   {{ item.description }}
                 </TText>
               </TStack>
-              <RouterLink
+              <!-- Same as the Edit control above, and the `v-if` is what makes
+                   `to` safe here: a row with no destination renders no control
+                   at all, so `to` is never null and the button never falls back
+                   to its <button> rendering (which is what `disabled` or
+                   `loading` would force — an <a> has no disabled state). -->
+              <TButton
                 v-if="item.to"
+                size="sm"
+                variant="ghost"
                 :to="item.to"
-                style="text-decoration: none;"
               >
-                <TButton size="sm" variant="ghost">{{ t('overview.open') }} <TIcon name="arrow-right" /></TButton>
-              </RouterLink>
+                {{ t('overview.open') }} <TIcon name="arrow-right" />
+              </TButton>
             </TStack>
           </TCard>
         </TGrid>

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, watch } from 'vue';
 import {
-  TCard, TButton, TStack, TTable, TEmptyState, TSpinner, TAlert,
+  TCard, TButton, TStack, TStackItem, TTable, TEmptyState, TSpinner, TAlert,
   TInput, TSelect, TDivider, TConfirmDialog, useToast, TFormField,
   TToggleGroup, TLink, TCheckbox, TText, TIcon,
 } from '@treeui/vue';
@@ -439,62 +439,81 @@ watch(() => [mode.value, indexName.value], () => {
       </template>
 
       <TStack direction="vertical" gap="1rem">
-        <div style="width: 100%;">
+        <!-- The wrapper is what keeps the toggle group at its intrinsic width:
+             a direct child of the stack is blockified as a flex item and would
+             stretch. `align="start"` shrink-wraps the wrapper itself. -->
+        <TStackItem align="start">
           <TToggleGroup
             v-model="mode"
             :options="modeOptions"
             size="md"
           />
-        </div>
+        </TStackItem>
 
         <TStack direction="horizontal" gap="1rem">
-          <TFormField :label="t('dynamo.selectTableOrIndex')" style="flex: 1;">
-            <TSelect v-model="indexName" :options="indexOptions" />
-          </TFormField>
-          <TFormField :label="t('dynamo.selectProjection')" style="flex: 1;">
-            <TSelect
-              :model-value="'All attributes'"
-              :options="[{ value: 'All attributes', label: t('dynamo.allAttributes') }]"
-              disabled
-            />
-          </TFormField>
+          <TStackItem :grow="1" basis="0">
+            <TFormField :label="t('dynamo.selectTableOrIndex')">
+              <TSelect v-model="indexName" :options="indexOptions" />
+            </TFormField>
+          </TStackItem>
+          <TStackItem :grow="1" basis="0">
+            <TFormField :label="t('dynamo.selectProjection')">
+              <TSelect
+                :model-value="'All attributes'"
+                :options="[{ value: 'All attributes', label: t('dynamo.allAttributes') }]"
+                disabled
+              />
+            </TFormField>
+          </TStackItem>
         </TStack>
 
         <template v-if="mode === 'query'">
           <TDivider />
           <TStack direction="vertical" gap="0.5rem">
-            <TText weight="semibold" style="font-size: 0.9rem;">{{ t('dynamo.partitionKey') }}</TText>
+            <TText weight="semibold" size="md">{{ t('dynamo.partitionKey') }}</TText>
             <TStack direction="horizontal" gap="1rem">
-              <TFormField :label="t('dynamo.attribute')" style="flex: 1;">
-                <TInput :model-value="pkAttr || '—'" disabled />
-              </TFormField>
-              <TFormField :label="t('dynamo.value')" style="flex: 2;">
-                <TInput v-model="pkValue" :placeholder="t('dynamo.enterAttributeValue')" />
-              </TFormField>
+              <TStackItem :grow="1" basis="0">
+                <TFormField :label="t('dynamo.attribute')">
+                  <TInput :model-value="pkAttr || '—'" disabled />
+                </TFormField>
+              </TStackItem>
+              <TStackItem :grow="2" basis="0">
+                <TFormField :label="t('dynamo.value')">
+                  <TInput v-model="pkValue" :placeholder="t('dynamo.enterAttributeValue')" />
+                </TFormField>
+              </TStackItem>
             </TStack>
           </TStack>
 
           <TStack v-if="skAttr" direction="vertical" gap="0.5rem">
-            <TText weight="semibold" style="font-size: 0.9rem;">{{ t('dynamo.sortKeyOptional') }}</TText>
+            <TText weight="semibold" size="md">{{ t('dynamo.sortKeyOptional') }}</TText>
             <TStack direction="horizontal" gap="0.75rem" align="end">
-              <TFormField :label="t('dynamo.attribute')" style="flex: 1.4;">
-                <TInput :model-value="skAttr" disabled />
-              </TFormField>
-              <TFormField :label="t('dynamo.value')" style="flex: 1.2; min-width: 11rem;">
-                <TSelect v-model="skOperator" :options="skOperators" />
-              </TFormField>
-              <TInput
-                v-model="skValue"
-                :placeholder="t('dynamo.enterAttributeValue')"
-                style="flex: 2;"
+              <TStackItem :grow="1.4" basis="0">
+                <TFormField :label="t('dynamo.attribute')">
+                  <TInput :model-value="skAttr" disabled />
+                </TFormField>
+              </TStackItem>
+              <TStackItem :grow="1.2" basis="0" min-width="11rem">
+                <TFormField :label="t('dynamo.value')">
+                  <TSelect v-model="skOperator" :options="skOperators" />
+                </TFormField>
+              </TStackItem>
+              <TStackItem :grow="2" basis="0">
+                <TInput
+                  v-model="skValue"
+                  :placeholder="t('dynamo.enterAttributeValue')"
+                />
+              </TStackItem>
+              <TStackItem v-if="skOperator === 'between'" :grow="2" basis="0">
+                <TInput
+                  v-model="skValue2"
+                  :placeholder="t('dynamo.andValue')"
+                />
+              </TStackItem>
+              <TCheckbox
+                v-model="sortDescending"
+                :label="t('dynamo.sortDescending')"
               />
-              <TInput
-                v-if="skOperator === 'between'"
-                v-model="skValue2"
-                :placeholder="t('dynamo.andValue')"
-                style="flex: 2;"
-              />
-              <TCheckbox v-model="sortDescending" :label="t('dynamo.sortDescending')" />
             </TStack>
           </TStack>
         </template>
@@ -502,13 +521,23 @@ watch(() => [mode.value, indexName.value], () => {
         <TDivider />
 
         <TStack direction="vertical" gap="0.5rem">
-          <TLink
-            href="#"
-            style="font-weight: 600; font-size: 0.9rem;"
-            @click.prevent="filtersExpanded = !filtersExpanded"
-          >
-            <TIcon :name="filtersExpanded ? 'chevron-down' : 'chevron-right'" /> {{ t('dynamo.filtersOptional') }}
-          </TLink>
+          <!-- Disclosure, not navigation: a button carries the right role and
+               `aria-expanded` announces the collapsed/expanded state. It stays a
+               button now that TLink has `size` — the missing axis was never the
+               reason; a link with no destination would lie about ctrl-click. -->
+          <TStackItem align="start">
+            <TButton
+              variant="ghost"
+              size="sm"
+              :aria-expanded="filtersExpanded"
+              @click="filtersExpanded = !filtersExpanded"
+            >
+              <template #icon>
+                <TIcon :name="filtersExpanded ? 'chevron-down' : 'chevron-right'" />
+              </template>
+              {{ t('dynamo.filtersOptional') }}
+            </TButton>
+          </TStackItem>
 
           <TStack v-if="filtersExpanded" direction="vertical" gap="0.5rem">
             <TStack
@@ -518,28 +547,36 @@ watch(() => [mode.value, indexName.value], () => {
               gap="0.5rem"
               align="end"
             >
-              <TFormField :label="t('dynamo.attributeName')" style="flex: 1.4;">
-                <TInput v-model="f.attr" :placeholder="t('dynamo.enterAttributeName')" />
-              </TFormField>
-              <TFormField :label="t('dynamo.condition')" style="flex: 1.4;">
-                <TSelect v-model="f.op" :options="filterOps" />
-              </TFormField>
-              <TFormField :label="t('common.type')" style="flex: 0.9;">
-                <TSelect v-model="f.type" :options="filterTypeOptions" />
-              </TFormField>
-              <TFormField :label="t('dynamo.value')" style="flex: 1.7;">
-                <TInput
-                  v-model="f.value"
-                  :disabled="f.op === 'attribute_exists' || f.op === 'attribute_not_exists'"
-                  :placeholder="t('dynamo.enterAttributeValue')"
-                />
-              </TFormField>
+              <TStackItem :grow="1.4" basis="0">
+                <TFormField :label="t('dynamo.attributeName')">
+                  <TInput v-model="f.attr" :placeholder="t('dynamo.enterAttributeName')" />
+                </TFormField>
+              </TStackItem>
+              <TStackItem :grow="1.4" basis="0">
+                <TFormField :label="t('dynamo.condition')">
+                  <TSelect v-model="f.op" :options="filterOps" />
+                </TFormField>
+              </TStackItem>
+              <TStackItem :grow="0.9" basis="0">
+                <TFormField :label="t('common.type')">
+                  <TSelect v-model="f.type" :options="filterTypeOptions" />
+                </TFormField>
+              </TStackItem>
+              <TStackItem :grow="1.7" basis="0">
+                <TFormField :label="t('dynamo.value')">
+                  <TInput
+                    v-model="f.value"
+                    :disabled="f.op === 'attribute_exists' || f.op === 'attribute_not_exists'"
+                    :placeholder="t('dynamo.enterAttributeValue')"
+                  />
+                </TFormField>
+              </TStackItem>
               <TButton size="sm" variant="outline" @click="removeFilter(i)">{{ t('dynamo.remove') }}</TButton>
             </TStack>
 
-            <div>
+            <TStackItem align="start">
               <TButton size="sm" variant="outline" @click="addFilter">{{ t('dynamo.addFilter') }}</TButton>
-            </div>
+            </TStackItem>
           </TStack>
         </TStack>
       </TStack>
@@ -552,7 +589,7 @@ watch(() => [mode.value, indexName.value], () => {
           </TStack>
           <TStack direction="horizontal" gap="0.5rem" align="center">
             <TText tone="muted">{{ t('dynamo.limit') }}</TText>
-            <TInput v-model.number="limit" type="number" size="sm" style="width: 6rem;" />
+            <TInput v-model.number="limit" type="number" size="sm" width="xs" />
           </TStack>
         </TStack>
       </template>
@@ -633,10 +670,14 @@ watch(() => [mode.value, indexName.value], () => {
           :key="`k-${name}`"
           #[`cell-__attr__${name}`]="{ row }"
         >
+          <!-- The key is machine text, so the link carries the mono face itself
+               (`TLink family`). No TText inside the <a>: the anchor's own label
+               is the whole content, and nesting one only existed while the link
+               had no typographic axis. -->
           <TLink
             v-if="idx === 0"
             href="#"
-            class="mono"
+            family="mono"
             @click.prevent="openView((row as any).__raw)"
           >
             {{ stringifyShort((row as any)[`__attr__${name}`]) }}
@@ -676,7 +717,7 @@ watch(() => [mode.value, indexName.value], () => {
       :description="t('dynamo.deleteItemDesc', { table: props.table.name })"
       :confirm-label="t('common.delete')"
       :cancel-label="t('common.cancel')"
-      tone="danger"
+      confirm-variant="danger"
       @confirm="doDelete"
     />
   </TStack>

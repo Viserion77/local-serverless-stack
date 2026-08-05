@@ -6,10 +6,12 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import {
   TCard, TStack, TGrid, TBadge, TButton, TSpinner, TText, TIcon, TAlert,
-  TFormField, TInput, TSelect, TSwitch, TToggleGroup, useToast,
+  TFormField, TInput, TSelect, TSwitch, TToggleGroup, TTagInput, TKeyValueEditor, useToast,
 } from '@treeui/vue';
+import type { TKeyValueEditorValidity } from '@treeui/vue';
 import { api } from '../services/api';
 import type { LssConfigSnapshot, LssConfigUpdate } from '../services/api';
+import { loadBranding } from '../services/branding';
 import { regionOptions } from '../services/region';
 import { useI18n } from '../i18n';
 
@@ -40,7 +42,9 @@ const themeOptions = computed(() => [
   { value: 'light', label: t('settings.themeLight') },
 ]);
 
-// Flat form model — every field scalar so dirty tracking is a plain compare.
+// Flat form model. Most fields are scalar, so dirty tracking is a plain
+// compare; the four structural ones (an argv list and the three token maps)
+// are listed below and compared by content instead.
 const form = reactive({
   serverPort: 3100,
   region: 'us-east-1',
@@ -61,18 +65,43 @@ const form = reactive({
   lrInvokeHost: '',
   autoPackage: false,
   packageCommand: '',
+  packageArgs: [] as string[],
   packageTimeoutMs: 300000,
   seedsDir: '',
   brTitle: '',
   brSubtitle: '',
   brTheme: 'dark',
+  brColors: {} as Record<string, string>,
+  brThemeDark: {} as Record<string, string>,
+  brThemeLight: {} as Record<string, string>,
 });
 
 type FormKey = keyof typeof form;
 let original: Record<FormKey, unknown> | null = null;
 
+// The fields whose value is an object: `{ ...form }` would copy the reference,
+// so the baseline would mutate along with the field (nothing ever dirty) — and
+// a reference compare would call an edited-then-undone map dirty forever, since
+// the editor emits a fresh object every keystroke. Snapshot by clone, compare
+// by content. JSON is enough: every value here is a string.
+const STRUCTURAL_KEYS = ['packageArgs', 'brColors', 'brThemeDark', 'brThemeLight'] as const;
+type StructuralKey = (typeof STRUCTURAL_KEYS)[number];
+
+function isStructural(key: FormKey): key is StructuralKey {
+  return (STRUCTURAL_KEYS as readonly string[]).includes(key);
+}
+
 function formValues(): Record<FormKey, unknown> {
-  return { ...form };
+  const values = { ...form } as Record<FormKey, unknown>;
+  values.packageArgs = [...form.packageArgs];
+  values.brColors = { ...form.brColors };
+  values.brThemeDark = { ...form.brThemeDark };
+  values.brThemeLight = { ...form.brThemeLight };
+  return values;
+}
+
+function differs(key: FormKey, a: Record<FormKey, unknown>, b: Record<FormKey, unknown>): boolean {
+  return isStructural(key) ? JSON.stringify(a[key]) !== JSON.stringify(b[key]) : a[key] !== b[key];
 }
 
 function applySnapshot(s: LssConfigSnapshot) {
@@ -96,20 +125,61 @@ function applySnapshot(s: LssConfigSnapshot) {
   form.lrInvokeHost = s.lambdaRuntime.invokeHost;
   form.autoPackage = s.autoPackage;
   form.packageCommand = s.packageCommand;
+  form.packageArgs = [...s.packageArgs];
   form.packageTimeoutMs = s.packageTimeoutMs;
   form.seedsDir = s.seedsDir;
   form.brTitle = s.branding.title;
   form.brSubtitle = s.branding.subtitle;
   form.brTheme = s.branding.defaultTheme;
+  form.brColors = { ...s.branding.colors };
+  form.brThemeDark = { ...s.branding.themeColors.dark };
+  form.brThemeLight = { ...s.branding.themeColors.light };
   original = formValues();
 }
 
 const dirtyKeys = computed<FormKey[]>(() => {
   if (!original) return [];
   const current = formValues();
-  return (Object.keys(current) as FormKey[]).filter(key => current[key] !== original![key]);
+  return (Object.keys(current) as FormKey[]).filter(key => differs(key, current, original!));
 });
 const dirtyCount = computed(() => dirtyKeys.value.length);
+
+// One editor per token map. `validity-change` fires on mount and on every real
+// change, so this mirrors what each editor currently thinks. A row with a blank
+// or repeated token never reaches the model (the editor only commits the valid
+// rows), so without this gate Save would look like it worked while quietly
+// dropping the row the user was still writing.
+const TOKEN_MAPS = ['brColors', 'brThemeDark', 'brThemeLight'] as const;
+type TokenMapKey = (typeof TOKEN_MAPS)[number];
+const tokenErrors = reactive<Record<TokenMapKey, string[]>>({
+  brColors: [], brThemeDark: [], brThemeLight: [],
+});
+
+function onTokenValidity(key: TokenMapKey, validity: TKeyValueEditorValidity): void {
+  tokenErrors[key] = validity.valid ? [] : validity.errors;
+}
+
+// Computed, not read once: the summary has to follow both the editor state and
+// a language switch.
+const tokenErrorText = computed<Record<TokenMapKey, string>>(() => {
+  const messages = {} as Record<TokenMapKey, string>;
+  for (const key of TOKEN_MAPS) {
+    messages[key] = tokenErrors[key].length
+      ? t('settings.colorTokensInvalid', { errors: tokenErrors[key].join(' · ') })
+      : '';
+  }
+  return messages;
+});
+const tokensInvalid = computed(() => TOKEN_MAPS.some(key => tokenErrors[key].length > 0));
+
+const tokenLabels = computed(() => ({
+  key: t('settings.tokenKey'),
+  value: t('settings.tokenValue'),
+  add: t('settings.tokenAdd'),
+  remove: t('settings.tokenRemove'),
+  emptyKey: t('settings.tokenEmptyKey'),
+  duplicateKey: t('settings.tokenDuplicateKey'),
+}));
 
 function isEnvMasked(configKey: string): boolean {
   return Boolean(snapshot.value?.envOverrides.includes(configKey));
@@ -150,6 +220,11 @@ function buildPatch(): { patch: LssConfigUpdate; errors: string[] } {
   if (dirty.has('proxyPort')) patch.dynamoProxyPort = asPort(form.proxyPort, t('settings.proxyPort'));
   if (dirty.has('autoPackage')) patch.autoPackage = form.autoPackage;
   if (dirty.has('packageCommand')) patch.packageCommand = orNull(form.packageCommand);
+  // No per-argument validation here: the server screens the whole list against
+  // the blocked-flag grammar and answers with the offending index, which is a
+  // better message than anything this form could guess. An emptied list goes as
+  // null (deletes the key) rather than `[]`, exactly like a cleared text field.
+  if (dirty.has('packageArgs')) patch.packageArgs = form.packageArgs.length ? [...form.packageArgs] : null;
   if (dirty.has('packageTimeoutMs')) patch.packageTimeoutMs = asPositive(form.packageTimeoutMs, t('settings.packageTimeout'));
   if (dirty.has('seedsDir')) patch.seedsDir = orNull(form.seedsDir);
 
@@ -177,6 +252,21 @@ function buildPatch(): { patch: LssConfigUpdate; errors: string[] } {
   if (dirty.has('brTitle')) branding.title = orNull(form.brTitle);
   if (dirty.has('brSubtitle')) branding.subtitle = orNull(form.brSubtitle);
   if (dirty.has('brTheme')) branding.defaultTheme = form.brTheme as 'dark' | 'light';
+  // A token map travels whole, never as a delta: the server's merge is one
+  // level deep and stops at `colors`, so what is sent IS the new map — which is
+  // also how a token gets deleted. An emptied map goes as null, which removes
+  // the key from the file rather than leaving `"colors": {}` behind.
+  const orNullMap = (map: Record<string, string>) =>
+    (Object.keys(map).length ? { ...map } : null);
+  if (dirty.has('brColors')) branding.colors = orNullMap(form.brColors);
+  // `themeColors` is one level BELOW the merge, so the whole block is replaced:
+  // sending only `dark` would delete `light`. Both themes always travel
+  // together, and the pair collapses to null only when both are empty.
+  if (dirty.has('brThemeDark') || dirty.has('brThemeLight')) {
+    branding.themeColors = Object.keys(form.brThemeDark).length || Object.keys(form.brThemeLight).length
+      ? { dark: { ...form.brThemeDark }, light: { ...form.brThemeLight } }
+      : null;
+  }
   if (Object.keys(branding).length) patch.branding = branding;
 
   return { patch, errors };
@@ -209,12 +299,15 @@ async function save() {
     const during = formValues();
     applySnapshot(res.config);
     (Object.keys(during) as FormKey[]).forEach(key => {
-      if (during[key] !== atClick[key]) {
+      if (differs(key, during, atClick)) {
         (form as unknown as Record<FormKey, unknown>)[key] = during[key];
       }
     });
     restartKeys.value = res.restartRequired;
     envMasked.value = res.envOverridden;
+    // Branding is hot: the navbar title and the token overrides come from a
+    // separate GET, so without this a colour saved here only shows after F5.
+    if (patch.branding) await loadBranding();
     toast.add({
       title: t('settings.savedTitle'),
       description: t('settings.savedDescription', { path: res.configPath }),
@@ -274,7 +367,14 @@ onMounted(load);
                 ? t('settings.unsavedChanges', { count: dirtyCount })
                 : t('settings.unsavedChange', { count: dirtyCount }) }}
             </TBadge>
-            <TButton size="sm" variant="ghost" @click="$router.push('/onboarding')">
+            <!-- Reopening onboarding only navigates, so since 0.28 it is `to`
+                 and not a `$router.push` handler: TButton resolves the
+                 RouterLink itself and renders one <a> with a real href in the
+                 button's skin — role `link`, ctrl/middle-click and "open in new
+                 tab" included. Unlike Save/Discard next to it, this control
+                 carries no unsaved-state side effect, so a plain link is the
+                 honest shape. -->
+            <TButton size="sm" variant="ghost" to="/onboarding">
               {{ t('settings.reopenOnboarding') }}
             </TButton>
             <TButton size="sm" variant="outline" :loading="reloading" @click="reloadFromDisk">
@@ -284,7 +384,13 @@ onMounted(load);
             <TButton size="sm" variant="ghost" :disabled="!dirtyCount || saving" @click="discard">
               {{ t('settings.discard') }}
             </TButton>
-            <TButton size="sm" variant="solid" :loading="saving" :disabled="!dirtyCount" @click="save">
+            <TButton
+              size="sm"
+              variant="solid"
+              :loading="saving"
+              :disabled="!dirtyCount || tokensInvalid"
+              @click="save"
+            >
               {{ t('settings.saveChanges') }}
             </TButton>
           </TStack>
@@ -432,6 +538,20 @@ onMounted(load);
             >
               <TInput v-model="form.packageCommand" placeholder="npx serverless package" />
             </TFormField>
+            <!-- allow-duplicates and separator=null are both load-bearing:
+                 packageArgs is appended verbatim to the argv of a spawn(), so
+                 (a) repeating `--param` is meaningful and a silent dedupe would
+                 corrupt the command, and (b) `--param=tags=a,b` has to stay ONE
+                 argument instead of splitting on the comma. -->
+            <TFormField :label="t('settings.packageArgs')" :hint="t('settings.packageArgsHint')">
+              <TTagInput
+                v-model="form.packageArgs"
+                :allow-duplicates="true"
+                :separator="null"
+                :placeholder="t('settings.packageArgsPlaceholder')"
+                :remove-label="t('settings.packageArgsRemove')"
+              />
+            </TFormField>
             <TFormField
               :label="t('settings.packageTimeout')"
               :hint="envHint('packageTimeoutMs', t('settings.packageTimeoutHint'))"
@@ -457,6 +577,42 @@ onMounted(load);
             </TFormField>
             <TFormField :label="t('settings.defaultTheme')" :hint="t('settings.defaultThemeHint')">
               <TToggleGroup v-model="form.brTheme" :options="themeOptions" size="md" />
+            </TFormField>
+            <TFormField
+              :label="t('settings.brandingColors')"
+              :hint="t('settings.brandingColorsHint')"
+              :error="tokenErrorText.brColors"
+            >
+              <TKeyValueEditor
+                v-model="form.brColors"
+                :labels="tokenLabels"
+                :invalid="Boolean(tokenErrorText.brColors)"
+                @validity-change="onTokenValidity('brColors', $event)"
+              />
+            </TFormField>
+            <TFormField
+              :label="t('settings.brandingColorsDark')"
+              :hint="t('settings.brandingColorsDarkHint')"
+              :error="tokenErrorText.brThemeDark"
+            >
+              <TKeyValueEditor
+                v-model="form.brThemeDark"
+                :labels="tokenLabels"
+                :invalid="Boolean(tokenErrorText.brThemeDark)"
+                @validity-change="onTokenValidity('brThemeDark', $event)"
+              />
+            </TFormField>
+            <TFormField
+              :label="t('settings.brandingColorsLight')"
+              :hint="t('settings.brandingColorsLightHint')"
+              :error="tokenErrorText.brThemeLight"
+            >
+              <TKeyValueEditor
+                v-model="form.brThemeLight"
+                :labels="tokenLabels"
+                :invalid="Boolean(tokenErrorText.brThemeLight)"
+                @validity-change="onTokenValidity('brThemeLight', $event)"
+              />
             </TFormField>
             <TText tone="muted" size="xs">
               {{ t('settings.brandingFileOnly') }}

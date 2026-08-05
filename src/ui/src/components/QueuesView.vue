@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { RouterLink, useRouter } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
   TTag, TSpinner, TAlert, TText, TLink, TIcon,
@@ -12,7 +11,6 @@ import { ENGINE_LABEL } from '../services/engine';
 import { useI18n } from '../i18n';
 
 const { t } = useI18n();
-const router = useRouter();
 const queues = ref<QueueSnapshot[]>([]);
 const ownersByQueue = ref<Record<string, string>>({});
 const loading = ref(true);
@@ -62,10 +60,6 @@ async function loadQueues() {
   } finally {
     loading.value = false;
   }
-}
-
-function openDetail(name: string) {
-  router.push(`/queues/${encodeURIComponent(name)}`);
 }
 
 function activityTone(queue: QueueSnapshot): TBadgeTone {
@@ -157,7 +151,7 @@ onBeforeUnmount(() => {
           <TStack direction="vertical" gap="0.125rem">
             <TLink
               :to="`/queues/${encodeURIComponent(String(row.name))}`"
-              style="font-weight: 600;"
+              weight="semibold"
             >
               {{ row.name }}
             </TLink>
@@ -167,14 +161,19 @@ onBeforeUnmount(() => {
           </TStack>
         </template>
 
+        <!-- TLink resolves the RouterLink itself when it gets `to`; the tag is
+             the visible affordance, so the link drops its own underline
+             (`underline="none"`) instead of decorating the tag through
+             inheritance. `clickable` is not a TTag prop in any version — Vue
+             discarded it silently, so it is gone. -->
         <template #cell-service="{ row }">
-          <RouterLink
+          <TLink
             v-if="row.service"
             :to="`/services/${encodeURIComponent(String(row.service))}`"
-            style="text-decoration: none;"
+            underline="none"
           >
-            <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
-          </RouterLink>
+            <TTag size="sm" variant="soft">{{ row.service }}</TTag>
+          </TLink>
           <TText v-else tone="muted" size="xs">{{ t('queues.unmanaged') }}</TText>
         </template>
 
@@ -203,7 +202,9 @@ onBeforeUnmount(() => {
         <!-- Consumers are Lambda functions wired by event-source mappings — a
              cross-service reference, which is the strongest case for a mark
              inside a table cell. Decorative (the tag names the function), and
-             sized down so the filled tile does not outweigh a `sm` tag. -->
+             unsized: since 0.28 the `#icon` slot provides the tag's own scale
+             (`.t-tag--sm .t-tag__icon` = .875rem), so the filled tile does not
+             outweigh a `sm` tag without a hardcoded 14 here. -->
         <template #cell-consumers="{ row }">
           <TStack direction="horizontal" gap="0.25rem" wrap>
             <template v-if="(row.consumers as any[]).length">
@@ -213,7 +214,7 @@ onBeforeUnmount(() => {
                 size="sm"
                 :variant="c.enabled ? 'solid' : 'outline'"
               >
-                <template #icon><TIcon name="aws-lambda" size="14" /></template>
+                <template #icon><TIcon name="aws-lambda" /></template>
                 {{ c.functionName }}
               </TTag>
             </template>
@@ -226,7 +227,17 @@ onBeforeUnmount(() => {
             <TBadge :tone="activityTone(row as any)" variant="solid">
               {{ activityLabel(row as any) }}
             </TBadge>
-            <TButton size="sm" variant="ghost" @click="openDetail(String(row.name))">
+            <!-- This action only navigates, so since 0.28 it is `to`, not a
+                 click handler around `router.push`: TButton resolves the
+                 RouterLink itself and renders an `<a>` with a real href in the
+                 button's skin, so ctrl/middle-click, "open in new tab" and the
+                 status-bar preview work and the role is `link`. Same target as
+                 the queue name link above, from the same expression. -->
+            <TButton
+              size="sm"
+              variant="ghost"
+              :to="`/queues/${encodeURIComponent(String(row.name))}`"
+            >
               {{ t('queues.open') }}
             </TButton>
           </TStack>

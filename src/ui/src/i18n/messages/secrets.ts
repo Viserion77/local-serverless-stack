@@ -11,6 +11,8 @@ export const secrets: AreaMessages = {
     statVersions: 'Versions',
 
     filterPlaceholder: 'Filter secrets…',
+    // Accessible name for the filter field — a placeholder is not a label.
+    filterLabel: 'Filter secrets by name or description',
     autoRefresh: 'Refreshes every 15s',
     loadingList: 'Loading secrets…',
     tableLabel: 'Secrets',
@@ -52,6 +54,7 @@ export const secrets: AreaMessages = {
     statVersions: 'Versões',
 
     filterPlaceholder: 'Filtrar segredos…',
+    filterLabel: 'Filtrar segredos por nome ou descrição',
     autoRefresh: 'Atualiza a cada 15s',
     loadingList: 'Carregando segredos…',
     tableLabel: 'Segredos',
@@ -93,6 +96,7 @@ export const secrets: AreaMessages = {
     statVersions: 'Versiones',
 
     filterPlaceholder: 'Filtrar secretos…',
+    filterLabel: 'Filtrar secretos por nombre o descripción',
     autoRefresh: 'Se actualiza cada 15s',
     loadingList: 'Cargando secretos…',
     tableLabel: 'Secretos',

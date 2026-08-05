@@ -141,127 +141,124 @@ watch(() => props.queueName, () => load());
           <TTab value="attributes">{{ t('queues.tabAttributes') }}</TTab>
         </TTabList>
 
+        <!-- No wrapper around the panel content: `.t-tabs__panel` already
+             carries `padding: var(--tree-space-4) 0`, so the old
+             `<div style="padding-top:1rem">` was doubling it to 2rem. -->
         <TTabPanel value="send-receive">
-          <div style="padding-top: 1rem;">
-            <QueueSendReceivePanel :queue="queue" @refresh="load(false)" />
-          </div>
+          <QueueSendReceivePanel :queue="queue" @refresh="load(false)" />
         </TTabPanel>
 
         <TTabPanel value="consumers">
-          <div style="padding-top: 1rem;">
-            <TCard variant="outline">
-              <template #header>
-                <!-- AWS::Lambda::EventSourceMapping resources, and every entry
-                     below is a Lambda function — a different service from the
-                     SQS queue that owns the page. The mark stays on the header
-                     rather than repeating on each consumer card. -->
-                <TStack direction="horizontal" gap="0.5rem" align="center">
-                  <TIcon name="aws-lambda" />
-                  <TText weight="semibold">{{ t('queues.eventSourceMappings') }}</TText>
-                </TStack>
-              </template>
-              <TStack
-                v-if="queue.consumers.length"
-                direction="vertical"
-                gap="0.5rem"
-              >
-                <TCard
-                  v-for="c in queue.consumers"
-                  :key="c.uuid || c.functionName"
-                  variant="soft"
-                >
-                  <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
-                    <TStack direction="vertical" gap="0.125rem">
-                      <TText family="mono">{{ c.functionName }}</TText>
-                      <TText tone="muted" size="xs">
-                        {{ t('queues.consumerMeta', {
-                          uuid: c.uuid || '—',
-                          batchSize: c.batchSize ?? '—',
-                        }) }}
-                      </TText>
-                    </TStack>
-                    <TBadge :tone="c.enabled ? 'success' : 'neutral'" variant="soft">
-                      {{ c.state || (c.enabled ? t('queues.enabled') : t('queues.disabled')) }}
-                    </TBadge>
-                  </TStack>
-                </TCard>
+          <TCard variant="outline">
+            <template #header>
+              <!-- AWS::Lambda::EventSourceMapping resources, and every entry
+                   below is a Lambda function — a different service from the
+                   SQS queue that owns the page. The mark stays on the header
+                   rather than repeating on each consumer card. -->
+              <TStack direction="horizontal" gap="0.5rem" align="center">
+                <TIcon name="aws-lambda" />
+                <TText weight="semibold">{{ t('queues.eventSourceMappings') }}</TText>
               </TStack>
-              <TEmptyState
-                v-else
-                :title="t('queues.noConsumersTitle')"
-                :description="t('queues.noConsumersDescription')"
-              />
-            </TCard>
-          </div>
+            </template>
+            <TStack
+              v-if="queue.consumers.length"
+              direction="vertical"
+              gap="0.5rem"
+            >
+              <TCard
+                v-for="c in queue.consumers"
+                :key="c.uuid || c.functionName"
+                variant="soft"
+              >
+                <TStack direction="horizontal" gap="0.5rem" align="center" justify="space-between">
+                  <TStack direction="vertical" gap="0.125rem">
+                    <TText family="mono">{{ c.functionName }}</TText>
+                    <TText tone="muted" size="xs">
+                      {{ t('queues.consumerMeta', {
+                        uuid: c.uuid || '—',
+                        batchSize: c.batchSize ?? '—',
+                      }) }}
+                    </TText>
+                  </TStack>
+                  <TBadge :tone="c.enabled ? 'success' : 'neutral'" variant="soft">
+                    {{ c.state || (c.enabled ? t('queues.enabled') : t('queues.disabled')) }}
+                  </TBadge>
+                </TStack>
+              </TCard>
+            </TStack>
+            <TEmptyState
+              v-else
+              :title="t('queues.noConsumersTitle')"
+              :description="t('queues.noConsumersDescription')"
+            />
+          </TCard>
         </TTabPanel>
 
         <TTabPanel value="attributes">
-          <div style="padding-top: 1rem;">
-            <TStack direction="vertical" gap="1rem">
-              <TCard variant="outline">
-                <template #header>
-                  <TText weight="semibold">{{ t('queues.identity') }}</TText>
-                </template>
+          <TStack direction="vertical" gap="1rem">
+            <TCard variant="outline">
+              <template #header>
+                <TText weight="semibold">{{ t('queues.identity') }}</TText>
+              </template>
+              <TDescriptionList>
+                <TDescriptionItem :label="t('queues.queueUrl')">
+                  <TText family="mono" size="sm">{{ queue.url }}</TText>
+                </TDescriptionItem>
+                <TDescriptionItem label="ARN">
+                  <TText family="mono" size="sm">{{ queue.arn || '—' }}</TText>
+                </TDescriptionItem>
+              </TDescriptionList>
+            </TCard>
+
+            <TCard variant="outline">
+              <template #header>
+                <TText weight="semibold">{{ t('queues.configuration') }}</TText>
+              </template>
+              <TStack direction="horizontal" gap="0.5rem" wrap>
+                <TTag size="sm" variant="soft">
+                  FIFO: {{ queue.fifo ? t('common.yes') : t('common.no') }}
+                </TTag>
+                <TTag size="sm" variant="soft">
+                  {{ t('queues.visibilityTimeout') }}: {{ formatSeconds(queue.visibilityTimeout) }}
+                </TTag>
+                <TTag size="sm" variant="soft">
+                  {{ t('queues.retention') }}: {{ formatSeconds(queue.messageRetentionPeriod) }}
+                </TTag>
+                <TTag size="sm" variant="soft">
+                  {{ t('queues.delayed') }}: {{ queue.delayed }}
+                </TTag>
+              </TStack>
+              <template #footer>
+                <TText tone="muted" size="xs">
+                  {{ t('queues.createdPolled', {
+                    created: formatDate(queue.createdAt),
+                    polled: formatDate(queue.lastPolledAt),
+                  }) }}
+                </TText>
+              </template>
+            </TCard>
+
+            <TCard variant="outline">
+              <template #header>
+                <TText weight="semibold">{{ t('queues.throughput') }}</TText>
+              </template>
+              <TStack direction="vertical" gap="0.5rem">
                 <TDescriptionList>
-                  <TDescriptionItem :label="t('queues.queueUrl')">
-                    <TText family="mono" size="sm">{{ queue.url }}</TText>
-                  </TDescriptionItem>
-                  <TDescriptionItem label="ARN">
-                    <TText family="mono" size="sm">{{ queue.arn || '—' }}</TText>
+                  <TDescriptionItem :label="t('queues.processedShare')">
+                    <TText family="mono">{{ depthRatio }}%</TText>
                   </TDescriptionItem>
                 </TDescriptionList>
-              </TCard>
-
-              <TCard variant="outline">
-                <template #header>
-                  <TText weight="semibold">{{ t('queues.configuration') }}</TText>
-                </template>
-                <TStack direction="horizontal" gap="0.5rem" wrap>
-                  <TTag size="sm" variant="soft">
-                    FIFO: {{ queue.fifo ? t('common.yes') : t('common.no') }}
-                  </TTag>
-                  <TTag size="sm" variant="soft">
-                    {{ t('queues.visibilityTimeout') }}: {{ formatSeconds(queue.visibilityTimeout) }}
-                  </TTag>
-                  <TTag size="sm" variant="soft">
-                    {{ t('queues.retention') }}: {{ formatSeconds(queue.messageRetentionPeriod) }}
-                  </TTag>
-                  <TTag size="sm" variant="soft">
-                    {{ t('queues.delayed') }}: {{ queue.delayed }}
-                  </TTag>
+                <TProgress :value="depthRatio" />
+              </TStack>
+              <template #footer>
+                <TStack direction="horizontal" justify="flex-end">
+                  <TButton size="sm" variant="ghost" @click="resetProcessed">
+                    {{ t('queues.resetProcessed') }}
+                  </TButton>
                 </TStack>
-                <template #footer>
-                  <TText tone="muted" size="xs">
-                    {{ t('queues.createdPolled', {
-                      created: formatDate(queue.createdAt),
-                      polled: formatDate(queue.lastPolledAt),
-                    }) }}
-                  </TText>
-                </template>
-              </TCard>
-
-              <TCard variant="outline">
-                <template #header>
-                  <TText weight="semibold">{{ t('queues.throughput') }}</TText>
-                </template>
-                <TStack direction="vertical" gap="0.5rem">
-                  <TDescriptionList>
-                    <TDescriptionItem :label="t('queues.processedShare')">
-                      <TText family="mono">{{ depthRatio }}%</TText>
-                    </TDescriptionItem>
-                  </TDescriptionList>
-                  <TProgress :value="depthRatio" />
-                </TStack>
-                <template #footer>
-                  <TStack direction="horizontal" justify="flex-end">
-                    <TButton size="sm" variant="ghost" @click="resetProcessed">
-                      {{ t('queues.resetProcessed') }}
-                    </TButton>
-                  </TStack>
-                </template>
-              </TCard>
-            </TStack>
-          </div>
+              </template>
+            </TCard>
+          </TStack>
         </TTabPanel>
       </TTabs>
     </template>

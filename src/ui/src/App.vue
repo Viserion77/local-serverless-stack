@@ -5,7 +5,7 @@ import {
   TStack, TStackItem, TBrandLockup, TIcon, TPage, TBadge, TToastProvider, TButton, TSelect,
   TAppShell, TNavMenu, TDropdown,
 } from '@treeui/vue';
-import type { TNavMenuItem } from '@treeui/vue';
+import type { TDropdownItem, TNavMenuItem } from '@treeui/vue';
 import { currentRegion, regionOptions, applyConfiguredRegion } from './services/region';
 import { api } from './services/api';
 import type { HealthInfo } from './services/api';
@@ -34,11 +34,25 @@ const activeTopLevel = computed(() => {
   return segs.length === 0 ? '/' : `/${segs[0]}`;
 });
 
-const menuItems = computed(() => [
+// Language names are endonyms ("Português (BR)"), so they are NOT translated —
+// a reader looking for their own language finds it written the way they write
+// it. Which one is in effect is the ITEM's state since 0.28: `selected` turns
+// the row into `role="menuitemradio"` with `aria-checked`, so the active
+// language is announced as the chosen one in a group of three. The two earlier
+// shapes are both gone with it — a ' ✓' glued onto the label (a Unicode glyph
+// doing an icon's job, ui-ux.md rule 3, and a silent one) and then a `#item`
+// slot drawing a `TIcon check`, which was the local stand-in for state the
+// item could not express.
+//
+// The theme row leaves `selected` UNDEFINED on purpose: it is an action, not a
+// member of that group, and the component keys the role off `!== undefined` —
+// even `false` would promote it to a radio item with an "unchecked" reading.
+const menuItems = computed<TDropdownItem[]>(() => [
   { label: theme.value === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark'), value: 'theme' },
   ...locales.map(code => ({
-    label: `${localeLabels[code]}${code === locale.value ? ' ✓' : ''}`,
+    label: localeLabels[code],
     value: `locale:${code}`,
+    selected: code === locale.value,
   })),
 ]);
 
@@ -114,7 +128,24 @@ onBeforeUnmount(() => {
 
 <template>
   <TToastProvider position="top-right">
-    <TAppShell collapsible sidebar-width="16rem" sidebar-label="Primary navigation">
+    <!-- Every string the shell speaks is the product's, not the library's: the
+         defaults ("Sidebar", "Open menu", "Collapse sidebar") are English
+         constants inside TreeUI, and they are all accessible names — the one
+         kind of copy a trilingual UI cannot afford to leave untranslated
+         (ui-ux.md rule 6). `skip-link-label` is 0.27: the shell wires a skip
+         link to its own <main> as the first focusable element, but only renders
+         it once given copy, so this is what gives the dashboard a keyboard
+         bypass over the ten-item nav rail for the first time. -->
+    <TAppShell
+      collapsible
+      sidebar-width="16rem"
+      :sidebar-label="t('nav.sidebar')"
+      :skip-link-label="t('nav.skipToContent')"
+      :menu-label="t('nav.openNavigation')"
+      :close-label="t('nav.closeNavigation')"
+      :collapse-label="t('nav.collapseSidebar')"
+      :expand-label="t('nav.expandSidebar')"
+    >
       <!-- Brand in #header-start (over the sidebar rail, animates with the collapse) and controls in
            #header-end (0.20 slot, pinned trailing) — the shell header grid owns the layout. The brand
            is TBrandLockup (0.21): the #logo slot keeps the arbitrary-ratio branding image uncropped,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { RouterLink, useRouter } from 'vue-router';
+import { useRouter } from 'vue-router';
 import {
   TCard, TButton, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
   TTag, TSpinner, TAlert, TText, TLink, TIcon,
@@ -128,22 +128,22 @@ onBeforeUnmount(() => {
 
       <TTable v-else :columns="columns" :rows="rows" :aria-label="t('buckets.tableLabel')">
         <template #cell-name="{ row }">
-          <TLink
-            :to="`/buckets/${encodeURIComponent(String(row.name))}`"
-            style="font-weight: 600;"
-          >
+          <TLink :to="`/buckets/${encodeURIComponent(String(row.name))}`" weight="semibold">
             {{ row.name }}
           </TLink>
         </template>
 
         <template #cell-service="{ row }">
-          <RouterLink
+          <!-- TLink resolves RouterLink itself from `to`. `clickable` is not a
+               TTag prop in any version — it was dropped silently, so the tag
+               never gained an affordance; the link is what carries it. -->
+          <TLink
             v-if="row.service"
             :to="`/services/${encodeURIComponent(String(row.service))}`"
-            style="text-decoration: none;"
+            underline="none"
           >
-            <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
-          </RouterLink>
+            <TTag size="sm" variant="soft">{{ row.service }}</TTag>
+          </TLink>
           <TText v-else tone="muted" size="xs">{{ t('buckets.unmanaged') }}</TText>
         </template>
 

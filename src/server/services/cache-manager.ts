@@ -9,6 +9,15 @@ import type { RegisteredFunction, HttpRoute, AuthorizerConfig } from './serverle
 // project-scope.ts, which config-manager can import without a cycle).
 export { projectCacheSegment };
 
+// The port layers BELOW lss.config.json: what the register request carried and
+// what the packaged `custom.lss` block declared. Recorded so every activation
+// can re-apply the config on top of them instead of replaying a number that was
+// resolved once — see resolvePorts() in service-registrar.ts.
+export interface ServicePortHints {
+  apiPort?: number;
+  invokePort?: number;
+}
+
 export interface ServiceMetadata {
   name: string;
   root: string;
@@ -19,6 +28,9 @@ export interface ServiceMetadata {
   invokePort?: number;
   // Port the gateway proxy binds for this service's HTTP routes (30xx convention).
   apiPort?: number;
+  // Absent on entries cached before 1.1: those keep `apiPort`/`invokePort` as
+  // their own hint, so an upgrade never moves a running service's port.
+  portHints?: ServicePortHints;
   region?: string;
   stage?: string;
   functions?: RegisteredFunction[];

@@ -23,6 +23,17 @@ export const nav: AreaMessages = {
     primary: 'Primary',
     switchToLight: 'Switch to light',
     switchToDark: 'Switch to dark',
+    // The shell's own copy. TreeUI ships English defaults for all of these
+    // because they are the product's words, not the library's — and every one
+    // is an accessible name (or, for the skip link, text that becomes visible
+    // on focus), so leaving them at the default meant one screen reader user
+    // in three heard the wrong language.
+    sidebar: 'Primary navigation',
+    skipToContent: 'Skip to content',
+    openNavigation: 'Open navigation',
+    closeNavigation: 'Close navigation',
+    collapseSidebar: 'Collapse sidebar',
+    expandSidebar: 'Expand sidebar',
   },
   'pt-BR': {
     overview: 'Visão geral',
@@ -43,6 +54,12 @@ export const nav: AreaMessages = {
     primary: 'Principal',
     switchToLight: 'Usar tema claro',
     switchToDark: 'Usar tema escuro',
+    sidebar: 'Navegação principal',
+    skipToContent: 'Pular para o conteúdo',
+    openNavigation: 'Abrir navegação',
+    closeNavigation: 'Fechar navegação',
+    collapseSidebar: 'Recolher a barra lateral',
+    expandSidebar: 'Expandir a barra lateral',
   },
   es: {
     overview: 'Resumen',
@@ -63,5 +80,11 @@ export const nav: AreaMessages = {
     primary: 'Principal',
     switchToLight: 'Usar tema claro',
     switchToDark: 'Usar tema oscuro',
+    sidebar: 'Navegación principal',
+    skipToContent: 'Saltar al contenido',
+    openNavigation: 'Abrir navegación',
+    closeNavigation: 'Cerrar navegación',
+    collapseSidebar: 'Contraer la barra lateral',
+    expandSidebar: 'Expandir la barra lateral',
   },
 };

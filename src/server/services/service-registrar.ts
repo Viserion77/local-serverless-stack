@@ -14,9 +14,9 @@ import {
   sanitizeEnvironmentValues,
   type ParsedServerlessState,
 } from './serverless-state-parser.js';
-import { CacheManager, ServiceMetadata } from './cache-manager.js';
+import { CacheManager, ServiceMetadata, ServicePortHints } from './cache-manager.js';
 import { ResourceProvisioner } from './resource-provisioner.js';
-import { ConfigManager } from './config-manager.js';
+import { ConfigManager, ResolvedRuntimeConfig } from './config-manager.js';
 import { FunctionRegistry } from './function-registry.js';
 import { LambdaRuntimeManager } from './lambda-runtime-manager.js';
 import { GatewayManager } from './gateway-manager.js';
@@ -45,6 +45,25 @@ const stateParser = new ServerlessStateParser();
 export function isInsideProject(serviceRoot: string, projectRoot: string): boolean {
   const rel = path.relative(path.resolve(projectRoot), path.resolve(serviceRoot));
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
+}
+
+/**
+ * The one place the port precedence lives: `serviceRuntime` from
+ * lss.config.json wins, then the hints recorded at registration (the explicit
+ * request payload, then `custom.lss` from the packaged state), then the
+ * apiPort → invokePort offset rule. Used by register() AND by activate(), so a
+ * rehydrated service resolves its ports the same way a fresh registration does.
+ */
+export function resolvePorts(
+  configManager: Pick<ConfigManager, 'getInvokePortOffset'>,
+  runtimeConfig: Pick<ResolvedRuntimeConfig, 'apiPort' | 'invokePort'>,
+  hints: ServicePortHints,
+): { apiPort?: number; invokePort?: number } {
+  const apiPort = runtimeConfig.apiPort ?? hints.apiPort;
+  const invokePort = runtimeConfig.invokePort
+    ?? hints.invokePort
+    ?? (apiPort ? apiPort + configManager.getInvokePortOffset() : undefined);
+  return { apiPort, invokePort };
 }
 
 export class ServiceRegistrar {
@@ -164,13 +183,30 @@ export class ServiceRegistrar {
     // Port resolution: lss.config.json serviceRuntime > request payload >
     // custom.lss hints from the packaged state > invokePortOffset rule
     // (apiPort 30xx → invokePort 130xx).
+    //
+    // The two lower layers are kept as `portHints` on the metadata so the
+    // config layer can be re-applied on every activation. Without them the
+    // effective number was the only thing on record, and a `serviceRuntime`
+    // entry deleted from lss.config.json went on being served from the cache
+    // for ever — a config you erased that still has effect.
+    const portHints = {
+      apiPort: input.apiPort ?? parsed?.apiPort,
+      invokePort: input.invokePort ?? parsed?.invokePort,
+    };
     const runtimeConfig = configManager.getRuntimeConfigForService(resolvedPath);
-    const apiPort = runtimeConfig.apiPort ?? input.apiPort ?? parsed?.apiPort;
-    const invokePort = runtimeConfig.invokePort
-      ?? input.invokePort
-      ?? parsed?.invokePort
-      ?? (apiPort ? apiPort + configManager.getInvokePortOffset() : undefined);
+    const { apiPort, invokePort } = resolvePorts(configManager, runtimeConfig, portHints);
     console.log(`   Ports: api ${apiPort ?? '—'} · invoke ${invokePort ?? '—'} · region ${effectiveRegion}`);
+
+    // A service with declared HTTP routes and no apiPort registers cleanly and
+    // then serves nothing — reachable only through the Invoke API. That is the
+    // right answer for a resources-only stack and almost never the intent for
+    // one with routes, and the difference is knowable right here.
+    if ((routes?.length ?? 0) > 0 && !apiPort) {
+      warnings.push(
+        `${routes?.length} HTTP route(s) declared but no apiPort resolved — this service will NOT answer HTTP. ` +
+        `Declare serviceRuntime["${path.basename(resolvedPath)}"].apiPort in lss.config.json (or custom.lss.apiPort in serverless.yml).`,
+      );
+    }
 
     // 0.5.x keyed the cache by directory basename. When the real service name
     // differs, migrate: drop the legacy entry for this same root (data plane +
@@ -191,6 +227,7 @@ export class ServiceRegistrar {
       status: 'registered',
       invokePort,
       apiPort,
+      portHints,
       region: effectiveRegion,
       stage,
       functions,
@@ -199,11 +236,13 @@ export class ServiceRegistrar {
     };
     await cache.saveTemplate(serviceName, template, metadata);
 
-    // Provision infra resources to LocalStack (unchanged behavior).
-    await ResourceProvisioner.getInstance().provisionResources(serviceName, resources, {
+    // Provisioning is non-fatal by policy — but what it could not do travels
+    // back with the result now, instead of living only in the daemon log.
+    const provisioned = await ResourceProvisioner.getInstance().provisionResources(serviceName, resources, {
       invokePort,
       region: effectiveRegion,
     });
+    warnings.push(...provisioned.warnings);
 
     await this.activate({ name: serviceName, ...metadata });
 
@@ -229,8 +268,26 @@ export class ServiceRegistrar {
     const gateway = GatewayManager.getInstance();
     const watcher = SourceWatcher.getInstance();
 
-    const entry = registry.registerService(metadata);
     const runtimeConfig = configManager.getRuntimeConfigForService(metadata.root);
+    // Re-apply the config layer over the recorded hints on EVERY activation, so
+    // boot rehydration reflects the lss.config.json that exists now — an edited
+    // `serviceRuntime` entry takes effect, and a deleted one falls back to the
+    // service's own hint instead of the cached number outliving the config that
+    // produced it. Entries cached before hints were recorded keep their stored
+    // ports as the hint, so an upgrade changes nothing for them.
+    const hints = metadata.portHints ?? { apiPort: metadata.apiPort, invokePort: metadata.invokePort };
+    const resolved = resolvePorts(configManager, runtimeConfig, hints);
+    if (resolved.apiPort !== metadata.apiPort || resolved.invokePort !== metadata.invokePort) {
+      console.log(
+        `♻️  Ports for "${metadata.name}" re-resolved from lss.config.json: ` +
+        `api ${metadata.apiPort ?? '—'} → ${resolved.apiPort ?? '—'} · invoke ${metadata.invokePort ?? '—'} → ${resolved.invokePort ?? '—'}`,
+      );
+      metadata = { ...metadata, ...resolved };
+      const cache = await this.ensureCache();
+      await cache.updateMetadata(metadata.name, resolved);
+    }
+
+    const entry = registry.registerService(metadata);
 
     await runtime.syncService(entry);
     await gateway.syncService(entry, runtimeConfig.enabled);
@@ -285,16 +342,20 @@ export class ServiceRegistrar {
       await runServerlessPackage({
         command: pkgConfig.command,
         args: pkgConfig.args,
-        cwd: metadata.root,
+        cwd: pkgConfig.cwd,
         timeoutMs: pkgConfig.timeoutMs,
         env: pkgConfig.env,
       });
     }
 
+    // The HINTS go back in, never the effective ports: re-injecting a resolved
+    // number as an explicit request override would promote whatever the config
+    // said at first registration into a value that outlives it — the same trap
+    // the cached metadata used to spring on boot.
     await this.register({
       servicePath: metadata.root,
-      invokePort: metadata.invokePort,
-      apiPort: metadata.apiPort,
+      invokePort: metadata.portHints?.invokePort ?? (metadata.portHints ? undefined : metadata.invokePort),
+      apiPort: metadata.portHints?.apiPort ?? (metadata.portHints ? undefined : metadata.apiPort),
       region: metadata.region,
     });
   }
@@ -325,12 +386,12 @@ export class ServiceRegistrar {
 
       const pkgConfig = configManager.getPackageConfigForService(resolvedPath);
       const displayCmd = [pkgConfig.command, ...pkgConfig.args].join(' ');
-      console.log(`📦 Template missing — running '${displayCmd}' in ${resolvedPath} (service: ${serviceName})`);
+      console.log(`📦 Template missing — running '${displayCmd}' in ${pkgConfig.cwd} (service: ${serviceName})`);
       try {
         const result = await runServerlessPackage({
           command: pkgConfig.command,
           args: pkgConfig.args,
-          cwd: resolvedPath,
+          cwd: pkgConfig.cwd,
           timeoutMs: pkgConfig.timeoutMs,
           env: pkgConfig.env,
         });

@@ -1,6 +1,5 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
-import { RouterLink } from 'vue-router';
 import {
   TCard, TBadge, TTable, TEmptyState, TStack, TGrid, TStat,
   TTag, TSpinner, TAlert, TText, TLink, TIcon,
@@ -158,7 +157,7 @@ onBeforeUnmount(() => {
           <TStack direction="vertical" gap="0.125rem">
             <TLink
               :to="`/lambdas/${encodeURIComponent(String(row.name))}`"
-              style="font-weight: 600;"
+              weight="semibold"
             >
               {{ row.name }}
             </TLink>
@@ -168,13 +167,15 @@ onBeforeUnmount(() => {
           </TStack>
         </template>
 
+        <!-- The tag is the whole affordance, so the link around it carries no
+             underline of its own; TTag keeps its own colours either way. -->
         <template #cell-service="{ row }">
-          <RouterLink
+          <TLink
             :to="`/services/${encodeURIComponent(String(row.service))}`"
-            style="text-decoration: none;"
+            underline="none"
           >
-            <TTag size="sm" variant="soft" clickable>{{ row.service }}</TTag>
-          </RouterLink>
+            <TTag size="sm" variant="soft">{{ row.service }}</TTag>
+          </TLink>
         </template>
 
         <template #cell-runtime="{ row }">
@@ -182,15 +183,16 @@ onBeforeUnmount(() => {
         </template>
 
         <template #cell-handler="{ row }">
-          <TText family="mono" style="font-size: 0.78rem;">{{ row.handler }}</TText>
+          <TText family="mono">{{ row.handler }}</TText>
         </template>
 
         <!-- The one row-level brand on this screen: the trigger tags are where
              several different AWS services are genuinely being told apart. The
              icon is decorative — the tag text already names the trigger, and
-             TTag renders the slot aria-hidden anyway. `size` is explicit here
-             because the marks are filled tiles: at TIcon's 20px default they
-             would outweigh a `sm` tag's own text. -->
+             TTag renders the slot aria-hidden anyway. No `size`: since 0.28 the
+             `#icon` slot provides the tag's scale (`.t-tag--sm .t-tag__icon` =
+             .875rem), so the filled tiles no longer outweigh a `sm` tag's own
+             text without the call site hardcoding 14. -->
         <template #cell-triggers="{ row }">
           <TStack direction="horizontal" gap="0.25rem" wrap>
             <template v-if="(row.triggerMarks as LambdaTrigger[]).length">
@@ -201,7 +203,7 @@ onBeforeUnmount(() => {
                 variant="soft"
               >
                 <template v-if="trigger.icon" #icon>
-                  <TIcon :name="trigger.icon" size="14" />
+                  <TIcon :name="trigger.icon" />
                 </template>
                 {{ trigger.name }}
               </TTag>

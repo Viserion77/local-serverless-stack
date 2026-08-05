@@ -120,6 +120,13 @@ object ACL/policy sub-resources (treated as plain object operations) — see
   **SQS** (enqueue the resolved event as a message — `SqsParameters.MessageGroupId`
   honored for FIFO targets), with `Input`/`InputPath`; schedules (`rate(...)` and
   6-field cron) fire from a single timer wheel.
+  A `PutRule` against a **custom bus that does not exist yet** — the normal
+  outcome when a consumer is registered before the stack that owns the bus —
+  does not silently drop the rule: the provisioner parks it, tells the caller
+  what it is waiting for (a `warnings[]` entry on the register response) and
+  provisions it as soon as that bus is created. Registration order is whatever
+  the operator typed, so requiring them to know the dependency graph would be
+  the wrong fix.
 
 ### Secrets on boot
 

@@ -83,14 +83,14 @@ describe('SeedManager — assertLocalEndpoint guard', () => {
     it('refuses an empty endpoint', () => {
       endpointSpy.mockReturnValue('');
       expect(() => seedManager.assertLocalEndpoint()).toThrow(
-        /invalid LocalStack endpoint/,
+        /invalid local engine endpoint/,
       );
     });
 
     it('refuses a non-URL string', () => {
       endpointSpy.mockReturnValue('not a url at all');
       expect(() => seedManager.assertLocalEndpoint()).toThrow(
-        /invalid LocalStack endpoint/,
+        /invalid local engine endpoint/,
       );
     });
   });

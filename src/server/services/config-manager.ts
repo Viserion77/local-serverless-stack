@@ -58,6 +58,15 @@ export interface ServicePackageConfig {
   packageArgs?: string[];
   packageEnv?: Record<string, string>;
   packageTimeoutMs?: number;
+  // Where to RUN the command, relative to the project root (default: the
+  // service directory). A resources-only stack with no package.json of its own
+  // is packaged by a script that lives at the monorepo root, and the grammar
+  // above deliberately has no way to say so: `--prefix`/`--cwd`/`--dir` are on
+  // BLOCKED_PACKAGE_FLAGS precisely because they relocate a command. That left
+  // such a stack working by accident — npm walks up to the root manifest and
+  // runs the script from there — which is correct and unreadable. This states
+  // it. Confined to the project root by realpath (see getPackageConfigForService).
+  packageCwd?: string;
 }
 
 // The effective packaging settings resolved for a single service: global config
@@ -67,6 +76,9 @@ export interface ResolvedPackageConfig {
   args: string[];
   env: Record<string, string>;
   timeoutMs: number;
+  // Absolute working directory for the command — the service directory unless a
+  // `packageCwd` override redirected it.
+  cwd: string;
 }
 
 // How the Lambda runtime resolves handler code:
@@ -249,6 +261,13 @@ export interface LSSConfig {
   // Maximum time (ms) to wait for the package command to complete. Defaults to 300000 (5min).
   packageTimeoutMs?: number;
 
+  // Service directories `lss scan` (and the dashboard onboarding) must skip,
+  // keyed like `servicePackaging`: a path relative to this config file's
+  // directory or to the project root, or a directory basename. For the stacks
+  // that are never registered locally by decision — a once-per-account
+  // bootstrap, a us-east-1 DNS stack — so they stop being reported as pending.
+  scanIgnore?: string[];
+
   // Lambda runtime + gateway proxy (API emulation) settings.
   lambdaRuntime?: LambdaRuntimeConfig;
 
@@ -274,7 +293,8 @@ interface ConfigKeySpec {
   // There is no plain `stringArray`: `packageArgs` is the only array-valued key
   // and it is spawned, so the shape check and the flag screen travel together.
   kind: 'port' | 'positiveInt' | 'nonNegativeInt' | 'boolean' | 'string'
-    | 'stringRecord' | 'envRecord' | 'packageCommand' | 'packageArgs' | 'object';
+    | 'stringRecord' | 'envRecord' | 'packageCommand' | 'packageArgs'
+    | 'stringArray' | 'projectRelativePath' | 'object';
   enum?: readonly string[];
   // Fixed-shape object blocks: every subkey is validated against its own spec
   // and unknown subkeys are rejected — a garbage nested value would otherwise
@@ -500,9 +520,11 @@ const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
       packageArgs: { kind: 'packageArgs' },
       packageEnv: { kind: 'envRecord' },
       packageTimeoutMs: { kind: 'positiveInt' },
+      packageCwd: { kind: 'projectRelativePath' },
     },
   },
   packageTimeoutMs: { kind: 'positiveInt' },
+  scanIgnore: { kind: 'stringArray' },
   lambdaRuntime: {
     kind: 'object',
     subKeys: {
@@ -722,6 +744,27 @@ function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string
       }
       const index = (value as string[]).findIndex(isBlockedPackageFlag);
       return index === -1 ? null : blockedFlagError(`${key}[${index}]`, (value as string[])[index]);
+    }
+    // A plain list of match patterns (scanIgnore) — never spawned, so the
+    // package-args screen above does not apply; it just has to be a list of
+    // non-empty strings so the matcher cannot be fed garbage.
+    case 'stringArray':
+      return Array.isArray(value) && value.every(v => typeof v === 'string' && v.length > 0)
+        ? null
+        : `"${key}" must be an array of non-empty strings`;
+    // A directory INSIDE the project, written the way the config file spells
+    // every other path: relative, forward slashes. Rejected lexically here
+    // (absolute, or any `..` segment) and again by realpath when it is resolved
+    // — this one becomes the cwd of a spawned child, so "inside the project"
+    // has to hold for the path that is actually used, symlinks included.
+    case 'projectRelativePath': {
+      if (typeof value !== 'string' || value.length === 0) {
+        return `"${key}" must be a non-empty string`;
+      }
+      if (path.isAbsolute(value) || value.split(/[\\/]/).includes('..')) {
+        return `"${key}" must be a path inside the project root, written relative to it (no leading "/" and no "..")`;
+      }
+      return null;
     }
     case 'stringRecord':
     case 'envRecord': {
@@ -1026,7 +1069,52 @@ export class ConfigManager {
       args: [...(this.config.packageArgs ?? []), ...(perService.packageArgs ?? [])],
       env: { ...(this.config.packageEnv ?? {}), ...(perService.packageEnv ?? {}) },
       timeoutMs: perService.packageTimeoutMs ?? this.getPackageTimeoutMs(),
+      cwd: this.resolvePackageCwd(perService.packageCwd, servicePath),
     };
+  }
+
+  /**
+   * Where a package command runs. `packageCwd` is resolved against the PROJECT
+   * ROOT (not the service dir — the point of the key is to reach a directory
+   * above the service) and fenced to it with the same realpath comparison the
+   * /install and /package endpoints apply to `servicePath`: this value is the
+   * cwd of a spawned child, so an unfenced `../..` would walk the packaging
+   * command out of the project entirely. A rejected value falls back to the
+   * service directory and says so, rather than silently packaging elsewhere.
+   */
+  private resolvePackageCwd(packageCwd: string | undefined, servicePath: string): string {
+    const serviceDir = path.resolve(servicePath);
+    if (!packageCwd) return serviceDir;
+    const projectRoot = this.getProjectRoot();
+    const resolved = path.resolve(projectRoot, packageCwd);
+    const realRoot = realpathOrSelf(projectRoot);
+    const realTarget = realpathOrSelf(resolved);
+    const relative = path.relative(realRoot, realTarget);
+    if (relative.startsWith('..') || path.isAbsolute(relative)) {
+      console.warn(
+        `⚠️  Ignoring packageCwd "${packageCwd}" for ${serviceDir}: it resolves outside the project root (${projectRoot}).`,
+      );
+      return serviceDir;
+    }
+    return resolved;
+  }
+
+  /**
+   * Stacks the scan must not offer. A monorepo always holds a few that are
+   * never local by decision — a bootstrap stack deployed once per AWS account,
+   * a us-east-1 DNS/certificate stack the engine does not emulate — and they
+   * came back as pending work, with warnings, on every single scan. Permanent
+   * noise is how a real warning goes unread.
+   *
+   * Matched with the same key spellings as `servicePackaging`/`serviceRuntime`
+   * (path relative to the config file's directory or to the project root, or
+   * the directory basename), so one convention covers all three.
+   */
+  isScanIgnored(servicePath: string): boolean {
+    const ignore = this.config.scanIgnore;
+    if (!ignore || ignore.length === 0) return false;
+    const patterns = new Set(ignore.map(entry => entry.replace(/^\.\//, '').replace(/\/+$/, '')));
+    return this.serviceEntryKeys(servicePath).some(key => patterns.has(key));
   }
 
   /**

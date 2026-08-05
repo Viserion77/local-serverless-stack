@@ -91,9 +91,10 @@ export class SeedManager {
   }
 
   // Defensive guard against destructive ops ever hitting a non-local endpoint.
-  // Architecture already pins us to LocalStack, but `clearTable`/`clearAllSeeded`
-  // are explicit deletes — verify the endpoint hostname every time and refuse
-  // anything that isn't loopback/local before issuing a DeleteRequest.
+  // The architecture already pins us to the local engine, but
+  // `clearTable`/`clearAllSeeded` are explicit deletes — verify the endpoint
+  // hostname every time and refuse anything that isn't loopback/local before
+  // issuing a DeleteRequest.
   private assertLocalEndpoint(): void {
     const endpoint = EngineManager.getInstance().getEndpoint();
     let hostname: string;
@@ -106,9 +107,13 @@ export class SeedManager {
       }
     } catch {
       throw new Error(
-        `Refusing destructive operation: invalid LocalStack endpoint "${endpoint}".`,
+        `Refusing destructive operation: invalid local engine endpoint "${endpoint}".`,
       );
     }
+    // The two `localstack` spellings are kept deliberately: 1.0 removed that
+    // backend, but `selfEngine.fallbackEndpoint` can still point at a container
+    // reachable under those names, and this list decides what a DELETE may
+    // reach — dropping a hostname here is a behaviour change, not a text edit.
     const allowed = new Set([
       'localhost',
       '127.0.0.1',
@@ -124,8 +129,8 @@ export class SeedManager {
       hostname.startsWith('lss-localstack-');
     if (!isAllowed) {
       throw new Error(
-        `Refusing destructive operation: endpoint "${endpoint}" is not a recognized local LocalStack host. ` +
-          `seed:clear may ONLY run against LocalStack — never against AWS.`,
+        `Refusing destructive operation: endpoint "${endpoint}" is not a recognized local host. ` +
+          `seed:clear may ONLY run against the local engine — never against AWS.`,
       );
     }
   }

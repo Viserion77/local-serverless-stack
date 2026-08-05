@@ -163,13 +163,14 @@ describe('checklist flags', () => {
     expect(byName.fresh.packaged).toBe(false);
     expect(byName.fresh.registered).toBe(false);
     expect(byName.fresh.warnings.map(w => w.code)).toContain('not-installed');
-    expect(byName.fresh.warnings.map(w => w.code)).toContain('not-packaged');
+    // autoPackage was not passed, so the honest code is the manual one.
+    expect(byName.fresh.warnings.map(w => w.code)).toContain('not-packaged-manual');
   });
 
   it('an installed but unpackaged service warns only about packaging', () => {
     write('svc/serverless.yml', 'service: svc\n');
     write('svc/node_modules/.package-lock.json', '{}');
-    const [svc] = scanForServices(root, []);
+    const [svc] = scanForServices(root, [], { autoPackage: true });
     expect(svc.installed).toBe(true);
     expect(svc.warnings.map(w => w.code)).toEqual(['not-packaged']);
     // The English message travels alongside the code, for anything reading
@@ -202,5 +203,86 @@ describe('checklist flags', () => {
     write('svc/serverless.yml', 'service: svc\n');
     const [svc] = scanForServices(root, []);
     expect(svc.installed).toBe(false);
+  });
+});
+
+// The scan is what onboarding renders and what `lss scan` prints; two of the
+// three facts below decide what the operator is *offered*, so getting them
+// wrong is worse than not having them.
+describe('scanIgnore', () => {
+  it('drops a service whose directory the caller ignores, and does not descend into it', () => {
+    write('infra/bootstrap/serverless.yml', 'service: bootstrap\n');
+    write('infra/bootstrap/fixtures/svc/serverless.yml', 'service: fixture\n');
+    write('services/orders/serverless.yml', 'service: orders\n');
+
+    const found = scanForServices(root, [], {
+      isIgnored: dir => dir.endsWith(`${path.sep}bootstrap`),
+    });
+    expect(found.map(s => s.name)).toEqual(['orders']);
+  });
+
+  it('keeps everything when no predicate is given', () => {
+    write('infra/bootstrap/serverless.yml', 'service: bootstrap\n');
+    expect(scanForServices(root, []).map(s => s.name)).toEqual(['bootstrap']);
+  });
+});
+
+describe('autoPackage-aware packaging warning', () => {
+  it('promises packaging only when autoPackage is on', () => {
+    write('svc/serverless.yml', 'service: svc\n');
+    const [on] = scanForServices(root, [], { autoPackage: true });
+    expect(on.warnings.map(w => w.code)).toContain('not-packaged');
+    expect(on.warnings.find(w => w.code === 'not-packaged')?.message).toContain('autoPackage');
+
+    const [off] = scanForServices(root, [], { autoPackage: false });
+    const warning = off.warnings.find(w => w.code === 'not-packaged-manual');
+    expect(warning?.message).toContain('serverless package');
+  });
+});
+
+// `hasFunctions` decides whether onboarding offers a port at all, so its
+// failure direction matters more than its precision: unknown must never read
+// as "no functions".
+describe('hasFunctions hint', () => {
+  const scan = (yml: string) => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'lss-scan-fn-'));
+    write('svc/serverless.yml', yml);
+    return scanForServices(root, [])[0].hasFunctions;
+  };
+
+  it('false for a resources-only stack', () => {
+    expect(scan('service: infra\nresources:\n  Resources:\n    T: {}\n')).toBe(false);
+  });
+
+  it('true when the functions block has an entry', () => {
+    expect(scan('service: api\nfunctions:\n  # a comment first\n  hello:\n    handler: h.go\n')).toBe(true);
+  });
+
+  it('false when the functions block is empty or dedents immediately', () => {
+    expect(scan('service: api\nfunctions:\n\nprovider:\n  name: aws\n')).toBe(false);
+    expect(scan('service: api\nfunctions: {}\n')).toBe(false);
+    expect(scan('service: api\nfunctions:\n')).toBe(false);
+  });
+
+  it('undefined — never false — when the block is a reference it cannot resolve', () => {
+    expect(scan('service: api\nfunctions: ${file(./functions.yml)}\n')).toBeUndefined();
+  });
+
+  it('undefined for a TypeScript config, false/true for JSON', () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'lss-scan-fn-ts-'));
+    write('svc/serverless.ts', 'export default { service: "api" };');
+    expect(scanForServices(root, [])[0].hasFunctions).toBeUndefined();
+
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'lss-scan-fn-json-'));
+    write('a/serverless.json', JSON.stringify({ service: 'a', functions: { hello: {} } }));
+    write('b/serverless.json', JSON.stringify({ service: 'b' }));
+    expect(scanForServices(root, []).map(s => s.hasFunctions)).toEqual([true, false]);
+  });
+
+  it('undefined when the config file cannot be read at all', () => {
+    root = fs.mkdtempSync(path.join(os.tmpdir(), 'lss-scan-fn-unreadable-'));
+    write('svc/serverless.yml', 'service: api\nfunctions:\n  hello:\n    handler: h.go\n');
+    jest.spyOn(fs, 'readFileSync').mockImplementation(() => { throw new Error('EACCES'); });
+    expect(scanForServices(root, [])[0].hasFunctions).toBeUndefined();
   });
 });

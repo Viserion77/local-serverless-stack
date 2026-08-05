@@ -345,6 +345,16 @@ Both files should contain valid JSON with the following optional properties:
   - The same rule applies to a per-service `servicePackaging[*].packageCommand`.
   - Example: `"npm run package"` or `"npx serverless package --stage dev"`
 
+- **scanIgnore** (string[], default: `[]`)
+  - Service directories `lss scan` and the dashboard onboarding must skip. Keys are
+    spelled like `servicePackaging`/`serviceRuntime`: a path relative to this config
+    file's directory or to the project root, or a directory basename.
+  - For the stacks a monorepo never registers locally *by decision* — a bootstrap
+    stack deployed once per AWS account, a `us-east-1` DNS/certificate stack the
+    engine does not emulate. Without it they come back as pending work, with
+    warnings, on every scan; permanent noise is how a real warning goes unread.
+  - Example: `["infra/bootstrap", "infra/global"]`
+
 - **packageTimeoutMs** (number, default: 300000)
   - Maximum time in milliseconds to wait for `packageCommand` before killing it.
   - Example: `600000` (10 minutes)
@@ -398,6 +408,28 @@ Both files should contain valid JSON with the following optional properties:
     global one, a per-service `packageArgs` to the same flag screen, and a per-service
     `packageEnv` to the same rejected-key list — an override is a different value for
     the same setting, not a way around its validation.
+  - **packageCwd** (string, relative to the **project root**, default: the service
+    directory) — *where* the command runs. A resources-only stack often has no
+    `package.json` of its own and is packaged by a script that lives at the monorepo
+    root; the packaging grammar deliberately blocks `--prefix`/`--cwd`/`--dir`
+    (they relocate a command), so before this key such a stack only worked by
+    accident: npm walks up to the root manifest and runs the script from there.
+    Now it can be stated:
+
+    ```json
+    "servicePackaging": {
+      "infra/shared": {
+        "packageCommand": "npm run package:local:infra",
+        "packageCwd": "."
+      }
+    }
+    ```
+
+    Confined to the project root twice: lexically on write (`PUT /api/config`
+    refuses an absolute path or any `..` segment) and by realpath when it is
+    resolved, because the value becomes the working directory of a spawned child
+    and a symlink can point out of the tree. A value that escapes is ignored with a
+    warning and the service directory is used instead.
   - `packageArgs`/`packageEnv`/`servicePackaging` are file-only (no environment-variable
     equivalents). `LSS_PACKAGE_COMMAND`/`LSS_PACKAGE_TIMEOUT_MS` still apply as the global
     baseline that a per-service `packageCommand`/`packageTimeoutMs` can override.
@@ -564,7 +596,16 @@ When only `apiPort` is set, the orchestrator derives the invoke port via
 `lambdaRuntime.invokePortOffset` (default: `apiPort + 10000`). Ports set in
 `serviceRuntime` (lss.config.json) win over `custom.lss`; without either the
 service gets no HTTP listener but stays invocable through `POST
-/api/lambdas/:name/invoke`. A copy-paste template lives at
+/api/lambdas/:name/invoke` — and if the service **declares HTTP routes**, that
+case now registers with a warning naming the `serviceRuntime` key to set,
+because a service with 21 routes and no `apiPort` is almost always an omission
+rather than a choice.
+
+The layers below `serviceRuntime` (the register request, then `custom.lss`) are
+recorded with the service as `portHints`, and the config layer is re-applied on
+**every** activation — so editing a `serviceRuntime` port takes effect on the
+next boot, and deleting one falls back to the service's own hint instead of the
+cached number outliving the config that produced it. A copy-paste template lives at
 [serverless.yml.example](serverless.yml.example).
 
 ## Examples

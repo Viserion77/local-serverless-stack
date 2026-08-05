@@ -43,7 +43,11 @@ function detectLocale(env = process.env) {
 const MESSAGES = {
   en: {
     'scan.warning.not-installed': 'dependencies not installed — packaging needs an install first',
+    // Two codes for one fact, because the fact depends on `autoPackage`: the
+    // single string that promised packaging was read as a promise by operators
+    // whose config had it off, and registering answered 400 instead.
     'scan.warning.not-packaged': 'not packaged yet — registering packages it for you (autoPackage)',
+    'scan.warning.not-packaged-manual': 'not packaged yet — autoPackage is off, so run `serverless package` before registering',
     'scan.warning.ts-config': 'TypeScript service config — name, region and ports resolve at packaging time',
     'scan.warning.unreadable-config': 'could not read {file}',
     'scan.warning.invalid-json': 'serverless.json is not valid JSON',
@@ -61,6 +65,9 @@ const MESSAGES = {
     'start.logs': '📝 Logs: {path}',
     'start.running': '✅ Service is running',
     'start.failed': '❌ Service failed to start. Check logs: {path}',
+    'start.waiting': '⏳ Waiting for the orchestrator to answer (up to {seconds}s)...',
+    'start.waitTimeout': '❌ The orchestrator did not answer within {seconds}s',
+    'start.logTail': '--- last lines of the log ---',
     'start.notBuilt': '❌ Orchestrator not found or not built.',
     'start.notBuiltDev': 'If you are developing LSS, run:',
     'start.notBuiltBug': 'If you installed via npm, please report this as a bug.',
@@ -75,6 +82,11 @@ const MESSAGES = {
     'status.engine': '   Self Engine: {url}',
     'status.dynamoProxy': '   DynamoDB Proxy: {url}',
     'status.logs': '   Logs: {path}',
+    // A port answering from another checkout is the routine outcome under
+    // `--net=host`, and reporting it as NOT RUNNING sent people looking in the
+    // wrong place. `projectRoot` comes from GET /api/config on that port.
+    'status.portOwnedByOther': '🔶 Port {port} is in use by the orchestrator of {root}',
+    'status.portAnsweringHere': '🔶 Port {port} answers for this project, but no PID file is registered here (started from another shell?)',
     'logs.missing': '⚠️  No log file at {path}',
     'logs.from': '📝 Logs from: {path}',
 
@@ -169,6 +181,7 @@ const MESSAGES = {
     'help.cmd.help': 'Show this help message',
     'help.opt.config': 'Load config from this file (precedes the cwd/home search). Applies to start/stop/status/logs, so an isolated instance can be addressed without cd-ing into its folder.',
     'help.opt.dynamoProxy': 'Enable the DynamoDB proxy on port 8000 (for the start command)',
+    'help.opt.wait': 'On start, block until the orchestrator answers GET /api/health (default 30s) and exit non-zero — with the log tail — if it never does. What a sequential chain needs so the next step is not run against a stack that is not up.',
     'help.opt.yes': 'Skip the interactive confirmation on seed:clear (use only in CI)',
     'help.env.dashboardPort': 'Orchestrator port (overrides serverPort)',
     'help.env.enginePort': 'Self engine port (overrides selfEngine.port)',
@@ -195,6 +208,7 @@ const MESSAGES = {
   'pt-BR': {
     'scan.warning.not-installed': 'dependências não instaladas — empacotar exige instalar antes',
     'scan.warning.not-packaged': 'ainda não empacotado — registrar empacota para você (autoPackage)',
+    'scan.warning.not-packaged-manual': 'ainda não empacotado — autoPackage está desligado, rode `serverless package` antes de registrar',
     'scan.warning.ts-config': 'config em TypeScript — nome, região e portas só resolvem no empacotamento',
     'scan.warning.unreadable-config': 'não consegui ler {file}',
     'scan.warning.invalid-json': 'serverless.json não é um JSON válido',
@@ -210,6 +224,9 @@ const MESSAGES = {
     'start.logs': '📝 Logs: {path}',
     'start.running': '✅ Serviço no ar',
     'start.failed': '❌ O serviço não subiu. Veja os logs: {path}',
+    'start.waiting': '⏳ Esperando o orquestrador responder (até {seconds}s)...',
+    'start.waitTimeout': '❌ O orquestrador não respondeu em {seconds}s',
+    'start.logTail': '--- últimas linhas do log ---',
     'start.notBuilt': '❌ Orquestrador não encontrado ou sem build.',
     'start.notBuiltDev': 'Se você está desenvolvendo o LSS, rode:',
     'start.notBuiltBug': 'Se você instalou via npm, por favor abra um bug.',
@@ -224,6 +241,8 @@ const MESSAGES = {
     'status.engine': '   Self Engine: {url}',
     'status.dynamoProxy': '   Proxy DynamoDB: {url}',
     'status.logs': '   Logs: {path}',
+    'status.portOwnedByOther': '🔶 A porta {port} está em uso pelo orquestrador de {root}',
+    'status.portAnsweringHere': '🔶 A porta {port} responde por este projeto, mas não há arquivo de PID registrado aqui (subiu de outro shell?)',
     'logs.missing': '⚠️  Nenhum arquivo de log em {path}',
     'logs.from': '📝 Logs de: {path}',
 
@@ -308,6 +327,7 @@ const MESSAGES = {
     'help.cmd.help': 'Mostra esta ajuda',
     'help.opt.config': 'Carrega a config deste arquivo (tem precedência sobre a busca em cwd/home). Vale para start/stop/status/logs, então dá para endereçar uma instância isolada sem entrar na pasta dela.',
     'help.opt.dynamoProxy': 'Liga o proxy DynamoDB na porta 8000 (para o comando start)',
+    'help.opt.wait': 'No start, bloqueia até o orquestrador responder GET /api/health (padrão 30s) e sai com código diferente de zero — mostrando o fim do log — se ele não responder. É o que uma cadeia sequencial precisa para não rodar o passo seguinte contra um stack que não subiu.',
     'help.opt.yes': 'Pula a confirmação interativa do seed:clear (use só em CI)',
     'help.env.dashboardPort': 'Porta do orquestrador (sobrepõe serverPort)',
     'help.env.enginePort': 'Porta do self engine (sobrepõe selfEngine.port)',
@@ -334,6 +354,7 @@ const MESSAGES = {
   es: {
     'scan.warning.not-installed': 'dependencias sin instalar — empaquetar requiere instalarlas antes',
     'scan.warning.not-packaged': 'aún sin empaquetar — registrar lo empaqueta por ti (autoPackage)',
+    'scan.warning.not-packaged-manual': 'aún sin empaquetar — autoPackage está desactivado, ejecuta `serverless package` antes de registrar',
     'scan.warning.ts-config': 'config en TypeScript — nombre, región y puertos se resuelven al empaquetar',
     'scan.warning.unreadable-config': 'no se pudo leer {file}',
     'scan.warning.invalid-json': 'serverless.json no es un JSON válido',
@@ -349,6 +370,9 @@ const MESSAGES = {
     'start.logs': '📝 Registros: {path}',
     'start.running': '✅ El servicio está en marcha',
     'start.failed': '❌ El servicio no arrancó. Revisa los registros: {path}',
+    'start.waiting': '⏳ Esperando a que el orquestador responda (hasta {seconds}s)...',
+    'start.waitTimeout': '❌ El orquestador no respondió en {seconds}s',
+    'start.logTail': '--- últimas líneas del registro ---',
     'start.notBuilt': '❌ Orquestador no encontrado o sin compilar.',
     'start.notBuiltDev': 'Si estás desarrollando LSS, ejecuta:',
     'start.notBuiltBug': 'Si lo instalaste con npm, por favor repórtalo como un bug.',
@@ -363,6 +387,8 @@ const MESSAGES = {
     'status.engine': '   Self Engine: {url}',
     'status.dynamoProxy': '   Proxy de DynamoDB: {url}',
     'status.logs': '   Registros: {path}',
+    'status.portOwnedByOther': '🔶 El puerto {port} lo ocupa el orquestador de {root}',
+    'status.portAnsweringHere': '🔶 El puerto {port} responde por este proyecto, pero no hay archivo PID registrado aquí (¿arrancó desde otra terminal?)',
     'logs.missing': '⚠️  No hay archivo de registro en {path}',
     'logs.from': '📝 Registros de: {path}',
 
@@ -447,6 +473,7 @@ const MESSAGES = {
     'help.cmd.help': 'Muestra esta ayuda',
     'help.opt.config': 'Carga la configuración de este archivo (tiene precedencia sobre la búsqueda en cwd/home). Aplica a start/stop/status/logs, así una instancia aislada se puede direccionar sin entrar a su carpeta.',
     'help.opt.dynamoProxy': 'Habilita el proxy de DynamoDB en el puerto 8000 (para el comando start)',
+    'help.opt.wait': 'En start, bloquea hasta que el orquestador responda GET /api/health (30s por defecto) y sale con código distinto de cero — mostrando el final del registro — si no responde. Es lo que necesita una cadena secuencial para no ejecutar el paso siguiente contra un stack que no arrancó.',
     'help.opt.yes': 'Salta la confirmación interactiva de seed:clear (úsalo solo en CI)',
     'help.env.dashboardPort': 'Puerto del orquestador (sobrescribe serverPort)',
     'help.env.enginePort': 'Puerto del self engine (sobrescribe selfEngine.port)',

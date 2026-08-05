@@ -31,6 +31,13 @@ export interface ScannedService {
   region?: string;
   apiPort?: number;
   invokePort?: number;
+  // Whether the config declares any function. `false` marks a resources-only
+  // stack — for which an apiPort/invokePort means nothing, so onboarding stops
+  // offering the fields. `undefined` means "could not tell" (a TS config, a
+  // `${file(…)}` reference): the caller must assume it might have functions,
+  // because hiding the ports of a service that does have them is the expensive
+  // mistake, and the packaged state settles it at registration anyway.
+  hasFunctions?: boolean;
   // Anything the operator should fix before or after registering.
   //
   // Each carries a stable `code` AND an English `message`. The code is what a
@@ -42,10 +49,23 @@ export interface ScannedService {
 }
 
 export interface ScanWarning {
-  code: 'not-installed' | 'not-packaged' | 'ts-config' | 'unreadable-config' | 'invalid-json';
+  // `not-packaged` and `not-packaged-manual` are the same fact under different
+  // configuration: with autoPackage on, registering packages the service; with
+  // it off, registering answers 400 until `serverless package` has run. One
+  // code promising both is how a warning ends up contradicting what happens
+  // next, so the effective setting picks the code.
+  code: 'not-installed' | 'not-packaged' | 'not-packaged-manual' | 'ts-config'
+    | 'unreadable-config' | 'invalid-json';
   message: string;
   // Values the localised string interpolates (e.g. the config file name).
   params?: Record<string, string>;
+}
+
+export interface ScanOptions {
+  // Skip these service directories entirely (see ConfigManager.isScanIgnored).
+  isIgnored?: (serviceRoot: string) => boolean;
+  // The effective `autoPackage` — decides which not-packaged warning is true.
+  autoPackage?: boolean;
 }
 
 const CONFIG_FILES = ['serverless.yml', 'serverless.yaml', 'serverless.json', 'serverless.ts'];
@@ -63,7 +83,11 @@ const IGNORED_DIRS = new Set([
 // stays fast on monorepos either way.
 const MAX_DEPTH = 6;
 
-export function scanForServices(rootDir: string, registeredRoots: Iterable<string>): ScannedService[] {
+export function scanForServices(
+  rootDir: string,
+  registeredRoots: Iterable<string>,
+  options: ScanOptions = {},
+): ScannedService[] {
   const registered = new Set([...registeredRoots].map(root => path.resolve(root)));
   const found: ScannedService[] = [];
   walk(path.resolve(rootDir), 0);
@@ -80,7 +104,10 @@ export function scanForServices(rootDir: string, registeredRoots: Iterable<strin
 
     const configFile = CONFIG_FILES.find(name => entries.some(e => e.isFile() && e.name === name));
     if (configFile) {
-      found.push(inspect(dir, configFile));
+      // An ignored stack is still a leaf: it is a service, just not one this
+      // project registers locally, so descending into it would only surface
+      // its fixtures.
+      if (!options.isIgnored?.(dir)) found.push(inspect(dir, configFile));
       // A service root is a leaf: nested serverless configs under one service
       // are fixtures/templates, not independently registrable services.
       return;
@@ -105,10 +132,15 @@ export function scanForServices(rootDir: string, registeredRoots: Iterable<strin
       });
     }
     if (!packaged) {
-      warnings.push({
-        code: 'not-packaged',
-        message: 'not packaged yet — registration will package it (autoPackage) or run `serverless package` first',
-      });
+      warnings.push(options.autoPackage
+        ? {
+          code: 'not-packaged',
+          message: 'not packaged yet — registration will package it (autoPackage)',
+        }
+        : {
+          code: 'not-packaged-manual',
+          message: 'not packaged yet — autoPackage is off, so run `serverless package` before registering',
+        });
     }
     return {
       name: hints.name ?? path.basename(dir),
@@ -121,6 +153,7 @@ export function scanForServices(rootDir: string, registeredRoots: Iterable<strin
       region: hints.region,
       apiPort: hints.apiPort,
       invokePort: hints.invokePort,
+      hasFunctions: hints.hasFunctions,
       warnings,
     };
   }
@@ -154,6 +187,7 @@ interface Hints {
   region?: string;
   apiPort?: number;
   invokePort?: number;
+  hasFunctions?: boolean;
 }
 
 // Line-oriented scrape of the obvious keys. serverless.json parses properly;
@@ -186,12 +220,15 @@ function readHints(configPath: string, warnings: ScanWarning[]): Hints {
         service?: unknown;
         provider?: { region?: unknown };
         custom?: { lss?: { apiPort?: unknown; invokePort?: unknown } };
+        functions?: unknown;
       };
       return {
         name: typeof parsed.service === 'string' ? parsed.service : undefined,
         region: typeof parsed.provider?.region === 'string' ? parsed.provider.region : undefined,
         apiPort: asPort(parsed.custom?.lss?.apiPort),
         invokePort: asPort(parsed.custom?.lss?.invokePort),
+        // JSON leaves nothing to guess: the key is there with entries, or it is not.
+        hasFunctions: Object.keys((parsed.functions ?? {}) as Record<string, unknown>).length > 0,
       };
     } catch {
       warnings.push({ code: 'invalid-json', message: 'serverless.json is not valid JSON' });
@@ -199,7 +236,7 @@ function readHints(configPath: string, warnings: ScanWarning[]): Hints {
     }
   }
 
-  const hints: Hints = {};
+  const hints: Hints = { hasFunctions: scrapeHasFunctions(raw) };
   for (const line of raw.split('\n')) {
     let match = /^service:\s*['"]?([\w-]+)['"]?\s*$/.exec(line);
     if (match && !hints.name) hints.name = match[1];
@@ -213,6 +250,36 @@ function readHints(configPath: string, warnings: ScanWarning[]): Hints {
     if (match && hints.invokePort === undefined) hints.invokePort = asPort(Number(match[1]));
   }
   return hints;
+}
+
+/**
+ * Does this serverless.yml declare any function?
+ *
+ *   no `functions:` key at all      → false (a resources-only stack)
+ *   `functions:` + an indented key  → true
+ *   `functions: ${file(./fns.yml)}` → undefined — the value is resolved at
+ *                                     packaging time, and claiming "no
+ *                                     functions" for a service that has 23 is
+ *                                     the failure this hint must never cause.
+ *
+ * Line-oriented like the rest of readHints: this informs a form field, and the
+ * packaged state is what registration actually reads.
+ */
+function scrapeHasFunctions(raw: string): boolean | undefined {
+  const lines = raw.split('\n');
+  const index = lines.findIndex(line => /^functions:/.test(line));
+  if (index === -1) return false;
+  const inline = lines[index].slice('functions:'.length).trim();
+  // Anything on the same line is a reference or an inline map — neither is a
+  // count this scrape can trust. `functions: {}` is the one honest exception.
+  if (inline) return inline === '{}' ? false : undefined;
+  for (const line of lines.slice(index + 1)) {
+    if (!line.trim() || /^\s*#/.test(line)) continue;
+    // Dedented back to column 0: the block ended without an entry.
+    if (!/^\s/.test(line)) return false;
+    if (/^\s+[^\s#-][^:]*:/.test(line)) return true;
+  }
+  return false;
 }
 
 function asPort(value: unknown): number | undefined {

@@ -129,7 +129,7 @@ function formatDraft() {
         :rows="18"
         :readonly="readOnly"
         spellcheck="false"
-        class="mono"
+        family="mono"
         @blur="tryParse"
       />
     </TStack>
@@ -143,7 +143,10 @@ function formatDraft() {
           <template v-if="readOnly">
             <TButton size="sm" variant="soft" @click="emit('request-edit')">{{ t('dynamo.edit') }}</TButton>
             <TButton size="sm" variant="ghost" @click="emit('request-clone')">{{ t('dynamo.clone') }}</TButton>
-            <TButton size="sm" variant="ghost" tone="danger" @click="emit('request-delete')">{{ t('common.delete') }}</TButton>
+            <!-- Destructive intent is a TButton *variant*, not a tone: `tone`
+                 is not a TButton prop, so it fell through to the <button> as an
+                 inert attribute and the delete action rendered like the others. -->
+            <TButton size="sm" variant="danger" @click="emit('request-delete')">{{ t('common.delete') }}</TButton>
           </template>
         </TStack>
         <TStack direction="horizontal" gap="0.5rem">

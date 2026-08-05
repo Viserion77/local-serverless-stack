@@ -159,7 +159,47 @@ function getOrchestratorPath() {
   return null;
 }
 
-function startOrchestrator() {
+/**
+ * Who is answering on our serverPort, if anyone: the `projectRoot` reported by
+ * `GET /api/config`. Under `--net=host` the port belongs to the whole machine,
+ * so "someone answers but it is not us" is a routine outcome — and the one the
+ * old `NOT RUNNING` turned into a wild goose chase. Returns null when nothing
+ * answers (or answers something else), because this only ever adds detail to a
+ * message; it must never become a reason to fail.
+ */
+async function probePortOwner() {
+  try {
+    const config = await getJson('/api/config');
+    return typeof config?.projectRoot === 'string' ? config.projectRoot : null;
+  } catch {
+    return null;
+  }
+}
+
+// The last `lines` lines of the orchestrator log — where the reason a boot died
+// (EADDRINUSE, a bad config) is written, seconds before the CLI notices.
+function tailLog(logFile, lines = 15) {
+  try {
+    const content = fs.readFileSync(logFile, 'utf8');
+    return content.split('\n').filter(Boolean).slice(-lines).join('\n');
+  } catch {
+    return '';
+  }
+}
+
+// Report a port held by a different project's orchestrator. Returns true when
+// it printed something, so callers can skip their own vaguer message.
+function reportPortOwner(owner, port, log = console.log) {
+  if (!owner) return false;
+  const here = process.cwd();
+  const mine = owner === here || here.startsWith(`${owner}${path.sep}`);
+  log(mine
+    ? t('status.portAnsweringHere', { port })
+    : t('status.portOwnedByOther', { port, root: owner }));
+  return true;
+}
+
+async function startOrchestrator() {
   // Before anything else — including the already-running short-circuit — so a
   // stale 0.x flag or config value always fails loudly instead of looking like
   // a successful no-op.
@@ -243,17 +283,88 @@ function startOrchestrator() {
   }
   console.log(t('start.logs', { path: logFile }));
 
-  setTimeout(() => {
-    try {
-      process.kill(child.pid, 0);
-      console.log(t('start.running'));
-    } catch (e) {
-      console.error(t('start.failed', { path: logFile }));
-      if (fs.existsSync(pidFile)) {
-        fs.unlinkSync(pidFile);
+  // `--wait` blocks until the orchestrator actually answers, which is what a
+  // sequential chain (a VS Code task, a CI step, a boot script) needs: without
+  // it the next step's `register` fails fifteen times for a reason that is not
+  // the cause — the cause is in the first line of the log, minutes earlier.
+  if (process.argv.includes('--wait') || getArgValue('--wait') !== undefined) {
+    const seconds = Number.parseInt(getArgValue('--wait') || '', 10);
+    return waitForHealthy(child.pid, pidFile, logFile, Number.isInteger(seconds) && seconds > 0 ? seconds : 30);
+  }
+
+  // Without --wait the CLI still has to answer honestly. Daemonizing means the
+  // child discovers a busy port AFTER this process has printed a PID, so the
+  // liveness check below is the only place a non-zero exit can come from — and
+  // it used to print the failure and exit 0 anyway, making a dead orchestrator
+  // count as a successful step.
+  return scheduleLivenessCheck(child.pid, pidFile, logFile);
+}
+
+// Two seconds later: is the child still there? Resolves when it is, exits
+// non-zero when it is not. Returned as a promise so the caller (and the tests)
+// can observe the outcome instead of it happening in a detached timer.
+function scheduleLivenessCheck(pid, pidFile, logFile) {
+  return new Promise((resolve, reject) => {
+    setTimeout(() => {
+      try {
+        process.kill(pid, 0);
+      } catch (e) {
+        // process.exit never returns in production; under test it throws, and
+        // the rejection is how a test asserts the exit code.
+        reportStartFailure(pidFile, logFile).then(() => process.exit(1)).then(resolve, reject);
+        return;
       }
+      console.log(t('start.running'));
+      resolve();
+    }, 2000);
+  });
+}
+
+// Everything known about a boot that did not survive: the log tail, and whether
+// the port it wanted is held by another project's orchestrator.
+async function reportStartFailure(pidFile, logFile) {
+  console.error(t('start.failed', { path: logFile }));
+  if (fs.existsSync(pidFile)) {
+    fs.unlinkSync(pidFile);
+  }
+  const tail = tailLog(logFile);
+  if (tail) {
+    console.error(t('start.logTail'));
+    console.error(tail);
+  }
+  reportPortOwner(await probePortOwner(), getServerPort(), console.error);
+}
+
+/**
+ * Poll `GET /api/health` until the orchestrator answers, the child dies, or the
+ * deadline passes. Resolves on success; exits non-zero (after printing the log
+ * tail) on either failure — a `lss start --wait` that returns 0 means the stack
+ * is up and can be registered against.
+ */
+async function waitForHealthy(pid, pidFile, logFile, timeoutSeconds) {
+  const deadline = Date.now() + timeoutSeconds * 1000;
+  console.log(t('start.waiting', { seconds: timeoutSeconds }));
+  for (;;) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      await reportStartFailure(pidFile, logFile);
+      process.exit(1);
     }
-  }, 2000);
+    try {
+      await getJson('/api/health');
+      console.log(t('start.running'));
+      return;
+    } catch {
+      // Not up yet — the connection is refused until the listener binds.
+    }
+    if (Date.now() >= deadline) {
+      console.error(t('start.waitTimeout', { seconds: timeoutSeconds }));
+      await reportStartFailure(pidFile, logFile);
+      process.exit(1);
+    }
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
 }
 
 // Poll kill(pid, 0) until the process is gone. SIGTERM alone isn't enough to
@@ -317,10 +428,23 @@ async function stopOrchestrator() {
   }
 }
 
-function showStatus() {
+/**
+ * `lss status` — is THIS project's orchestrator running?
+ *
+ * The pid file answers that, and it used to answer nothing else: with
+ * `--net=host` the port belongs to the whole machine, so another project's
+ * orchestrator holding it produced `NOT RUNNING` from a port that answers 200 —
+ * a status that is not merely unhelpful but points the operator at the wrong
+ * place. Every "no" is now followed by asking WHO is on the port, which
+ * `GET /api/config` answers exactly (`projectRoot`).
+ */
+async function showStatus() {
   const { pidFile, logFile } = runtimePaths();
+  const cfg = getConfig(loadConfig());
   if (!fs.existsSync(pidFile)) {
-    console.log(t('status.notRunning'));
+    if (!reportPortOwner(await probePortOwner(), cfg.serverPort)) {
+      console.log(t('status.notRunning'));
+    }
     return;
   }
 
@@ -328,8 +452,6 @@ function showStatus() {
 
   try {
     process.kill(pid, 0);
-    const config = loadConfig();
-    const cfg = getConfig(config);
     console.log(t('status.running', { pid }));
     console.log(t('status.server', { url: `http://localhost:${cfg.serverPort}` }));
     console.log(t('status.engine', { url: `http://localhost:${cfg.selfEnginePort}` }));
@@ -340,6 +462,7 @@ function showStatus() {
   } catch (e) {
     console.log(t('status.stale'));
     fs.unlinkSync(pidFile);
+    reportPortOwner(await probePortOwner(), cfg.serverPort);
   }
 }
 
@@ -810,6 +933,7 @@ function showHelp() {
     t('help.options'),
     opt('--config <path>', 'help.opt.config'),
     opt('--enable-dynamo-proxy', 'help.opt.dynamoProxy'),
+    opt('--wait[=<seconds>]', 'help.opt.wait'),
     opt('--yes, -y', 'help.opt.yes'),
     '',
     t('help.environment'),

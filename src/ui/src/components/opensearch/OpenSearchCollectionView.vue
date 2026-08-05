@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, watch } from 'vue';
 import {
-  TCard, TButton, TBadge, TStack, TTable, TEmptyState, TSpinner, TAlert,
+  TCard, TButton, TBadge, TStack, TStackItem, TTable, TEmptyState, TSpinner, TAlert,
   TInput, TSelect, TFormField, TText, TIcon, TCodeBlock,
 } from '@treeui/vue';
 import { api } from '../../services/api';
@@ -179,20 +179,29 @@ watch(() => props.name, load);
         <TText weight="semibold">{{ t('opensearch.searchTitle') }}</TText>
       </template>
 
+      <!-- TFormField has no flex axis, so the sizing lives on the flex item.
+           `basis="0"` is what makes `grow` behave like the `flex: N` shorthand
+           these fields used — TStackItem's basis defaults to `auto`. -->
       <TStack direction="horizontal" gap="1rem" align="end">
-        <TFormField :label="t('opensearch.index')" style="flex: 1;">
-          <TSelect v-model="searchIndex" :options="indexOptions" />
-        </TFormField>
-        <TFormField :label="t('opensearch.query')" style="flex: 2;">
-          <TInput
-            v-model="searchText"
-            :placeholder="t('opensearch.queryPlaceholder')"
-            @keyup.enter="runSearch"
-          />
-        </TFormField>
-        <TFormField :label="t('common.size')" style="flex: 0.8; min-width: 8rem;">
-          <TSelect v-model="searchSize" :options="sizeOptions" />
-        </TFormField>
+        <TStackItem :grow="1" basis="0">
+          <TFormField :label="t('opensearch.index')">
+            <TSelect v-model="searchIndex" :options="indexOptions" />
+          </TFormField>
+        </TStackItem>
+        <TStackItem :grow="2" basis="0">
+          <TFormField :label="t('opensearch.query')">
+            <TInput
+              v-model="searchText"
+              :placeholder="t('opensearch.queryPlaceholder')"
+              @keyup.enter="runSearch"
+            />
+          </TFormField>
+        </TStackItem>
+        <TStackItem :grow="0.8" basis="0" min-width="8rem">
+          <TFormField :label="t('common.size')">
+            <TSelect v-model="searchSize" :options="sizeOptions" />
+          </TFormField>
+        </TStackItem>
         <TButton variant="solid" :loading="searching" @click="runSearch">{{ t('common.search') }}</TButton>
       </TStack>
     </TCard>
@@ -223,12 +232,14 @@ watch(() => props.name, load);
       />
 
       <TTable v-else :columns="hitColumns" :rows="hitRows" :aria-label="t('opensearch.hitsAriaLabel')">
+        <!-- No `size`: TTable already renders cells at `--tree-font-size-sm`
+             (0.8125rem), which is what the hand-set 0.78rem was approximating. -->
         <template #cell-index="{ row }">
-          <TText family="mono" style="font-size: 0.78rem;">{{ row.index }}</TText>
+          <TText family="mono">{{ row.index }}</TText>
         </template>
 
         <template #cell-id="{ row }">
-          <TText family="mono" style="font-size: 0.78rem;">{{ row.id }}</TText>
+          <TText family="mono">{{ row.id }}</TText>
         </template>
 
         <template #cell-source="{ row }">

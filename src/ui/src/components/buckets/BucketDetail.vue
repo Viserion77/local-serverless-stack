@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch } from 'vue';
 import {
   TButton, TBadge, TStack, TSpinner, TAlert, TCard, TTable, TEmptyState,
-  TGrid, TStat, TInput, TText, TIcon, TLink, useToast,
+  TGrid, TStat, TInput, TFormField, TTextarea, TText, TIcon, TLink, useToast,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { BucketSnapshot, BucketObject } from '../../services/api';
@@ -159,7 +159,17 @@ watch(() => props.bucketName, () => {
         <TText size="lg" weight="semibold">{{ bucketName }}</TText>
         <TBadge v-if="bucket?.versioning" tone="info" variant="soft">{{ t('buckets.versioning') }}</TBadge>
       </TStack>
-      <TButton size="sm" variant="ghost" :loading="loadingObjects" @click="loadObjects()">
+      <!-- `loading-label` is not decoration: TButton renders the spinner's
+           label as the button's `aria-label`-equivalent text, and its default
+           is the English literal "Loading". Without this the busy state of a
+           trilingual UI announces in English (rule 6). -->
+      <TButton
+        size="sm"
+        variant="ghost"
+        :loading="loadingObjects"
+        :loading-label="t('common.loading')"
+        @click="loadObjects()"
+      >
         {{ t('common.refresh') }}
       </TButton>
     </TStack>
@@ -193,21 +203,39 @@ watch(() => props.bucketName, () => {
           <TText weight="semibold">{{ t('buckets.uploadTitle') }}</TText>
         </template>
         <TStack direction="vertical" gap="0.5rem">
-          <TInput v-model="uploadKey" placeholder="object/key.txt" :label="t('buckets.keyLabel')" />
-          <TInput
-            v-model="uploadContentType"
-            placeholder="text/plain"
-            :label="t('buckets.contentTypeLabel')"
-          />
-          <TText as="label" tone="muted" size="sm">{{ t('buckets.bodyLabel') }}</TText>
-          <textarea
-            v-model="uploadBody"
-            rows="4"
-            style="width: 100%; font-family: var(--tree-font-mono, monospace); padding: 0.5rem;"
-            :placeholder="t('buckets.bodyPlaceholder')"
-          ></textarea>
+          <!-- TInput/TTextarea carry no `label` prop: the label belongs to
+               TFormField. (The key/content-type fields used to pass `:label` to
+               TInput — it fell through to `$attrs`, landed on the inner
+               `<input>` as a dead `label` attribute and rendered nothing.)
+               The `id`/`html-for` pairs these three fields used to repeat by
+               hand are gone: TFormField now mints the id and provides it to the
+               nested control, which puts it on the real `<input>`/`<textarea>`,
+               so the `<label for>` cannot drift from what it labels. -->
+          <TFormField :label="t('buckets.keyLabel')">
+            <TInput v-model="uploadKey" placeholder="object/key.txt" />
+          </TFormField>
+          <TFormField :label="t('buckets.contentTypeLabel')">
+            <TInput v-model="uploadContentType" placeholder="text/plain" />
+          </TFormField>
+          <!-- The object body is machine text, so it gets the mono axis from
+               the component rather than a local class: `family` lands on the
+               `<textarea>` itself, not on the `<label>` that wraps it (that
+               wrapper also hosts the loading spinner). -->
+          <TFormField :label="t('buckets.bodyLabel')">
+            <TTextarea
+              v-model="uploadBody"
+              family="mono"
+              :rows="4"
+              :placeholder="t('buckets.bodyPlaceholder')"
+            />
+          </TFormField>
           <TStack direction="horizontal" justify="flex-end">
-            <TButton size="sm" :loading="uploading" @click="uploadObject">
+            <TButton
+              size="sm"
+              :loading="uploading"
+              :loading-label="t('common.loading')"
+              @click="uploadObject"
+            >
               {{ t('buckets.upload') }}
             </TButton>
           </TStack>
@@ -250,7 +278,8 @@ watch(() => props.bucketName, () => {
           :aria-label="t('buckets.objectsTableLabel')"
         >
           <template #cell-key="{ row }">
-            <TLink :href="previewUrl(String(row.key))" external style="font-weight: 500;">
+            <!-- No `weight`: TLink already defaults to `medium` (500). -->
+            <TLink :href="previewUrl(String(row.key))" external>
               {{ row.key }}
             </TLink>
           </template>
@@ -262,18 +291,22 @@ watch(() => props.bucketName, () => {
           </template>
           <template #cell-actions="{ row }">
             <TStack direction="horizontal" gap="0.25rem" justify="flex-end">
-              <a
+              <!-- `as="a"` instead of an <a> wrapping a <button>: that nesting
+                   is invalid HTML and gave the anchor two focus stops. TButton
+                   already sets `text-decoration: none`. -->
+              <TButton
+                as="a"
                 :href="downloadUrl(String(row.key))"
                 target="_blank"
                 rel="noopener noreferrer"
-                style="text-decoration: none;"
+                size="sm"
+                variant="ghost"
               >
-                <TButton size="sm" variant="ghost">{{ t('buckets.download') }}</TButton>
-              </a>
+                {{ t('buckets.download') }}
+              </TButton>
               <TButton
                 size="sm"
                 variant="ghost"
-                tone="danger"
                 @click="deleteObject(String(row.key))"
               >
                 {{ t('common.delete') }}

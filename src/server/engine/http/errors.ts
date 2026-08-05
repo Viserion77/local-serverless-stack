@@ -57,7 +57,7 @@ export function notImplemented(service: string, operation: string): AwsError {
   return new AwsError(
     'NotImplemented',
     `${service}.${operation} is not implemented by the LSS self engine — ` +
-      'see docs/SELF_ENGINE.md#coverage, or set selfEngine.fallbackEndpoint to forward it to a LocalStack instance',
+      'see docs/SELF_ENGINE.md#coverage, or set selfEngine.fallbackEndpoint to forward it to another AWS-compatible endpoint',
     { status: 400 },
   );
 }
