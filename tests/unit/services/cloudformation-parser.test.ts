@@ -1568,7 +1568,9 @@ describe('fixtures (end-to-end)', () => {
     const resources = parser.parse(template);
 
     // The Serverless deployment bucket must be dropped.
-    expect(resources.some((r) => r.logicalId === 'ServerlessDeploymentBucket')).toBe(false);
+    // `in` rather than a cast: an event-source mapping legitimately has no
+    // logicalId, so the union is right and the test has to narrow.
+    expect(resources.some((r) => 'logicalId' in r && r.logicalId === 'ServerlessDeploymentBucket')).toBe(false);
 
     const lambdas = resources.filter((r) => r.type === 'lambda') as LambdaResource[];
     expect(lambdas).toHaveLength(9);

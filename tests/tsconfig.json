@@ -1,9 +1,29 @@
+// The test suite's own TypeScript project — and, since it is not in any build,
+// the only thing that ever typechecks the tests. ts-jest transpiles file by
+// file, so a type error here never fails a run; it only shows up as red in the
+// editor, which is where ~45 of them had quietly accumulated. This project is
+// in the `validate: pre-prod` gate now, so they cannot come back.
+//
+// Two options exist for the tests and not for the source, each load-bearing:
+//   lib DOM   tests/unit/ui exercises the dashboard's i18n, which reads
+//             window/navigator/document — real browser code under test.
+//   allowJs   bin/cli.js and bin/i18n.js are plain CommonJS with no
+//             declarations and their tests require them directly. Inferred
+//             types are exactly what those tests want; `checkJs` stays off so
+//             this project never becomes a second opinion about the CLI itself.
 {
   "extends": "../tsconfig.json",
   "compilerOptions": {
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "types": ["jest", "node"]
+    "lib": ["ES2022", "DOM"],
+    "types": ["jest", "node"],
+    "allowJs": true,
+    "checkJs": false,
+    "noEmit": true,
+    "declaration": false,
+    "declarationMap": false,
+    "sourceMap": false
   },
   "include": [
     "**/*.ts"

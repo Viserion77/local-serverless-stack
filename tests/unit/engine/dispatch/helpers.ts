@@ -95,9 +95,23 @@ export function sleep(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-export async function waitFor(condition: () => boolean, timeoutMs = 3000, label = 'condition'): Promise<void> {
+/**
+ * Poll `condition` until it holds, or fail with `label` at the deadline.
+ *
+ * The predicate may be async, and it MUST be awaited: several callers pass one
+ * that reads the queue counters over the wire. Before this signature they were
+ * typed `() => boolean`, so `!condition()` negated a *Promise* — always truthy,
+ * so the loop exited on the first check and the wait quietly waited for
+ * nothing. The assertions that followed then read whatever state happened to
+ * exist. The type error was the symptom; this is the bug it was hiding.
+ */
+export async function waitFor(
+  condition: () => boolean | Promise<boolean>,
+  timeoutMs = 3000,
+  label = 'condition',
+): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!condition()) {
+  while (!(await condition())) {
     if (Date.now() > deadline) throw new Error(`timed out waiting for ${label}`);
     await sleep(10);
   }

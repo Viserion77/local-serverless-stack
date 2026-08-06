@@ -375,7 +375,7 @@ Both files should contain valid JSON with the following optional properties:
     `servicePackaging[*].packageArgs`.
   - Example: `["--param=custom-stage=offline"]`
 
-- **packageEnv** (object, default: `{}`)
+- <a id="packageenv-write-only"></a>**packageEnv** (object, default: `{}`)
   - Extra environment variables merged over the orchestrator's env for every package
     child process (per-service `packageEnv` wins on key collisions). Useful to inject
     dummy credentials for offline packaging, e.g. `{ "AWS_ACCESS_KEY_ID": "test" }`.
@@ -385,15 +385,36 @@ Both files should contain valid JSON with the following optional properties:
     [`packageCommand` allowlist](#packagecommand-allowlist) let through — which would
     make that allowlist decorative. Refused with a `400` naming the key:
     `NODE_OPTIONS` (`--require /tmp/x.js`), `NODE_REPL_EXTERNAL_MODULE`,
-    `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES` and
-    `DYLD_LIBRARY_PATH`. Matching is case-insensitive, because env lookup is
+    `LD_PRELOAD`, `LD_AUDIT`, `LD_LIBRARY_PATH`, `DYLD_INSERT_LIBRARIES`,
+    `DYLD_LIBRARY_PATH`, plus `PATH` and `NODE_PATH` — the child's own `PATH` is what
+    `execvp(3)` uses to decide *which* file named `npm` runs, so setting it is naming
+    an arbitrary binary. Matching is case-insensitive, because env lookup is
     case-insensitive on Windows and `node_options` would otherwise be the same bypass
     one keystroke away. The same check applies to a per-service `packageEnv` under
     `servicePackaging`. Everything a build legitimately needs — credentials, `AWS_*`,
     `SLS_*`, `NODE_ENV`, your own flags — is untouched, and like `packageCommand` the
     check guards the API rather than a hand-edited file.
   - `GET /api/config` still reports only the **key names** of both maps; values never
-    leave the process.
+    leave the process. **This is why writing the map through `PUT /api/config` is a
+    patch per variable rather than a replacement**: a client that was only ever handed
+    `packageEnvKeys` cannot resend the values it never received, so a
+    replace-the-whole-map write would delete every variable it could not see the
+    moment it saved one. The spelling, global and per-service alike:
+
+    | Patch | Effect |
+    |---|---|
+    | `{"packageEnv": {"A": "v"}}` | sets/replaces `A`; `B`, `C`, … keep their values |
+    | `{"packageEnv": {"A": null}}` | removes `A` only |
+    | `{"packageEnv": null}` | deletes the whole block (the ordinary top-level `null`) |
+    | `{"servicePackaging": {"access": {"packageEnv": {"A": null}}}}` | same, one level down |
+
+    A map left empty by a removal is dropped instead of being written as `{}` (and a
+    `servicePackaging` entry left with nothing else goes with it, since an empty entry
+    would shadow a basename-keyed one). The denylist above screens every variable a
+    patch **sets**; *removing* one is always allowed — it only takes capability away,
+    and is the one way to undo a hand-edited `NODE_OPTIONS` from the dashboard. Those
+    three operations — set, replace, remove, none of them needing the current value —
+    are the whole contract a write-only editor needs.
 
 - **servicePackaging** (object, default: `{}`)
   - Per-service packaging overrides. Each key identifies a service by its **directory
@@ -730,7 +751,7 @@ The HTTP surface behind it:
 | Endpoint | What it does |
 |---|---|
 | `GET /api/config` | Full public-safe snapshot: engine kind + endpoint, self-engine block, lambda runtime (with the resolved residency policy), packaging, branding, `configPath`/`projectRoot`, and `envOverrides` (keys currently masked by env vars). Secret **values** never appear: `packageEnv` maps collapse to key names and the `secrets` seed map collapses to a count. |
-| `PUT /api/config` | Persist a partial patch. Scalar/array keys replace; `null` deletes the key (the default returns). Object blocks (`lambdaRuntime`, `selfEngine`, `aossSidecar`, `branding`, …) merge **one level deep** — a partial edit never drops sibling settings like `branding.logo` — and a `null` subkey deletes just that subkey. Nested keys are validated too (`selfEngine.port` must be a port, `lambdaRuntime.execution` must be a known mode, unknown subkeys are rejected). `packageCommand` — global and per-service — must match the [packaging grammar](#packagecommand-allowlist) (runner **and** subcommand, so `npm exec -c '<shell>'` is rejected alongside `/bin/sh`), `packageArgs` is screened for the same runner-redirecting flags, and `packageEnv` must carry no code-injection key, because all three end up as arguments to `spawn()` and this endpoint is unauthenticated. Invalid patches answer `400` with every problem listed in `details` and nothing touches the file. |
+| `PUT /api/config` | Persist a partial patch. Scalar/array keys replace; `null` deletes the key (the default returns). Object blocks (`lambdaRuntime`, `selfEngine`, `aossSidecar`, `branding`, …) merge **one level deep** — a partial edit never drops sibling settings like `branding.logo` — and a `null` subkey deletes just that subkey. Nested keys are validated too (`selfEngine.port` must be a port, `lambdaRuntime.execution` must be a known mode, unknown subkeys are rejected). `packageCommand` — global and per-service — must match the [packaging grammar](#packagecommand-allowlist) (runner **and** subcommand, so `npm exec -c '<shell>'` is rejected alongside `/bin/sh`), `packageArgs` is screened for the same runner-redirecting flags, and `packageEnv` must carry no code-injection key, because all three end up as arguments to `spawn()` and this endpoint is unauthenticated. **`packageEnv` (global and per-service) is the one key that merges *per variable*** — `{"A":"v"}` sets only `A`, `{"A":null}` removes only `A` — because its values are write-only and a client that only ever saw `packageEnvKeys` cannot resend the siblings a replacement would delete; see [`packageEnv`](#packageenv-write-only). Invalid patches answer `400` with every problem listed in `details` and nothing touches the file. |
 | `POST /api/config/reload` | Re-read the config file from disk after a hand edit, without restarting the orchestrator. A file that no longer parses answers `400` and the working in-memory config stays untouched. |
 | `GET /api/config/ports` | Every local port the stack exposes: orchestrator, engine, DynamoDB proxy, plus each registered service's HTTP API and Lambda invoke listeners. Shown on the dashboard Overview. |
 

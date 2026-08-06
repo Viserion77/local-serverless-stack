@@ -36,7 +36,13 @@ const pollError = ref<string | null>(null);
 const deleting = ref<Record<string, boolean>>({});
 const confirmPurgeOpen = ref(false);
 const purging = ref(false);
-const expanded = ref<Record<string, boolean>>({});
+
+// TTable's `expandedRow` holds ONE key, matched against `rowKey` — so the
+// detail is a single-open disclosure now. The old `Record<string, boolean>`
+// could hold several open at once, and every one of them stacked below the
+// whole table instead of next to its row; the `detail` slot is what fixes that,
+// and one-at-a-time is the price of the shape.
+const expandedRow = ref<string | null>(null);
 
 const attrTypeOptions = [
   { value: 'String', label: 'String' },
@@ -59,6 +65,11 @@ const messagesColumns = computed(() => [
 const messagesRows = computed(() =>
   messages.value.map((m, idx) => ({
     __id: idx,
+    // Row identity for `rowKey`/`expandedRow`. SQS always sends a messageId,
+    // but the contract types it optional — the index is the fallback so two
+    // id-less messages never collapse onto the same key (and onto the same
+    // expanded detail).
+    __key: m.messageId || `row-${idx}`,
     __raw: m,
     messageId: m.messageId || '—',
     preview: previewBody(m.body),
@@ -99,8 +110,8 @@ function formatJsonIfPossible(text?: string): string {
   }
 }
 
-function toggleExpanded(id: string) {
-  expanded.value[id] = !expanded.value[id];
+function toggleExpanded(key: string) {
+  expandedRow.value = expandedRow.value === key ? null : key;
 }
 
 async function send() {
@@ -144,6 +155,10 @@ async function poll() {
       waitTimeSeconds: waitTimeSeconds.value,
     });
     messages.value = res.messages;
+    // A new result set is a new set of rows: an expanded key left over from the
+    // previous poll would re-open a detail the user never asked for if the same
+    // message came back.
+    expandedRow.value = null;
     if (!res.messages.length) {
       toast.add({
         title: t('queues.noMessagesAvailable'),
@@ -165,6 +180,7 @@ async function deleteOne(m: SqsMessage) {
   try {
     await api.deleteQueueMessage(props.queue.name, m.receiptHandle);
     messages.value = messages.value.filter(x => x.messageId !== m.messageId);
+    if (expandedRow.value === m.messageId) expandedRow.value = null;
     toast.add({ title: t('queues.messageDeleted'), variant: 'success' });
     emit('refresh');
   } catch (err: any) {
@@ -350,11 +366,12 @@ function copyToClipboard(text: string) {
               {{ t('queues.clearResults') }}
             </TButton>
           </TStack>
-          <!-- `tone` is not a TButton prop in any version — it landed on the
-               DOM node and the destructive intent never rendered. `danger` is
-               the variant TreeUI ships for it, and the one ServicesList
-               already uses for a row-level delete. -->
-          <TButton size="sm" variant="danger" @click="confirmPurgeOpen = true">
+          <!-- `variant="danger"` is deprecated since 0.29: colour was trapped in
+               the shape scale, so it could only ever be a filled red button.
+               `tone` is the orthogonal colour axis now, and it IS a TButton prop
+               — it was not when this was first written, which is why the intent
+               went to the DOM node and never rendered. -->
+          <TButton size="sm" variant="solid" tone="danger" @click="confirmPurgeOpen = true">
             {{ t('queues.purgeQueue') }}
           </TButton>
         </TStack>
@@ -387,10 +404,18 @@ function copyToClipboard(text: string) {
         :description="t('queues.noMessagesLoadedDescription')"
       />
 
+      <!-- `rowActivatable` would be wrong here even though the row does open the
+           detail: the actions column holds real Copy/Delete buttons, and a
+           `<tr role="button">` makes its children presentational — the two
+           buttons would stop being announced. So the row stays a `row`, TTable
+           puts `aria-expanded`/`aria-controls` on it from the `detail` slot, and
+           the in-cell control below is what the user operates. -->
       <TTable
         v-else
         :columns="messagesColumns"
         :rows="messagesRows"
+        row-key="__key"
+        :expanded-row="expandedRow"
         :aria-label="t('queues.receivedMessagesAria')"
       >
         <!-- The row toggle is a disclosure, so it announces `aria-expanded`.
@@ -404,11 +429,11 @@ function copyToClipboard(text: string) {
           <TLink
             href="#"
             underline="none"
-            :aria-expanded="expanded[String((row as any).messageId)] ? 'true' : 'false'"
-            @click.prevent="toggleExpanded(String((row as any).messageId))"
+            :aria-expanded="expandedRow === (row as any).__key ? 'true' : 'false'"
+            @click.prevent="toggleExpanded(String((row as any).__key))"
           >
             <TText family="mono" size="sm">
-              <TIcon :name="expanded[String((row as any).messageId)] ? 'chevron-down' : 'chevron-right'" />
+              <TIcon :name="expandedRow === (row as any).__key ? 'chevron-down' : 'chevron-right'" />
               {{ (row as any).preview }}
             </TText>
           </TLink>
@@ -440,7 +465,8 @@ function copyToClipboard(text: string) {
             </TButton>
             <TButton
               size="sm"
-              variant="danger"
+              variant="solid"
+              tone="danger"
               :loading="deleting[String((row as any).messageId)]"
               @click="deleteOne((row as any).__raw)"
             >
@@ -448,25 +474,21 @@ function copyToClipboard(text: string) {
             </TButton>
           </TStack>
         </template>
-      </TTable>
 
-      <!-- One surface per expanded message. The card body of the enclosing
-           TCard is a grid with its own gap, so the separation the old
-           `padding` + `border-top` provided comes from the layout now. That
-           rule also hardcoded `#e5e7eb` as the fallback of
-           `--tree-color-border` — a token that does not exist (the real one is
-           `--tree-color-border-default`), so the light hex was what actually
-           rendered, dark theme included. -->
-      <template v-for="m in messages" :key="`detail-${m.messageId}`">
-        <TCard v-if="m.messageId && expanded[m.messageId]" variant="soft">
+        <!-- The detail is a `<tr>` adjacent to its own row now, wired to it by
+             `aria-controls`. It used to be a v-for AFTER `</TTable>`, so every
+             expanded body stacked below the whole table, detached from the row
+             that produced it. No TCard around it either: the detail cell already
+             carries the recessed surface and its padding. -->
+        <template #detail="{ row }">
           <TStack direction="vertical" gap="0.5rem">
             <TStack direction="horizontal" gap="0.5rem" wrap>
-              <TBadge tone="neutral" variant="soft">id: {{ m.messageId }}</TBadge>
-              <TBadge v-if="m.md5OfBody" tone="neutral" variant="soft">
-                md5: {{ m.md5OfBody.slice(0, 12) }}…
+              <TBadge tone="neutral" variant="soft">id: {{ (row as any).__raw.messageId }}</TBadge>
+              <TBadge v-if="(row as any).__raw.md5OfBody" tone="neutral" variant="soft">
+                md5: {{ (row as any).__raw.md5OfBody.slice(0, 12) }}…
               </TBadge>
               <TBadge
-                v-for="(v, k) in m.attributes || {}"
+                v-for="(v, k) in (row as any).__raw.attributes || {}"
                 :key="k"
                 tone="info"
                 variant="soft"
@@ -476,34 +498,34 @@ function copyToClipboard(text: string) {
             </TStack>
 
             <TStack
-              v-if="m.messageAttributes && Object.keys(m.messageAttributes).length"
+              v-if="(row as any).__raw.messageAttributes && Object.keys((row as any).__raw.messageAttributes).length"
               direction="vertical"
               gap="0.375rem"
             >
               <TText weight="semibold" size="sm">{{ t('queues.messageAttributes') }}</TText>
               <TStack direction="horizontal" gap="0.375rem" wrap>
                 <TBadge
-                  v-for="(v, k) in m.messageAttributes"
+                  v-for="(v, k) in (row as any).__raw.messageAttributes"
                   :key="`ma-${k}`"
                   tone="success"
                   variant="soft"
                 >
-                  {{ k }} ({{ v.type || 'String' }}): {{ v.value }}
+                  {{ k }} ({{ (v as any).type || 'String' }}): {{ (v as any).value }}
                 </TBadge>
               </TStack>
             </TStack>
 
             <TDivider />
             <TCodeBlock
-              :code="formatJsonIfPossible(m.body)"
+              :code="formatJsonIfPossible((row as any).__raw.body)"
               :label="t('queues.messageBody')"
               max-block-size="24rem"
               wrap
               copyable
             />
           </TStack>
-        </TCard>
-      </template>
+        </template>
+      </TTable>
     </TCard>
 
     <TConfirmDialog

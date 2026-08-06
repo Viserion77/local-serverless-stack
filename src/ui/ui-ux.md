@@ -11,9 +11,9 @@ ficam no documento irmão [`treeUxPatterns.md`](./treeUxPatterns.md). O app cons
 implementar silenciosamente uma versão local dessas lacunas.
 
 > Contexto do repositório: o LSS tem **um** frontend (`src/ui/`). A TreeUI mora em **outro
-> repositório** e é consumida via `@treeui/vue@0.28.0` (`@treeui/tokens@0.28.0`,
-> `@treeui/icons@0.18.0`, `@treeui/utils@0.26.0`) — **atualizado de 0.25.0 → 0.27.0 → 0.28.0 em
-> 2026-08-05**, que por sua vez veio de 0.14.0 em 2026-07-21. A biblioteca expõe **95 componentes** e um catálogo
+> repositório** e é consumida via `@treeui/vue@0.29.0` (`@treeui/icons@0.29.0`,
+> `@treeui/utils@0.29.0`, `@treeui/tokens@0.28.0`) — **atualizado de 0.25.0 → 0.27.0 → 0.28.0 →
+> 0.29.0 entre 2026-08-05 e 06**, que por sua vez veio de 0.14.0 em 2026-07-21. A biblioteca expõe **95 componentes** e um catálogo
 > **Branchline com 364 ícones**. Desde 2026-07-31 esse catálogo é estendido **pelo app**: 64 marcas
 > oficiais de serviços AWS (`aws-*`) entram no mesmo registry via `registerAwsIcons()` — o registry
 > deixou de ser só-TreeUI, o catálogo dela continua sendo (ver regra 3).
@@ -82,18 +82,23 @@ e passa a ser CSS local silencioso, que é exatamente o que a regra 2 proíbe.
 
 | # | Superfície | O que é | Motivo | Responsável | Condição de remoção |
 |---|---|---|---|---|---|
-| 1 | `components/ActivityPanel.vue` — três `style` inline de dimensionamento (`width:100%;height:64px` na área de paralelismo, `min-width:9rem` no rótulo da faixa, `width:100%;height:14px` em cada faixa) | SVG desenhado no produto: área em degraus do paralelismo + uma faixa de spans por serviço | A TreeUI tem `TChart`/`TSparkline`, mas nenhuma primitiva de **faixas em eixo temporal comum**, e nenhum modo `step` de área — uma curva interpolada desenharia paralelismo que nunca existiu | agente do dashboard LSS | Entrega do **TREEUX-003** |
-| 2 | `components/secrets/SecretsList.vue` e `components/opensearch/OpenSearchCollectionsList.vue` — `style="cursor:pointer; text-decoration:underline dotted; …"` na célula de nome | Afordância de "a linha é clicável" numa tabela cuja linha navega | `TTable` não tem `rowHref`/`rowTo`/`@row-activate`. Toda alternativa local é pior: um `<TLink href="#">` mente sobre o destino (ctrl-clique abre `#`) e um `role="button"` à mão é reimplementar o componente | agente do dashboard LSS | Entrega do **TREEUX-004**. Enquanto isso, as duas telas mantêm um `TButton` real na coluna de ações — o teclado nunca fica sem saída |
-| 3 | `pages/OverviewPage.vue` — `<style scoped> .overview-hero { background: linear-gradient(…) }` | Gradiente decorativo do hero da Overview | Último resquício do CSS pré-migração. O `THero` do 0.27 é candidato, mas é uma **banda `<section>` sem borda de card** e o hero atual é um `TCard variant="outline"` — trocar muda aparência e semântica de container | humano (decisão de design, não de refactor) | Decisão explícita de adotar `THero` (ou de manter o `TCard` e pedir um eixo de fundo decorativo à TreeUI) |
+| 1 | `pages/OverviewPage.vue` — `<style scoped> .overview-hero { background: linear-gradient(…) }` | Gradiente decorativo do hero da Overview | Último resquício do CSS pré-migração. O `THero` do 0.27 é candidato, mas é uma **banda `<section>` sem borda de card** e o hero atual é um `TCard variant="outline"` — trocar muda aparência e semântica de container | humano (decisão de design, não de refactor) | Decisão explícita de adotar `THero` (ou de manter o `TCard` e pedir um eixo de fundo decorativo à TreeUI) |
 
-Aprovadas em 2026-08-05, depois de confirmar **nos `.d.ts` instalados** que a versão em uso não
-expressa nenhuma delas. **Não são precedente**: são as três exceções vivas, cada uma amarrada a um
-item do backlog, e **nenhuma superfície nova pode copiar esses padrões**. Fora desta tabela o
-`src/ui/` tem **zero** `style` inline e **zero** bloco `<style>`.
+**É a única exceção viva**, e ela é uma decisão de design pendente, não uma lacuna de API. Fora
+desta linha o `src/ui/` tem **zero** `style` inline e **zero** bloco `<style>` — o produto não
+escreve mais CSS.
 
-*Saiu da tabela em 2026-08-05:* o `style="word-break:break-all"` do ARN em `SecretsList`, com a
-entrega do `TText wrap="anywhere"` na `0.28.0` (TREEUX-006). Uma exceção sai daqui quando a API
-chega — é o teste de que a tabela é um compromisso e não um depósito.
+*Saíram da tabela:*
+
+- **2026-08-05** — `style="word-break:break-all"` no ARN (`SecretsList`), com o `TText
+  wrap="anywhere"` da `0.28.0` (TREEUX-006).
+- **2026-08-06** — os **três** `style` de dimensionamento do SVG do `ActivityPanel`, com o
+  `TSpanLanes` e o `TChart interpolation="step"` da `0.29.0` (TREEUX-003); e os **dois**
+  `style="cursor:pointer;…"` de afordância de linha (`SecretsList`,
+  `OpenSearchCollectionsList`), com o `rowTo`/`rowActivatable` da `0.29.0` (TREEUX-004).
+
+Uma exceção sai daqui quando a API chega — em três rodadas a tabela foi de quatro linhas a uma, e
+nenhuma saiu por desistência. É o teste de que ela é um compromisso e não um depósito.
 
 ### 3. Ícones de interface e marcas têm fontes diferentes
 
@@ -370,6 +375,43 @@ Segunda rodada no mesmo dia. A 0.28.0 trouxe as correções dos dois componentes
 **Placar do CSS local nas duas rodadas:** 79 `style` inline em 18 arquivos → **5 em 3 arquivos**,
 todos na tabela de exceções da regra 2; um `<style scoped>`, também na tabela; e zero classe de
 tipografia no produto.
+
+## Adoção — `@treeui/vue` 0.29.0: o CSS local acabou (2026-08-06)
+
+A TreeUI esvaziou a fila inteira numa versão. Adotamos tudo, e o resultado é que **o produto não
+escreve mais CSS**: das quatro exceções da regra 2, sobrou uma, e ela é decisão de design, não
+lacuna de API.
+
+- **`packageEnv` passou a ser editável pelo dashboard — e isso exigiu servidor.** O
+  `TKeyValueEditor mode="secret"` faz a metade da tela (a linha mostra chave + estado `•••`, nunca
+  o valor, que continua sem sair do processo). A outra metade era nossa: o `PUT /api/config` tratava
+  `packageEnv` como substituição total, o que é incompatível com write-only — o cliente só recebe
+  `packageEnvKeys`, então não tem como reenviar o mapa inteiro. Agora é **patch por variável**
+  (string define, `null` remove, `null` no topo apaga o bloco), global e por serviço, com o screen
+  de chaves de injeção (`NODE_OPTIONS`, `LD_PRELOAD`, …) intacto e testado contra variação de caixa.
+- **O `ActivityPanel` deixou de desenhar SVG.** `TChart interpolation="step"` para a área de
+  paralelismo — e com `step` de verdade o código parou de emitir dois pontos por bucket para fingir
+  o degrau — e `TSpanLanes` para as faixas. O marcador não-cromático de falha melhorou no caminho: o
+  traço antigo era vermelho sobre barra vermelha; agora é um ícone em `currentColor`.
+- **A linha das tabelas virou alvo de verdade.** `rowTo` onde a ativação é rota (DynamoDB,
+  OpenSearch) e `rowActivatable` + `@row-activate` onde é modal (Secrets, explorador de itens) — a
+  distinção que quatro telas tinham chutado. E o detalhe de mensagem das Filas virou um `<tr>`
+  adjacente à sua linha, em vez de empilhar abaixo da tabela inteira.
+- **Os botões destrutivos quietos voltaram a ser quietos.** `TButton tone` chegou ortogonal ao
+  `variant`, `variant="danger"` está depreciado, e os dois sítios que tinham `ghost tone="danger"`
+  escrito à mão com a prop morta agora têm de verdade.
+- **`TSelect` passou a adotar o id do `TFormField`**, o que corrigiu três `<label for>` órfãos **sem
+  uma linha nossa** — a regressão que reportamos na rodada anterior.
+- **`strictTemplates` continua desligado, e agora com números de duas versões.** 0.28.0 dava 89
+  erros; 0.29.0 dá **50**. Dois dos três grupos fecharam. Sobram 33 do `modelValue` largo (repro
+  entregue à TreeUI) e 17 de atributo HTML *do elemento* — `min` num `<input type="number">`, 15
+  vezes. Não vamos tirar `min` de campo numérico para satisfazer typecheck.
+- Gate `validate: pre-prod` verde: lint **0 erros**, os quatro typechecks, `vue-tsc`, **2662 testes /
+  100% de cobertura**, build.
+
+**Três rodadas, um placar:** 79 `style` inline em 18 arquivos → **zero**; um `<style scoped>`
+decorativo; nenhuma classe de tipografia; e um backlog que foi de 10 itens a 4, sem nenhum fechado
+por desistência.
 
 ## Fluxo para novas solicitações
 

@@ -255,10 +255,21 @@ export interface ActivitySnapshot {
     lastInvokedAt?: number;
     invocations: number;
     errors: number;
+    // How many functions the service declares…
     functions: number;
+    // …and which of them are actually loaded in the live worker. A warm worker
+    // is a process; a loaded function is a handler inside it.
+    loadedFunctions: string[];
     executionMode?: string;
   }[];
-  residency: { warm: number; maxWarmWorkers: number; lazy: boolean; idleTimeoutMs: number };
+  residency: {
+    warm: number;
+    maxWarmWorkers: number;
+    lazy: boolean;
+    idleTimeoutMs: number;
+    loadedFunctions: number;
+    registeredFunctions: number;
+  };
   host: {
     rssBytes: number;
     heapUsedBytes: number;
@@ -410,6 +421,17 @@ export interface LssConfigUpdate {
   // top-level null deletes the key instead of baking `"packageArgs": []` into
   // the file the human reviews. Same convention as packageCommand above.
   packageArgs?: string[] | null;
+  // The one key written as a PATCH instead of a replace, and the reason is that
+  // its values are write-only: GET /api/config reports `packageEnvKeys`, the
+  // NAMES alone, so a client editing one variable has nothing to resend for its
+  // siblings and a wholesale replace would delete secrets it was never shown.
+  // A string sets or replaces one variable, `null` REMOVES that variable (here
+  // null is a value with a meaning, not the top-level "delete the block"
+  // spelling), and an unnamed variable is left untouched. The server drops the
+  // whole key once the merge empties the map, so a top-level null is only
+  // needed to wipe it in one shot. Values are refused for loader/interpreter
+  // names (NODE_OPTIONS, LD_PRELOAD, …) — a 400 the form surfaces as-is.
+  packageEnv?: Record<string, string | null> | null;
   packageTimeoutMs?: number;
   lambdaRuntime?: {
     enabled?: boolean;

@@ -12,7 +12,21 @@
 
 const I18N_PATH = require.resolve('../../../bin/i18n.js');
 
-type I18n = typeof import('../../../bin/i18n.js');
+// Deliberately NOT `typeof import(...)`: inferred from the JS, `MESSAGES` is an
+// object with 130-odd literal keys, and these tests treat the catalogues as
+// DATA — they add a temporary key, index by a locale computed at runtime and
+// walk every key by name. Describing the shape the tests actually rely on keeps
+// them typed without pretending the key set is part of the CLI's contract.
+interface I18n {
+  LOCALES: string[];
+  DEFAULT_LOCALE: string;
+  MESSAGES: Record<string, Record<string, string>>;
+  matchLocale: (tag?: string | null) => string | null;
+  detectLocale: (env?: Record<string, string | undefined>) => string;
+  setLocale: (locale: string) => void;
+  getLocale: () => string;
+  t: (key: string, params?: Record<string, string | number>) => string;
+}
 
 function loadI18n(env: Record<string, string | undefined> = {}): I18n {
   for (const [key, value] of Object.entries(env)) {

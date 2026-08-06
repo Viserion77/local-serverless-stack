@@ -53,6 +53,28 @@ const totals = computed(() => ({
   ).size,
 }));
 
+// The row IS the link (TTable `rowTo`, 0.29): a real <a> in the first cell, so
+// ctrl/middle-click, "open in new tab" and the status-bar URL work — none of
+// which the previous `cursor:pointer` text did. Every collection in this list
+// exists, so every row has a destination.
+//
+// Read from the shipped 0.29 CSS rather than from the prop's doc comment: the
+// clickable area is the FIRST CELL, not the whole row. The overlay
+// (`.t-table__row-link::after`, `inset:0`) is contained by that first <td>,
+// because `.t-table__row.is-linked .t-table__cell` is `position:relative`, while
+// `cursor:pointer` sits on the <tr>. The mismatch is TreeUI's to fix; widening
+// the hit area here would mean local CSS, which rule 2 forbids.
+function rowTo(row: Record<string, unknown>): string {
+  return `/opensearch/${encodeURIComponent(String(row.name))}`;
+}
+
+// Required alongside `rowTo`: without it the link's accessible name is the
+// whole row text (name, service, endpoint), repeated once per row. It runs per
+// render, so t() follows a language switch.
+function rowLabel(row: Record<string, unknown>): string {
+  return t('opensearch.openCollectionLabel', { name: String(row.name) });
+}
+
 async function load() {
   try {
     const [list, owners] = await Promise.all([
@@ -141,19 +163,21 @@ onBeforeUnmount(() => {
         </template>
       </TEmptyState>
 
-      <TTable v-else :columns="columns" :rows="filteredRows" :aria-label="t('opensearch.listTitle')">
+      <TTable
+        v-else
+        :columns="columns"
+        :rows="filteredRows"
+        row-key="name"
+        :row-to="rowTo"
+        :row-label="rowLabel"
+        :aria-label="t('opensearch.listTitle')"
+      >
         <template #cell-name="{ row }">
-          <!-- Left as-is on purpose: this is row activation, and TTable has no
-               row-activation API (no `rowHref`, no `@row-activate`). Any local
-               fix would be a hand-rolled button/role — the gap belongs to
-               TreeUI, so the interim style stays until it lands there. -->
-          <TText
-            weight="semibold"
-            style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;"
-            @click="emit('open', String(row.name))"
-          >
-            {{ row.name }}
-          </TText>
+          <!-- Plain text: TTable wraps this cell in the row link itself, so the
+               affordance is the row's (cursor, hover, focus ring) and the
+               hand-rolled `cursor:pointer` + dotted underline goes with it.
+               This cell is also the clickable area — see `rowTo`. -->
+          <TText weight="semibold">{{ row.name }}</TText>
         </template>
 
         <template #cell-service="{ row }">

@@ -168,6 +168,27 @@ describe('PUT /api/config', () => {
     expect(res.body.config.serverPort).toBe(14566);
   });
 
+  // packageEnv is edited write-only: the snapshot this router hands out carries
+  // key NAMES only, so the dashboard sends a per-variable patch (a string sets,
+  // null removes) and the route must forward it untouched — including the
+  // nulls, which JSON.stringify keeps but an "omit empty" body cleanup would
+  // eat, turning a removal into a no-op.
+  it('forwards a per-variable packageEnv patch verbatim and still answers with key names only', async () => {
+    const cm = stub({ raw: { packageEnv: { KEPT: 'still-secret', ADDED: 'new-secret' } } });
+    const update = jest.spyOn(cm, 'updateConfig').mockReturnValue({
+      path: '/abs/lss.config.json',
+      restartRequired: [],
+      envOverridden: [],
+    });
+    const patch = { packageEnv: { ADDED: 'new-secret', GONE: null } };
+    const res = await request(appWith()).put('/api/config').send(patch);
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith(patch);
+    expect(res.body.config.packageEnvKeys).toEqual(['KEPT', 'ADDED']);
+    // The value just written comes straight back out — and must not.
+    expect(JSON.stringify(res.body)).not.toContain('new-secret');
+  });
+
   it('answers 400 with every detail on a validation error', async () => {
     const cm = stub();
     jest.spyOn(cm, 'updateConfig').mockImplementation(() => {

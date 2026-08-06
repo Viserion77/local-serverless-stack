@@ -82,6 +82,13 @@ jobs:
       - name: Check TypeScript (server)
         run: npx tsc --project src/server/tsconfig.json --noEmit
 
+      # The test suite is TypeScript too, and it was the only TypeScript nobody
+      # checked: ts-jest transpiles per file (a type error never fails a run)
+      # and every src/ project excludes tests/. That blind spot had grown ~45
+      # errors, one of which hid a helper whose wait did not wait.
+      - name: Check TypeScript (tests)
+        run: npx tsc --project tests/tsconfig.json --noEmit
+
   build:
     name: Build Check
     runs-on: ubuntu-latest

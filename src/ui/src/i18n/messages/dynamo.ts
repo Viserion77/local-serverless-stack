@@ -33,6 +33,9 @@ export const dynamo: AreaMessages = {
     seededItemOther: '{count} seeded items',
     noSeed: 'no seed',
     explore: 'Explore',
+    // Accessible name of the row link (TTable `rowLabel`). Without it every row
+    // link is announced as the whole row text — name, key, status, counters.
+    openTableLabel: 'Open table {name}',
     registerToProvision: 'Register service to provision',
     loadTablesFailed: 'Failed to load DynamoDB tables',
 
@@ -195,6 +198,7 @@ export const dynamo: AreaMessages = {
     seededItemOther: '{count} itens no seed',
     noSeed: 'sem seed',
     explore: 'Explorar',
+    openTableLabel: 'Abrir a tabela {name}',
     registerToProvision: 'Registre o serviço para provisionar',
     loadTablesFailed: 'Falha ao carregar as tabelas DynamoDB',
 
@@ -357,6 +361,7 @@ export const dynamo: AreaMessages = {
     seededItemOther: '{count} elementos en el seed',
     noSeed: 'sin seed',
     explore: 'Explorar',
+    openTableLabel: 'Abrir la tabla {name}',
     registerToProvision: 'Registra el servicio para aprovisionar',
     loadTablesFailed: 'No se pudieron cargar las tablas de DynamoDB',
 

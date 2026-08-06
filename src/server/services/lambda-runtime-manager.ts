@@ -60,6 +60,11 @@ export interface RuntimeInfo {
   status: RuntimeStatus;
   // False when no worker process is alive yet (lazy start or idle unload).
   warm?: boolean;
+  // Which of this service's functions are actually IN the live worker's module
+  // cache, newest-loaded last. A warm worker is a process, not a handler: a
+  // service with 60 functions that has served one of them holds exactly one.
+  // Empty whenever the worker is gone — the cache dies with the process.
+  loadedFunctions: string[];
   executionMode?: LambdaExecutionMode;
   resolvedMode?: 'artifact' | 'source';
   handlerRoot?: string;
@@ -96,6 +101,10 @@ interface ServiceRuntime {
   history: InvocationRecord[];
   // Set while a worker is alive and idleTimeoutMs is configured.
   idleTimer?: NodeJS.Timeout;
+  // Mirror of the live worker's handler cache: the functions whose module graph
+  // is loaded in THIS process. Insertion-ordered, and dropped whenever the
+  // worker is — the cache is process memory, so a restart empties it.
+  loaded: Set<string>;
 }
 
 const HISTORY_LIMIT = 50;
@@ -138,6 +147,9 @@ export class LambdaRuntimeManager {
       restartCount: 0,
       lastRestartAt: 0,
       history: this.runtimes.get(entry.name)?.history ?? [],
+      // Deliberately NOT carried over from the previous runtime: syncService
+      // stops the old worker, and its module cache went with it.
+      loaded: new Set(),
     };
     this.runtimes.set(entry.name, runtime);
 
@@ -167,6 +179,7 @@ export class LambdaRuntimeManager {
     this.clearIdleTimer(runtime);
     const worker = runtime.worker;
     runtime.worker = undefined;
+    runtime.loaded.clear();
     if (worker) {
       worker.removeAllListeners();
       worker.kill('SIGTERM');
@@ -201,6 +214,7 @@ export class LambdaRuntimeManager {
     const worker = runtime.worker;
     runtime.worker = undefined;
     runtime.status = 'idle';
+    runtime.loaded.clear();
     worker?.removeAllListeners();
     worker?.kill('SIGTERM');
     console.log(`💤 Lambda runtime for "${runtime.entry.name}" unloaded (${reason})`);
@@ -252,13 +266,14 @@ export class LambdaRuntimeManager {
   getRuntimeInfo(serviceName: string): RuntimeInfo {
     const runtime = this.runtimes.get(serviceName);
     if (!runtime) {
-      return { status: 'stopped', invocations: 0, errors: 0 };
+      return { status: 'stopped', invocations: 0, errors: 0, loadedFunctions: [] };
     }
     return {
       // `idle` means "ready, not forked yet" — every consumer treats it as
       // online; `warm` is the field that distinguishes the two.
       status: runtime.status === 'idle' ? 'online' : runtime.status,
       warm: Boolean(runtime.worker),
+      loadedFunctions: [...runtime.loaded],
       executionMode: runtime.executionMode,
       resolvedMode: runtime.resolvedMode,
       handlerRoot: runtime.handlerRoot,
@@ -428,7 +443,7 @@ export class LambdaRuntimeManager {
       if (text) console.error(`[${runtime.entry.name}:worker] ${text}`);
     });
 
-    worker.on('message', (msg: { type?: string; invokeId?: string } & Partial<InvokeResult> & { error?: { errorType: string; errorMessage: string; trace?: string[] } }) => {
+    worker.on('message', (msg: { type?: string; invokeId?: string; loadedFunction?: string } & Partial<InvokeResult> & { error?: { errorType: string; errorMessage: string; trace?: string[] } }) => {
       if (msg?.type === 'ready') {
         runtime.status = 'online';
         runtime.startedAt = Date.now();
@@ -441,6 +456,11 @@ export class LambdaRuntimeManager {
         return;
       }
       if (msg?.type === 'result' && msg.invokeId) {
+        // Recorded before the pending lookup: the handler is in that process's
+        // cache whether or not anyone is still waiting for this invocation.
+        if (msg.loadedFunction && runtime.worker === worker) {
+          runtime.loaded.add(msg.loadedFunction);
+        }
         const pending = runtime.pending.get(msg.invokeId);
         if (!pending) return;
         runtime.pending.delete(msg.invokeId);
@@ -460,6 +480,7 @@ export class LambdaRuntimeManager {
     worker.on('exit', (code) => {
       if (runtime.worker !== worker) return; // superseded by a restart/stop
       runtime.worker = undefined;
+      runtime.loaded.clear();
       for (const [, pending] of runtime.pending) {
         clearTimeout(pending.timer);
         pending.resolve(this.errorResult('RuntimeCrashed', `Lambda worker exited with code ${code}`, 0));

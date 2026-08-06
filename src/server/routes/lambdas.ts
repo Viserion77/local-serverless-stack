@@ -57,6 +57,12 @@ router.get('/activity', (req: Request, res: Response) => {
 
   // One row per registered service: a worker is a whole OS process, so this is
   // the unit that actually costs memory — not the function count.
+  //
+  // `loadedFunctions` is the other half of the question, and the one the
+  // service row cannot answer: a worker is one process serving many functions,
+  // each loaded on ITS first invocation. "billing-service is warm" does not say
+  // whether that is one handler or sixty, nor WHICH — and which is what an
+  // operator debugging a silent lambda is actually looking for.
   const workers = FunctionRegistry.getInstance().listServices().map(service => {
     const info = runtimeManager.getRuntimeInfo(service.name);
     return {
@@ -69,6 +75,7 @@ router.get('/activity', (req: Request, res: Response) => {
       invocations: info.invocations,
       errors: info.errors,
       functions: service.functions.length,
+      loadedFunctions: info.loadedFunctions ?? [],
       executionMode: info.resolvedMode,
     };
   });
@@ -84,6 +91,11 @@ router.get('/activity', (req: Request, res: Response) => {
       maxWarmWorkers: cm.getLambdaMaxWarmWorkers(),
       lazy: cm.isLambdaRuntimeLazy(),
       idleTimeoutMs: cm.getLambdaIdleTimeoutMs(),
+      // Handlers resident across every live worker, and how many exist in
+      // total. The gap between them is the point of lazy loading: 3 of 1024
+      // means the stack is paying for three.
+      loadedFunctions: workers.reduce((sum, w) => sum + w.loadedFunctions.length, 0),
+      registeredFunctions: workers.reduce((sum, w) => sum + w.functions, 0),
     },
     host: {
       // Resident set of the orchestrator process — with in-process emulation

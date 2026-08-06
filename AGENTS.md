@@ -65,6 +65,7 @@ npm run lint \
   && npx tsc --noEmit -p src/server/tsconfig.json \
   && npx tsc --noEmit -p src/client/tsconfig.json \
   && npx tsc --noEmit -p src/mcp/tsconfig.json \
+  && npx tsc --noEmit -p tests/tsconfig.json \
   && (cd src/ui && npx vue-tsc --noEmit) \
   && npm run test:coverage \
   && npm run build
@@ -72,6 +73,11 @@ npm run lint \
 
 Running only `jest` + `server:build` is **not** sufficient — it misses lint, `vue-tsc`, and the
 UI/client/MCP builds.
+
+**`tests/tsconfig.json` is part of the gate.** ts-jest transpiles file by file, so a type error in a
+test never fails a run, and every `src/` project excludes `tests/` — which made the suite the only
+TypeScript nobody checked. It had accumulated ~45 errors, invisible to CI and red in the editor, one
+of them hiding a `waitFor()` helper whose wait returned immediately. Keep the tests typechecking.
 
 ### 3. 100% coverage, globally
 

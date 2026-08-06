@@ -44,15 +44,34 @@ const activeTopLevel = computed(() => {
 // slot drawing a `TIcon check`, which was the local stand-in for state the
 // item could not express.
 //
-// The theme row leaves `selected` UNDEFINED on purpose: it is an action, not a
-// member of that group, and the component keys the role off `!== undefined` —
-// even `false` would promote it to a radio item with an "unchecked" reading.
+// The mark is BACK on the selected row, but as the item's own `icon` (0.29) —
+// and that is a different thing from the slot that was removed. What blocked it
+// before was alignment: the icon gutter was `flex: none` per item, so a menu
+// where only one row had an icon rendered its labels out of line (TREEUX-014).
+// 0.29 reserves the gutter for EVERY item as soon as ANY item has one, so the
+// four rows stay aligned with a single `check`. It earns its place because the
+// library paints `is-selected` with colour plus a 500 weight and nothing else:
+// at 13px that is close to colour alone, which is the one signal a deuteranope
+// does not get. The icon is rendered `aria-hidden`, so it reinforces
+// `aria-checked` visually without announcing the state twice.
+//
+// The theme row deliberately stays icon-less: it is an ACTION, and giving it a
+// sun/moon would make one column mean "what this does" on the first row and
+// "which one is active" on the other three.
+//
+// It also leaves `selected` UNDEFINED on purpose: it is not a member of that
+// group, and the component keys the role off `!== undefined` — even `false`
+// would promote it to a radio item with an "unchecked" reading.
 const menuItems = computed<TDropdownItem[]>(() => [
   { label: theme.value === 'dark' ? t('nav.switchToLight') : t('nav.switchToDark'), value: 'theme' },
   ...locales.map(code => ({
     label: localeLabels[code],
     value: `locale:${code}`,
     selected: code === locale.value,
+    // `as const` is load-bearing: without it the ternary widens to `string`,
+    // which is not assignable to `TIconInput` (`TIconName | Component`, and
+    // `TIconName` is `keyof TIconRegistry`, a union of literals).
+    icon: code === locale.value ? ('check' as const) : undefined,
   })),
 ]);
 
@@ -195,8 +214,23 @@ onBeforeUnmount(() => {
             :label="t('nav.openMenu')"
             @select="onMenuSelect"
           >
-            <template #trigger>
-              <TButton icon-only size="sm" variant="ghost" :label="t('nav.openMenu')">
+            <!-- `triggerProps` (0.29) is the headless half of this slot: it
+                 carries the same ARIA the built-in trigger has —
+                 `aria-haspopup="menu"`, `aria-expanded` and `aria-controls`
+                 pointing at the menu's id — plus the dropdown's `disabled`.
+                 Without it this button announced only "Open menu, button": it
+                 never said it opens a menu, nor whether the menu was open, and
+                 the three attributes written by hand at the call site would be
+                 the local re-implementation rule 2 forbids (TREEUX-014).
+                 `v-bind` goes FIRST so our own props still win over it. -->
+            <template #trigger="{ triggerProps }">
+              <TButton
+                v-bind="triggerProps"
+                icon-only
+                size="sm"
+                variant="ghost"
+                :label="t('nav.openMenu')"
+              >
                 <template #icon>
                   <TIcon name="ellipsis-vertical" />
                 </template>

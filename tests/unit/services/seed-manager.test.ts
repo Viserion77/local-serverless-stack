@@ -415,7 +415,7 @@ describe('clearTable', () => {
 
   it('scans and deletes items across pagination, filtering missing key attrs', async () => {
     ddbMock.on(DescribeTableCommand).resolves({
-      Table: { KeySchema: [{ AttributeName: 'pk' }, { AttributeName: 'sk' }] },
+      Table: { KeySchema: [{ AttributeName: 'pk', KeyType: 'HASH' }, { AttributeName: 'sk', KeyType: 'RANGE' }] },
     });
     ddbMock
       .on(ScanCommand)
@@ -437,7 +437,7 @@ describe('clearTable', () => {
 
   it('handles a scan with no Items (?? [] fallback) → deletes 0', async () => {
     ddbMock.on(DescribeTableCommand).resolves({
-      Table: { KeySchema: [{ AttributeName: 'pk' }] },
+      Table: { KeySchema: [{ AttributeName: 'pk', KeyType: 'HASH' }] },
     });
     ddbMock.on(ScanCommand).resolves({}); // no Items, no LastEvaluatedKey
     const res = await manager.clearTable('T');
@@ -449,7 +449,7 @@ describe('clearTable', () => {
     ddbMock.on(DescribeTableCommand).resolves({
       Table: {
         // Second entry has empty AttributeName → filtered by .filter(Boolean).
-        KeySchema: [{ AttributeName: 'pk' }, { AttributeName: '' }],
+        KeySchema: [{ AttributeName: 'pk', KeyType: 'HASH' }, { AttributeName: '', KeyType: 'RANGE' }],
       },
     });
     ddbMock.on(ScanCommand).resolves({ Items: [{ pk: { S: 'a' } }] });
@@ -473,7 +473,7 @@ describe('clearAllSeeded', () => {
     writeSeedFile('Ghost', [{ id: '1' }]);
     ddbMock.on(ListTablesCommand).resolves({ TableNames: ['Users'] });
     ddbMock.on(DescribeTableCommand).resolves({
-      Table: { KeySchema: [{ AttributeName: 'id' }] },
+      Table: { KeySchema: [{ AttributeName: 'id', KeyType: 'HASH' }] },
     });
     ddbMock.on(ScanCommand).resolves({ Items: [{ id: { S: '1' } }] });
     ddbMock.on(BatchWriteItemCommand).resolves({});
@@ -493,7 +493,7 @@ describe('clearAllSeeded', () => {
     writeSeedFile('Users', [{ id: '1' }]);
     ddbMock.on(ListTablesCommand).resolves({ TableNames: ['Users'] });
     ddbMock.on(DescribeTableCommand).resolves({
-      Table: { KeySchema: [{ AttributeName: 'id' }] },
+      Table: { KeySchema: [{ AttributeName: 'id', KeyType: 'HASH' }] },
     });
     ddbMock.on(ScanCommand).rejects(new Error('scan boom'));
 

@@ -143,10 +143,22 @@ function formatDraft() {
           <template v-if="readOnly">
             <TButton size="sm" variant="soft" @click="emit('request-edit')">{{ t('dynamo.edit') }}</TButton>
             <TButton size="sm" variant="ghost" @click="emit('request-clone')">{{ t('dynamo.clone') }}</TButton>
-            <!-- Destructive intent is a TButton *variant*, not a tone: `tone`
-                 is not a TButton prop, so it fell through to the <button> as an
-                 inert attribute and the delete action rendered like the others. -->
-            <TButton size="sm" variant="danger" @click="emit('request-delete')">{{ t('common.delete') }}</TButton>
+            <!-- Destructive intent is the `tone` axis (0.29), orthogonal to the
+                 shape: on `ghost` it inks the label red and nothing else, which
+                 is the weight this row wants — Delete sits beside Edit (`soft`)
+                 and Clone (`ghost`) in a modal footer, and the filled
+                 `variant="danger"` it replaces made the destructive action the
+                 heaviest thing in the dialog. The prop was written here once
+                 before it existed and Vue discarded it in silence; that is the
+                 evidence that closed TREEUX-008. -->
+            <TButton
+              size="sm"
+              variant="ghost"
+              tone="danger"
+              @click="emit('request-delete')"
+            >
+              {{ t('common.delete') }}
+            </TButton>
           </template>
         </TStack>
         <TStack direction="horizontal" gap="0.5rem">

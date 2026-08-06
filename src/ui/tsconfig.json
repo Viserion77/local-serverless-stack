@@ -7,16 +7,24 @@
     "noEmit": true,
     "jsx": "preserve"
   },
-  // `vueCompilerOptions.strictTemplates` fica DESLIGADO de propósito, e a
-  // decisão é registrada no TREEUX-011 de src/ui/treeUxPatterns.md. Ligá-lo é o
-  // que ativa o augment de `GlobalComponents` que a TreeUI publicou na 0.28.0
-  // para pegar prop inexistente (`<TTag clickable>` etc.) — mas medido nesta
-  // árvore ele produz 89 erros, dos quais 2 são reais e 87 são atrito de tipo
-  // da própria lib: `aria-label`/atributo nativo em componente com
-  // `inheritAttrs: false` (40), `modelModifiers` não declarado em quem aceita
-  // v-model (14, e o runtime do Vue aplica `.number` de qualquer jeito) e
-  // `modelValue` largo emitindo para ref estreita (33). Religar quando a lib
-  // tipar essas três coisas.
+  // `vueCompilerOptions.strictTemplates` continua DESLIGADO, e a decisão é
+  // registrada no TREEUX-011 de src/ui/treeUxPatterns.md. Ligá-lo é o que ativa
+  // o augment de `GlobalComponents` da TreeUI, que faz o `vue-tsc` pegar prop
+  // inexistente (`<TTag clickable>`, `<TStat :hint>` — bugs reais que já
+  // custaram copy traduzida e nome acessível neste repo).
+  //
+  // Medido nesta árvore, não estimado:
+  //   @treeui/vue 0.28.0 -> 89 erros (2 reais, 87 atrito de tipo da lib)
+  //   @treeui/vue 0.29.0 -> 50 erros
+  // A 0.29 fechou dois dos três grupos: `aria-label`/`role`/`id`/`on*` em
+  // componente com `inheritAttrs: false` (22 -> 0) e `modelModifiers` nos
+  // componentes de v-model (14 -> 0). Sobram:
+  //   33  `modelValue` largo emitindo para ref estreita (grupo 3 do TREEUX-011,
+  //       com repro entregue à TreeUI);
+  //   17  atributo HTML *do elemento*, fora do allowlist genérico: `min` (15,
+  //       em <input type="number">), `readonly` (1), `href` (1, TButton as="a").
+  // Nenhum dos 50 é bug de runtime. Religar quando os dois grupos fecharem —
+  // e então este comentário sai junto.
   "include": [
     "src/**/*.ts",
     "src/**/*.tsx",

@@ -18,6 +18,7 @@ interface WorkerResult {
   error?: { errorType: string; errorMessage: string };
   logs: string[];
   durationMs: number;
+  loadedFunction?: string;
 }
 
 async function waitFor(predicate: () => boolean, timeoutMs: number, label: string): Promise<void> {
@@ -105,6 +106,21 @@ describe('runtime worker log capture (forked)', () => {
     expect(stdoutData).not.toContain('pino-style fd write');
     expect(stdoutData).not.toContain('module init log');
   }, 30000);
+
+  // Only the worker knows which handlers are in ITS module cache, and that is
+  // the difference between "billing-service is warm" (a process) and "which
+  // lambda is actually up" (a handler). A handler that loads and then throws
+  // is still resident — reporting it only on success would understate the
+  // memory being held and hide the failing function from the panel.
+  it('names the function it loaded, including when the handler then fails', async () => {
+    const ok = await invoke('logging-handler.handler', 'inv-loaded');
+    expect(ok.loadedFunction).toBe('fixture');
+
+    const missing = await invoke('nope.handler', 'inv-missing');
+    expect(missing.ok).toBe(false);
+    // Nothing was loaded, so nothing is claimed to be resident.
+    expect(missing.loadedFunction).toBeUndefined();
+  });
 
   it('passes output written after the invocation completed through to the pipe', async () => {
     const result = await invoke('logging-handler.orphan', 'inv-orphan');

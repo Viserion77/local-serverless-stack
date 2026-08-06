@@ -35,6 +35,12 @@ interface ResultMessage {
   error?: { errorType: string; errorMessage: string; trace?: string[] };
   logs: string[];
   durationMs: number;
+  // The function whose handler is now in this worker's module cache. Only the
+  // worker knows: a service's worker is one process for many functions, and a
+  // handler is loaded on ITS first invocation, not when the worker is forked.
+  // Reported so the manager can answer "which lambdas are actually resident?"
+  // instead of only "which services have a process".
+  loadedFunction?: string;
 }
 
 type HandlerFn = (event: unknown, context: unknown, callback?: (err: unknown, res?: unknown) => void) => unknown;
@@ -219,6 +225,10 @@ async function handleInvoke(msg: InvokeMessage): Promise<void> {
   if (!process.env.AWS_ACCESS_KEY_ID) process.env.AWS_ACCESS_KEY_ID = 'test';
   if (!process.env.AWS_SECRET_ACCESS_KEY) process.env.AWS_SECRET_ACCESS_KEY = 'test';
 
+  // Set once the handler is in the module cache — which is what makes this
+  // function "resident", and is not the same as the worker being up.
+  let loadedFunction: string | undefined;
+
   const reply = (result: Omit<ResultMessage, 'type' | 'invokeId' | 'logs' | 'durationMs'>) => {
     capture.flush(logs);
     const message: ResultMessage = {
@@ -226,6 +236,7 @@ async function handleInvoke(msg: InvokeMessage): Promise<void> {
       invokeId: msg.invokeId,
       logs,
       durationMs: Date.now() - startedAt,
+      loadedFunction,
       ...result,
     };
     process.send?.(message);
@@ -234,6 +245,9 @@ async function handleInvoke(msg: InvokeMessage): Promise<void> {
   activeLogs.add(logs);
   try {
     const handler = await loadHandler(msg);
+    // Reported even when the handler then throws: it IS loaded, and a failing
+    // handler that stays resident is exactly what an operator needs to see.
+    loadedFunction = msg.functionName;
     const context = buildContext(msg, deadline, requestId);
 
     const timeout = new Promise<never>((_, reject) => {

@@ -3,7 +3,7 @@ import { ref, computed, watch } from 'vue';
 import {
   TCard, TButton, TStack, TStackItem, TTable, TEmptyState, TSpinner, TAlert,
   TInput, TSelect, TDivider, TConfirmDialog, useToast, TFormField,
-  TToggleGroup, TLink, TCheckbox, TText, TIcon,
+  TToggleGroup, TCheckbox, TText, TIcon,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type {
@@ -371,6 +371,14 @@ function openView(item: Record<string, unknown>) {
   editorOpen.value = true;
 }
 
+// Row activation opens a modal, not a route: there is no URL for "the editor
+// open on this item", so this is `rowActivatable` + `@row-activate` (a
+// <tr role="button">), never `rowTo`. TTable treats the two as mutually
+// exclusive and warns in dev if both are passed.
+function onRowActivate(row: Record<string, unknown>) {
+  openView(row.__raw as Record<string, unknown>);
+}
+
 function requestEditFromView() {
   if (!editorItem.value) return;
   editorOriginalKey.value = extractKey(editorItem.value);
@@ -664,25 +672,25 @@ watch(() => [mode.value, indexName.value], () => {
         :description="t('dynamo.noItemsDesc')"
       />
 
-      <TTable v-else :columns="columns" :rows="rows" :aria-label="t('dynamo.resultsAriaLabel')">
+      <TTable
+        v-else
+        :columns="columns"
+        :rows="rows"
+        row-key="__id"
+        row-activatable
+        :aria-label="t('dynamo.resultsAriaLabel')"
+        @row-activate="onRowActivate"
+      >
         <template
-          v-for="(name, idx) in keyAttrNames"
+          v-for="name in keyAttrNames"
           :key="`k-${name}`"
           #[`cell-__attr__${name}`]="{ row }"
         >
-          <!-- The key is machine text, so the link carries the mono face itself
-               (`TLink family`). No TText inside the <a>: the anchor's own label
-               is the whole content, and nesting one only existed while the link
-               had no typographic axis. -->
-          <TLink
-            v-if="idx === 0"
-            href="#"
-            family="mono"
-            @click.prevent="openView((row as any).__raw)"
-          >
-            {{ stringifyShort((row as any)[`__attr__${name}`]) }}
-          </TLink>
-          <TText v-else family="mono">
+          <!-- Every key cell is plain mono text now. The first one used to be a
+               `<TLink href="#">` faking row activation — a link that lied about
+               its destination; the row itself carries the role and the keyboard
+               handling since `rowActivatable`. -->
+          <TText family="mono">
             {{ stringifyShort((row as any)[`__attr__${name}`]) }}
           </TText>
         </template>

@@ -135,6 +135,31 @@ function openRow(row: TableRow) {
   emit('open', row.name);
 }
 
+// The row IS the link (TTable `rowTo`, 0.29): a real <a> in the first cell, so
+// ctrl/middle-click, "open in new tab" and the status-bar URL work — none of
+// which the `<TLink href="#">` + `@click.prevent` it replaces ever did. A
+// seed-only ghost row has no table to open yet, so it returns undefined and
+// stays un-linked, the same rule `openRow` already had.
+//
+// Read from the shipped 0.29 CSS, not from the prop's doc comment: the hit area
+// is the FIRST CELL, not the whole row. `.t-table__row-link::after` is
+// `position:absolute; inset:0`, but `.t-table__row.is-linked .t-table__cell` is
+// `position:relative`, so the overlay's containing block is that first <td>.
+// `cursor:pointer` and the hover tint, meanwhile, sit on the <tr> and are keyed
+// off the PROP, so even the un-linked ghost rows wear them. Both are TreeUI's to
+// fix (`.t-table__cell:first-child { position: static }` closes the first);
+// correcting either here would be local CSS, which rule 2 forbids.
+function rowTo(row: Record<string, unknown>): string | undefined {
+  return row.exists ? `/dynamo/${encodeURIComponent(String(row.name))}` : undefined;
+}
+
+// Required alongside `rowTo`: without it the link's accessible name is the
+// whole row text, repeated once per row. It runs per render, so t() follows a
+// language switch like every other label here.
+function rowLabel(row: Record<string, unknown>): string {
+  return t('dynamo.openTableLabel', { name: String(row.name) });
+}
+
 // Called from the template so t() runs on every render — the badge follows a
 // language switch and picks the singular/plural form for the count.
 function seededItemsLabel(count: number): string {
@@ -232,25 +257,20 @@ onBeforeUnmount(() => {
         :rows="filteredRows"
         row-key="name"
         :row-state="(row: any) => row.exists ? 'default' : 'muted'"
+        :row-to="rowTo"
+        :row-label="rowLabel"
         :aria-label="t('dynamo.tablesTitle')"
       >
         <template #cell-name="{ row }">
           <TStack direction="vertical" gap="0.125rem">
-            <!-- The name is the row's activation target. TTable has no row-level
-                 href/activation hook, so the affordance lives in this cell as a
-                 real TLink: focusable, keyboard-operable and announced as a link
-                 (it does navigate — the parent routes to /dynamo/:name). -->
-            <TLink
-              v-if="row.exists"
-              href="#"
-              weight="semibold"
-              @click.prevent="openRow(row as any)"
-            >
-              {{ row.name }}
-            </TLink>
-            <TStack v-else direction="horizontal" gap="0.375rem" align="center">
+            <!-- No affordance of its own any more: TTable wraps this cell in the
+                 row link itself, so the name is plain text inside a real <a> —
+                 and this cell is exactly the clickable area (see `rowTo`).
+                 A seed-only row keeps its tag and stays un-linked, because
+                 `rowTo` returns undefined for a table that does not exist. -->
+            <TStack direction="horizontal" gap="0.375rem" align="center">
               <TText weight="semibold">{{ row.name }}</TText>
-              <TTag size="sm" variant="soft">{{ t('dynamo.seedOnly') }}</TTag>
+              <TTag v-if="!row.exists" size="sm" variant="soft">{{ t('dynamo.seedOnly') }}</TTag>
             </TStack>
             <TText tone="muted" family="mono" size="xs">
               {{ row.keyDescriptor }}

@@ -96,6 +96,14 @@ async function openDetail(name: string) {
   }
 }
 
+// Row activation opens a modal, not a route — a revealed secret has no URL —
+// so this is `rowActivatable` + `@row-activate` (a <tr role="button">), never
+// `rowTo`. TTable treats the two as mutually exclusive and warns in dev if both
+// are passed.
+function onRowActivate(row: Record<string, unknown>) {
+  openDetail(String(row.name));
+}
+
 async function reveal() {
   if (!activeName.value) return;
   revealing.value = true;
@@ -189,20 +197,21 @@ onBeforeUnmount(() => {
         </template>
       </TEmptyState>
 
-      <TTable v-else :columns="columns" :rows="filteredRows" :aria-label="t('secrets.tableLabel')">
+      <TTable
+        v-else
+        :columns="columns"
+        :rows="filteredRows"
+        row-key="name"
+        row-activatable
+        :aria-label="t('secrets.tableLabel')"
+        @row-activate="onRowActivate"
+      >
         <template #cell-name="{ row }">
           <TStack direction="horizontal" align="center" gap="0.5rem">
-            <!-- Left as-is on purpose: this is row activation, and TTable has no
-                 row-activation API (no `rowHref`, no `@row-activate`). Any local
-                 fix would be a hand-rolled button/role — the gap belongs to
-                 TreeUI, so the interim style stays until it lands there. -->
-            <TText
-              weight="semibold"
-              style="cursor: pointer; text-decoration: underline; text-decoration-style: dotted; text-underline-offset: 3px;"
-              @click="openDetail(String(row.name))"
-            >
-              {{ row.name }}
-            </TText>
+            <!-- Plain text: the row carries the role, the keyboard handling and
+                 the affordance (cursor, hover, focus ring), so the hand-rolled
+                 `cursor:pointer` + dotted underline is gone with it. -->
+            <TText weight="semibold">{{ row.name }}</TText>
             <TBadge v-if="row.scheduledDeletion" tone="warning" variant="soft">{{ t('secrets.deletionScheduled') }}</TBadge>
           </TStack>
         </template>
@@ -220,7 +229,10 @@ onBeforeUnmount(() => {
         </template>
 
         <template #cell-actions="{ row }">
-          <TButton size="sm" variant="soft" @click="openDetail(String(row.name))">{{ t('secrets.inspect') }}</TButton>
+          <!-- `.stop` because the row is activatable now: without it the click
+               bubbles to the <tr> and openDetail fires twice, two describeSecret
+               requests racing for the same modal. -->
+          <TButton size="sm" variant="soft" @click.stop="openDetail(String(row.name))">{{ t('secrets.inspect') }}</TButton>
         </template>
       </TTable>
     </TCard>

@@ -201,7 +201,23 @@ watch(() => props.serviceName, load);
         </TButton>
         <TButton size="sm" variant="ghost" @click="openLogs">{{ t('services.logs') }}</TButton>
         <TButton size="sm" variant="ghost" :loading="loading" @click="load">{{ t('common.refresh') }}</TButton>
-        <TButton size="sm" variant="danger" @click="deleteDialogOpen = true">{{ t('common.delete') }}</TButton>
+        <!-- This one STAYS filled — `variant="solid" tone="danger"` is the
+             non-deprecated spelling of what it already rendered, not a change
+             of weight. The two siblings that went quiet (`ghost tone="danger"`
+             in BucketDetail and DynamoItemEditor) are per-item actions repeated
+             once per row/record; this is the page's own action bar, it appears
+             once, and it destroys a whole registered service. Start/Stop being
+             `soft` is what makes the hierarchy readable: the reversible
+             lifecycle actions stay quiet and the irreversible one does not
+             hide among them. -->
+        <TButton
+          size="sm"
+          variant="solid"
+          tone="danger"
+          @click="deleteDialogOpen = true"
+        >
+          {{ t('common.delete') }}
+        </TButton>
       </TStack>
     </TStack>
 
@@ -487,6 +503,26 @@ watch(() => props.serviceName, load);
       />
     </TModal>
 
+    <!-- `confirm-variant="danger"` is NOT an oversight of the tone migration
+         and must not be "fixed" here. TConfirmDialog was left without a `tone`
+         axis on purpose (TreeUI's own answer under TREEUX-008): it composes a
+         TButton, so the axis was supposed to reach it through `confirmVariant`.
+         It does not. `confirmVariant` is typed `TVariant` and is forwarded
+         straight into that button's `variant`, and `tone` lives on a second
+         prop the dialog does not expose — so the only value here that still
+         reads as destructive is the deprecated `"danger"`, which is also this
+         prop's own default, meaning deleting the line changes nothing either.
+         The dev-only deprecation warning therefore fires from inside the
+         library at all six TConfirmDialog call sites in this app. This is the
+         "caso em que isso não basta" TREEUX-008 explicitly asked to hear about;
+         it wants a `confirmTone` upstream, not a local patch.
+         There IS one escape hatch and it is deliberately not taken: the
+         `actions` slot hands back `{ confirm, cancel, loading }`, so we could
+         render our own `variant="solid" tone="danger"` button. That means
+         re-implementing the whole footer — Cancel included, plus the
+         disabled/loading wiring the component already does — at every call
+         site, to silence a warning with no user-visible effect. That is the
+         local re-implementation of a library gap this contract rejects. -->
     <TConfirmDialog
       v-model:open="deleteDialogOpen"
       :title="t('services.deleteTitleNamed', { name: serviceName })"

@@ -36,6 +36,22 @@ function queryOf(url: string): URLSearchParams {
   return new URL('http://x' + url).searchParams;
 }
 
+// The error a call is expected to reject with.
+//
+// `promise.catch(e => e as LssHttpError)` types the result as
+// `Result | LssHttpError`, so every assertion about `.message`/`.statusText`
+// below was reaching into a union that might not have them — and a call that
+// unexpectedly RESOLVED would flow into the same variable and only fail at the
+// first `expect`. This says "this must reject" once, in the type and at runtime.
+async function rejection(promise: Promise<unknown>): Promise<LssHttpError> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as LssHttpError;
+  }
+  throw new Error('expected the request to reject, but it resolved');
+}
+
 beforeAll(async () => {
   recorded = [];
   responder = () => ({ status: 200, body: '{}' });
@@ -246,7 +262,7 @@ describe('client data-plane — error mapping', () => {
 
   it('includes a snippet when the error body has no error/message field', async () => {
     responder = () => ({ status: 500, body: JSON.stringify({ error: '' }) });
-    const err = await c().seeds.run().catch((e) => e as LssHttpError);
+    const err = await rejection(c().seeds.run());
     expect(err).toBeInstanceOf(LssHttpError);
     expect(err.message).toContain('HTTP 500');
     expect(err.message).toContain('error');
@@ -269,7 +285,7 @@ describe('client data-plane — error mapping', () => {
 
   it('labels the error with the bare status when there is no reason phrase', async () => {
     responder = () => ({ status: 500, body: '', statusMessage: '' });
-    const err = await c().seeds.run().catch((e) => e as LssHttpError);
+    const err = await rejection(c().seeds.run());
     expect(err).toBeInstanceOf(LssHttpError);
     expect(err.message).toContain('HTTP 500');
   });
@@ -300,7 +316,7 @@ describe('client data-plane — error mapping', () => {
   it('maps a timeout to a clear error', async () => {
     responder = () => ({ status: 200, hang: true });
     const client = new LssClient({ baseUrl, timeoutMs: 40 });
-    const err = await client.health.get().catch((e) => e as LssHttpError);
+    const err = await rejection(client.health.get());
     expect(err).toBeInstanceOf(LssHttpError);
     expect(err.statusText).toBe('timeout');
     expect(err.message).toMatch(/timed out/);
@@ -315,7 +331,7 @@ describe('client data-plane — error mapping', () => {
     await new Promise<void>((resolve) => probe.close(() => resolve()));
 
     const client = new LssClient({ baseUrl: `http://127.0.0.1:${closedPort}` });
-    const err = await client.health.get().catch((e) => e as LssHttpError);
+    const err = await rejection(client.health.get());
     expect(err).toBeInstanceOf(LssHttpError);
     expect(err.message).toContain('could not connect to orchestrator');
   });

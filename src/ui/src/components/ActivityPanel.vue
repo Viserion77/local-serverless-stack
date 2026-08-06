@@ -6,23 +6,39 @@
 //      peak parallelism, host memory, load).
 //   2. A parallelism area over time — the shape of the load, so a burst that
 //      saturated the host for 300 ms is visible instead of averaged away.
-//   3. A span timeline — one row per service, one bar per invocation, so
-//      *which* services overlapped is readable, not inferred.
+//   3. A span timeline — one row per lambda, one bar per invocation, so
+//      *which* handlers overlapped is readable, not inferred.
+//
+// Both plots are TreeUI primitives (TREEUX-003, delivered in 0.29). Until then
+// this file drew its own SVG and carried the product's only three inline
+// styles — `TChart interpolation="step"` and `TSpanLanes` express exactly what
+// those hand-rolled polygons did, so the rule-2 exception table lost all three
+// of its ActivityPanel rows rather than gaining a fourth.
 //
 // Chart-design notes, because they are decisions and not taste:
-//   - Invocations are ONE colour (TreeUI's `chart-1`). Colouring 40 services
-//     categorically is unreadable and the palette only has 8 slots; identity
-//     lives on the row axis instead, which scales.
+//   - Invocations are ONE colour (TreeUI's `chart-1`, which is both `TChart`'s
+//     first series and an untoned `TSpanLanes` span, so neither plot needs a
+//     colour override). Colouring 40 services categorically is unreadable and
+//     the palette only has 8 slots; identity lives on the row axis instead,
+//     which scales.
+//   - Parallelism is a STEP area, never a curve. Concurrency is a count that
+//     holds its value across a bucket and then jumps; `linear` and `smooth`
+//     both INTERPOLATE, drawing parallelism that never existed. `step` is also
+//     why the series is now one point per bucket: the old polygon emitted two
+//     points at the same `y` to fake the riser, which the primitive draws.
 //   - Failures are NOT distinguished by colour alone: they get the status
-//     colour AND a cross cap AND a counted, labelled stat. Red/green sits at
-//     ΔE 4.4 under deuteranopia — colour alone would hide every error from a
-//     colourblind reader.
+//     colour AND a cross in the lane's `marker` slot AND a counted, labelled
+//     stat. Red/green sits at ΔE 4.4 under deuteranopia — colour alone would
+//     hide every error from a colourblind reader.
 //   - No dual axis: parallelism (count) and duration (ms) are two charts, not
 //     two scales on one.
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
-import { TCard, TStack, TText, TStat, TGrid, TBadge, TTag, TIcon, TSpinner, TToggleGroup } from '@treeui/vue';
+import {
+  TCard, TStack, TText, TStat, TGrid, TBadge, TTag, TIcon, TSpinner, TToggleGroup, TChart, TSpanLanes,
+} from '@treeui/vue';
+import type { TChartSeries, TSpan, TSpanLane } from '@treeui/vue';
 import { api } from '../services/api';
-import type { ActivitySnapshot } from '../services/api';
+import type { ActivitySnapshot, InvocationSpan } from '../services/api';
 import { useI18n } from '../i18n';
 
 const { t } = useI18n();
@@ -79,24 +95,17 @@ const loadPct = computed(() => {
 
 const warmWorkers = computed(() => (data.value?.workers ?? []).filter(w => w.warm));
 
-// One row per service that actually ran something in the window, newest first
-// by last activity — a 40-service monorepo must not render 40 empty lanes.
-const lanes = computed(() => {
-  const spans = data.value?.spans ?? [];
-  const byService = new Map<string, typeof spans>();
-  for (const span of spans) {
-    const list = byService.get(span.service) ?? [];
-    list.push(span);
-    byService.set(span.service, list);
-  }
-  return [...byService.entries()]
-    .map(([service, list]) => ({
-      service,
-      spans: list,
-      lastAt: Math.max(...list.map(s => s.startedAt + s.durationMs)),
-    }))
-    .sort((a, b) => b.lastAt - a.lastAt);
-});
+// "Which lambdas are up?" — the question the worker list alone cannot answer.
+// A worker is one process serving many functions, each loaded into its module
+// cache on ITS first invocation, so a warm service can be holding one handler
+// or sixty. These are the handlers actually resident right now; everything else
+// the service declares costs nothing until it is called.
+const residentWorkers = computed(() => warmWorkers.value.map(worker => ({
+  ...worker,
+  // Most recently loaded first: in a long session the tail is the history and
+  // the head is what is being worked on.
+  resident: [...worker.loadedFunctions].reverse(),
+})));
 
 const windowStart = computed(() => {
   const buckets = data.value?.buckets ?? [];
@@ -104,42 +113,81 @@ const windowStart = computed(() => {
 });
 const windowEnd = computed(() => windowStart.value + (data.value?.windowMs ?? 0));
 
-// x in 0..100 (percent of the window), so the SVG scales with its container
-// instead of needing a measured pixel width.
-function xPct(at: number): number {
-  const span = windowEnd.value - windowStart.value || 1;
-  return clamp(((at - windowStart.value) / span) * 100, 0, 100);
-}
-
-function widthPct(startedAt: number, durationMs: number): number {
-  const right = xPct(startedAt + durationMs);
-  // A sub-pixel span is still an event that happened: floor it at a visible
-  // sliver rather than rendering nothing.
-  return Math.max(right - xPct(startedAt), 0.4);
-}
-
-function clamp(value: number, min: number, max: number): number {
-  return Math.min(max, Math.max(min, value));
-}
-
-// The parallelism area, as an SVG polygon over the bucket series. Step-shaped
-// on purpose: concurrency is a count that changes at instants, and a smoothed
-// curve would draw parallelism that never existed.
-const CHART_HEIGHT = 64;
-const concurrencyPath = computed(() => {
-  const buckets = data.value?.buckets ?? [];
-  if (buckets.length === 0) return '';
-  const peak = Math.max(1, ...buckets.map(b => b.peak));
-  const step = 100 / buckets.length;
-  const points: string[] = ['0,' + CHART_HEIGHT];
-  buckets.forEach((bucket, index) => {
-    const y = CHART_HEIGHT - (bucket.peak / peak) * CHART_HEIGHT;
-    points.push(`${(index * step).toFixed(2)},${y.toFixed(2)}`);
-    points.push(`${((index + 1) * step).toFixed(2)},${y.toFixed(2)}`);
-  });
-  points.push('100,' + CHART_HEIGHT);
-  return points.join(' ');
+// One row per FUNCTION that ran, newest first by last activity.
+//
+// It used to be one row per service, which answered a question nobody opens
+// this panel to ask: a service owning 60 lambdas drew a single lane labelled
+// "billing-service", and *which* lambda fired stayed invisible. The service is
+// the unit of PROCESS (see the resident-worker list below); the function is the
+// unit of work, and this is the work chart.
+//
+// The label is the short function name, because that is the identifier being
+// looked for and the lane label ellipsises. A name that is ambiguous — the same
+// short name in two services — is the only one that gets qualified, so the
+// common case stays readable and the ambiguous case stays correct.
+// `description` is what `TSpanLanes` puts on the lane's `aria-label`, so the
+// service and the count stay available without seeing a single bar.
+const lanes = computed<TSpanLane[]>(() => {
+  const byFunction = new Map<string, InvocationSpan[]>();
+  for (const span of data.value?.spans ?? []) {
+    const key = `${span.service}::${span.functionName}`;
+    const list = byFunction.get(key) ?? [];
+    list.push(span);
+    byFunction.set(key, list);
+  }
+  const owners = new Map<string, Set<string>>();
+  for (const [, list] of byFunction) {
+    const services = owners.get(list[0].functionName) ?? new Set<string>();
+    services.add(list[0].service);
+    owners.set(list[0].functionName, services);
+  }
+  return [...byFunction.values()]
+    .map(list => ({ list, lastAt: Math.max(...list.map(s => s.startedAt + s.durationMs)) }))
+    .sort((a, b) => b.lastAt - a.lastAt)
+    .map(({ list }) => {
+      const { service, functionName } = list[0];
+      const ambiguous = (owners.get(functionName)?.size ?? 0) > 1;
+      return {
+        label: ambiguous ? `${service}/${functionName}` : functionName,
+        description: t('activity.laneAria', { function: functionName, service, count: list.length }),
+        spans: list.map(toSpan),
+      };
+    });
 });
+
+function toSpan(span: InvocationSpan): TSpan {
+  return {
+    start: span.startedAt,
+    end: span.startedAt + span.durationMs,
+    // `default` is the one invocation hue (chart-1); only failure earns a
+    // second colour, and even then it never travels alone — see the marker.
+    tone: span.ok ? 'default' : 'danger',
+    title: spanTitle(span),
+  };
+}
+
+// Lane geometry. 14px keeps a long list scannable — worth noting that the row
+// count is now bounded by the lambdas that RAN in the window, not by the 40
+// services that exist, so a busy 2-minute window is a taller chart than the
+// per-service version ever was. The marker is sized to the bar rather than the
+// lane (`TSpanLanes` insets each span 2px inside its track), so the cross reads
+// on a hairline span instead of swamping the row.
+const LANE_HEIGHT = 14;
+const LANE_MARKER_SIZE = 10;
+
+// The parallelism area: one point per bucket, held flat by `interpolation`.
+const CHART_HEIGHT = 64;
+const concurrencySeries = computed<TChartSeries[]>(() => [{
+  name: t('activity.parallelism'),
+  data: (data.value?.buckets ?? []).map(bucket => bucket.peak),
+}]);
+
+// Category labels for the buckets. They never render (the window is already
+// labelled once, under the lanes, for both plots) but they are what the hover
+// tooltip and the chart's visually-hidden data table call each column — "#37"
+// is not an answer to "when did that burst happen?".
+const bucketLabels = computed(() => (data.value?.buckets ?? [])
+  .map(bucket => t('activity.axisStart', { value: formatMs(windowEnd.value - bucket.at) })));
 
 const peakLabel = computed(() => Math.max(1, ...(data.value?.buckets ?? []).map(b => b.peak)));
 
@@ -203,11 +251,22 @@ onBeforeUnmount(() => {
              `hint` prop and sets `inheritAttrs: false`, so what looked like a
              caption was an attribute the component dropped on the floor — three
              languages of copy that never reached a pixel. -->
-        <TGrid :columns="4" gap="0.75rem">
+        <!-- Five tiles, not four: `minItemWidth` keeps them wrapping instead of
+             shrinking, so the extra unit (handlers, next to processes) does not
+             squeeze the row on a narrow window. -->
+        <TGrid :columns="5" min-item-width="12rem" gap="0.75rem">
           <TStat
             :label="t('activity.workersWarm')"
             :value="`${residency?.warm ?? 0} / ${residency?.maxWarmWorkers ?? 0}`"
             :meta="t('activity.workersWarmHint')"
+          />
+          <!-- The number that scales with a real monorepo: 1024 registered
+               lambdas cost nothing until they are called, and this says how
+               many are actually being paid for. -->
+          <TStat
+            :label="t('activity.functionsLoaded')"
+            :value="`${residency?.loadedFunctions ?? 0} / ${residency?.registeredFunctions ?? 0}`"
+            :meta="t('activity.functionsLoadedHint')"
           />
           <TStat
             :label="t('activity.peakConcurrency')"
@@ -266,67 +325,53 @@ onBeforeUnmount(() => {
               <TText size="sm" weight="semibold">{{ t('activity.parallelism') }}</TText>
               <TText size="sm" tone="muted">{{ t('activity.peakLabel', { peak: peakLabel }) }}</TText>
             </TStack>
-            <svg
-              :viewBox="`0 0 100 ${CHART_HEIGHT}`"
-              preserveAspectRatio="none"
-              role="img"
+            <!-- No axes and no grid: 64px of plot has no room for ticks, the
+                 peak is direct-labeled above and the window is labeled below.
+                 `ariaLabel` becomes the caption of the data table TChart keeps
+                 for screen readers, which is strictly more than the old
+                 `role="img"` polygon offered. -->
+            <TChart
+              type="area"
+              interpolation="step"
+              :series="concurrencySeries"
+              :labels="bucketLabels"
+              :height="CHART_HEIGHT"
+              :show-grid="false"
+              :show-x-axis="false"
+              :show-y-axis="false"
               :aria-label="t('activity.parallelismAria', { peak: peakLabel })"
-              style="width: 100%; height: 64px"
-            >
-              <polygon
-                :points="concurrencyPath"
-                fill="var(--tree-color-chart-1)"
-                fill-opacity="0.28"
-                stroke="var(--tree-color-chart-1)"
-                stroke-width="2"
-                vector-effect="non-scaling-stroke"
-              />
-            </svg>
+            />
           </TStack>
 
           <!-- Span timeline: identity on the row axis, so it scales past the
-               8 categorical slots a per-service colouring would need. -->
+               8 categorical slots a per-lane colouring would need. -->
           <TStack direction="vertical" gap="0.25rem">
             <TText size="sm" weight="semibold">{{ t('activity.timeline') }}</TText>
-            <TStack
-              v-for="lane in lanes"
-              :key="lane.service"
-              direction="horizontal"
-              gap="0.5rem"
-              align="center"
+            <!-- `minSpanPercent` is left at the library default (0.4%), which
+                 is the exact floor this panel used to apply by hand: a 3 ms
+                 invocation in a 60 s window is an event that happened, and a
+                 zero-width rectangle would deny it. -->
+            <TSpanLanes
+              :rows="lanes"
+              :from="windowStart"
+              :to="windowEnd"
+              :lane-height="LANE_HEIGHT"
+              :label="t('activity.timeline')"
             >
-              <TText size="sm" tone="muted" family="mono" style="min-width: 9rem">{{ lane.service }}</TText>
-              <svg
-                viewBox="0 0 100 10"
-                preserveAspectRatio="none"
-                role="img"
-                :aria-label="t('activity.laneAria', { service: lane.service, count: lane.spans.length })"
-                style="width: 100%; height: 14px"
-              >
-                <rect x="0" y="4" width="100" height="2" fill="var(--tree-color-border-default)" />
-                <g v-for="(span, index) in lane.spans" :key="index">
-                  <rect
-                    :x="xPct(span.startedAt)"
-                    y="1"
-                    :width="widthPct(span.startedAt, span.durationMs)"
-                    height="8"
-                    rx="1"
-                    :fill="span.ok ? 'var(--tree-color-chart-1)' : 'var(--tree-color-status-error)'"
-                  >
-                    <title>{{ spanTitle(span) }}</title>
-                  </rect>
-                  <!-- Failures carry a shape, not just a hue: red/green is
-                       indistinguishable to a deuteranopic reader. -->
-                  <path
-                    v-if="!span.ok"
-                    :d="`M ${xPct(span.startedAt)} 0 L ${xPct(span.startedAt) + 1.2} 10`"
-                    stroke="var(--tree-color-status-error)"
-                    stroke-width="2"
-                    vector-effect="non-scaling-stroke"
-                  />
-                </g>
-              </svg>
-            </TStack>
+              <!-- The lane label is already sized, muted and ellipsised by the
+                   component; the only thing the product adds is mono, because
+                   a function name is an identifier. -->
+              <template #label="{ row }">
+                <TText family="mono">{{ row.label }}</TText>
+              </template>
+              <!-- Failures carry a shape, not just a hue: red/green is
+                   indistinguishable to a deuteranopic reader. The cross is
+                   decorative (no `label`) on purpose — the span's own title and
+                   the counted "N failed" tag already say it in words. -->
+              <template #marker="{ span }">
+                <TIcon v-if="span.tone === 'danger'" name="x" :size="LANE_MARKER_SIZE" />
+              </template>
+            </TSpanLanes>
             <TStack direction="horizontal" justify="space-between">
               <TText size="sm" tone="muted">{{ t('activity.axisStart', { value: formatMs(data?.windowMs) }) }}</TText>
               <TText size="sm" tone="muted">{{ t('activity.axisNow') }}</TText>
@@ -334,11 +379,39 @@ onBeforeUnmount(() => {
           </TStack>
 
           <!-- Identity is never colour-alone: the resident workers are also a
-               plain list, which doubles as the table view of the chart. -->
-          <TStack v-if="warmWorkers.length" direction="horizontal" gap="0.5rem" wrap>
-            <TTag v-for="worker in warmWorkers" :key="worker.service" size="sm" variant="soft">
-              {{ worker.service }} · {{ t('activity.workerPid', { pid: worker.pid ?? 0 }) }}
-            </TTag>
+               plain list, which doubles as the table view of the chart. Each
+               one now names the handlers it is actually holding — the process
+               is the cost, the handlers inside it are the answer to "which
+               lambda is up?". -->
+          <TStack v-if="residentWorkers.length" direction="vertical" gap="0.5rem">
+            <TText size="sm" weight="semibold">{{ t('activity.resident') }}</TText>
+            <TStack
+              v-for="worker in residentWorkers"
+              :key="worker.service"
+              direction="horizontal"
+              gap="0.5rem"
+              align="center"
+              wrap
+            >
+              <TTag size="sm" variant="soft">
+                {{ worker.service }} · {{ t('activity.workerPid', { pid: worker.pid ?? 0 }) }}
+              </TTag>
+              <TTag
+                v-for="fn in worker.resident"
+                :key="fn"
+                size="sm"
+                variant="soft"
+                tone="success"
+              >
+                {{ fn }}
+              </TTag>
+              <!-- A forked worker with nothing loaded is a real state, not a
+                   rendering gap: it was woken by a registration or is still
+                   booting, and it is holding memory for zero handlers. -->
+              <TText v-if="worker.resident.length === 0" size="sm" tone="muted">
+                {{ t('activity.residentNone') }}
+              </TText>
+            </TStack>
           </TStack>
         </template>
       </template>

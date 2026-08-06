@@ -1317,7 +1317,7 @@ describe('updateConfig', () => {
       persistence: 'yes', // boolean
       region: '', // empty string
       packageArgs: [1], // stringArray (non-string element)
-      packageEnv: { A: 1 }, // stringRecord (non-string value)
+      packageEnv: { A: 1 }, // envRecord (a value that is neither string nor null)
       lambdaRuntime: [], // object (array is not a plain object)
     });
     expect(err.details).toEqual([
@@ -1327,7 +1327,7 @@ describe('updateConfig', () => {
       '"persistence" must be a boolean',
       '"region" must be a non-empty string',
       '"packageArgs" must be an array of strings',
-      '"packageEnv" must be an object of string values',
+      '"packageEnv" must be an object of string values (null removes a key)',
       '"lambdaRuntime" must be an object',
     ]);
     expect(fs.writeFileSync).not.toHaveBeenCalled();
@@ -1467,6 +1467,31 @@ describe('updateConfig', () => {
     });
     cm.updateConfig({ branding: { title: 'New', subtitle: null } });
     expect(written().branding).toEqual({ title: 'New', logo: './logo.svg' });
+  });
+
+  // ONE level, stated against a fixture that could lose something: the branding
+  // siblings survive a themeColors edit, while the nested themeColors block is
+  // replaced wholesale — `light` goes with it. That is correct here and is the
+  // difference from packageEnv: GET /api/config returns branding colors in
+  // full, so a client CAN resend the theme it is not editing, whereas packageEnv
+  // values never leave the process and therefore have to merge per key.
+  it('replaces a nested subkey block wholesale while its siblings survive', () => {
+    const cm = setupFile({
+      branding: {
+        title: 'Acme',
+        colors: { 'brand-primary': '#111' },
+        themeColors: {
+          dark: { 'brand-primary': '#222', 'surface-1': '#000' },
+          light: { 'brand-primary': '#333' },
+        },
+      },
+    });
+    cm.updateConfig({ branding: { themeColors: { dark: { 'brand-primary': '#999' } } } });
+    expect(written().branding).toEqual({
+      title: 'Acme',
+      colors: { 'brand-primary': '#111' },
+      themeColors: { dark: { 'brand-primary': '#999' } },
+    });
   });
 
   it('map blocks merge per entry: one service edit never drops another service or that entry\'s siblings', () => {
@@ -1956,10 +1981,10 @@ describe('updateConfig', () => {
     });
 
     it('reports the value-shape error before the key check', () => {
-      // Same message as any other string record — a non-string value never
+      // A value that is neither a string nor the null that removes a key never
       // reaches the key scan.
       expect(updateErr(setupFile({}), { packageEnv: { NODE_OPTIONS: 1 } }).details).toEqual([
-        '"packageEnv" must be an object of string values',
+        '"packageEnv" must be an object of string values (null removes a key)',
       ]);
     });
 
@@ -1976,6 +2001,120 @@ describe('updateConfig', () => {
       expect(written().packageEnv).toEqual({ NPM_TOKEN: 's3cret', SLS_DEBUG: '*', AWS_PROFILE: 'dev' });
       expect(written().servicePackaging).toEqual({ access: { packageEnv: { STAGE: 'offline' } } });
       expect(written().branding).toEqual({ colors: { NODE_OPTIONS: '#fff' } });
+    });
+  });
+
+  // packageEnv is the one editable key whose VALUES never leave the process:
+  // GET /api/config reports `packageEnvKeys` (names only), so a dashboard
+  // editing one variable has nothing to resend for its siblings. Replacing the
+  // map on write — what every other non-object key does — would therefore make
+  // `{"A":"v"}` delete B and C, secrets the editor was never shown. These pin
+  // the per-variable patch that makes write-only editing possible at all.
+  describe('packageEnv per-variable patch', () => {
+    it('sets one variable and leaves the siblings it was never shown', () => {
+      const cm = setupFile({ packageEnv: { A: '1', B: '2', C: '3' } });
+      cm.updateConfig({ packageEnv: { A: 'new' } });
+      expect(written().packageEnv).toEqual({ A: 'new', B: '2', C: '3' });
+      // The in-memory config followed the write, not just the file.
+      expect(cm.getConfig().packageEnv).toEqual({ A: 'new', B: '2', C: '3' });
+    });
+
+    it('null removes exactly one variable', () => {
+      const cm = setupFile({ packageEnv: { A: '1', B: '2' } });
+      cm.updateConfig({ packageEnv: { B: null, A: 'kept' } });
+      expect(written().packageEnv).toEqual({ A: 'kept' });
+    });
+
+    it('creates the block when the file has none, and replaces a malformed one', () => {
+      const fresh = setupFile({});
+      fresh.updateConfig({ packageEnv: { A: '1' } });
+      expect(written().packageEnv).toEqual({ A: '1' });
+
+      const broken = setupFile({ packageEnv: 'not-an-object' });
+      broken.updateConfig({ packageEnv: { A: '1' } });
+      expect(written().packageEnv).toEqual({ A: '1' });
+    });
+
+    it('a top-level null still deletes the whole block', () => {
+      const cm = setupFile({ packageEnv: { A: '1', B: '2' }, debug: true });
+      cm.updateConfig({ packageEnv: null });
+      expect(written()).not.toHaveProperty('packageEnv');
+      expect(written().debug).toBe(true);
+    });
+
+    it('drops the block instead of writing {} when the last variable is removed', () => {
+      const cm = setupFile({ packageEnv: { A: '1' } });
+      cm.updateConfig({ packageEnv: { A: null } });
+      expect(written()).not.toHaveProperty('packageEnv');
+    });
+
+    it('patches a per-service packageEnv the same way, keeping the entry siblings', () => {
+      const cm = setupFile({
+        servicePackaging: {
+          orders: { packageCommand: 'npm run pkg', packageEnv: { NPM_TOKEN: 's', STAGE: 'offline' } },
+          billing: { packageEnv: { STAGE: 'dev' } },
+        },
+      });
+      cm.updateConfig({ servicePackaging: { orders: { packageEnv: { STAGE: 'prod', EXTRA: '1' } } } });
+      expect(written().servicePackaging).toEqual({
+        orders: {
+          packageCommand: 'npm run pkg',
+          packageEnv: { NPM_TOKEN: 's', STAGE: 'prod', EXTRA: '1' },
+        },
+        billing: { packageEnv: { STAGE: 'dev' } },
+      });
+    });
+
+    it('per-service: null removes one variable, and emptying the map drops the entry', () => {
+      const cm = setupFile({ servicePackaging: { orders: { packageEnv: { A: '1', B: '2' } } } });
+      cm.updateConfig({ servicePackaging: { orders: { packageEnv: { A: null } } } });
+      expect(written().servicePackaging).toEqual({ orders: { packageEnv: { B: '2' } } });
+      // The map went empty, so it is dropped — and with it the entry, which now
+      // carries no setting at all.
+      cm.updateConfig({ servicePackaging: { orders: { packageEnv: { B: null } } } });
+      expect(written().servicePackaging).toEqual({});
+    });
+
+    it('per-service: a null packageEnv deletes that map but keeps the rest of the entry', () => {
+      const cm = setupFile({
+        servicePackaging: { orders: { packageCommand: 'npm run pkg', packageEnv: { A: '1' } } },
+      });
+      cm.updateConfig({ servicePackaging: { orders: { packageEnv: null } } });
+      expect(written().servicePackaging).toEqual({ orders: { packageCommand: 'npm run pkg' } });
+    });
+
+    // The patch must not become a way around the loader-hook denylist: a
+    // variable being SET is screened exactly as before. REMOVING one is always
+    // allowed — it only takes capability away, and a hand-edited config file
+    // (which the fence deliberately does not police) is the one way such a key
+    // gets into the file in the first place.
+    it('keeps the denylist on a SET, and allows a REMOVE of a blocked key', () => {
+      const cm = setupFile({ packageEnv: { NODE_OPTIONS: '--require /tmp/x.js', SLS_DEBUG: '*' } });
+      expect(updateErr(cm, { packageEnv: { NODE_OPTIONS: '--require /tmp/y.js' } }).details).toEqual([
+        '"packageEnv.NODE_OPTIONS" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(updateErr(cm, {
+        servicePackaging: { access: { packageEnv: { LD_PRELOAD: '/tmp/evil.so' } } },
+      }).details).toEqual([
+        '"servicePackaging.access.packageEnv.LD_PRELOAD" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+
+      cm.updateConfig({ packageEnv: { NODE_OPTIONS: null } });
+      expect(written().packageEnv).toEqual({ SLS_DEBUG: '*' });
+    });
+
+    it('still rejects a value that is neither a string nor null', () => {
+      const message = '"packageEnv" must be an object of string values (null removes a key)';
+      expect(updateErr(setupFile({}), { packageEnv: { A: 1 } }).details).toEqual([message]);
+      expect(updateErr(setupFile({}), { packageEnv: { A: ['x'] } }).details).toEqual([message]);
+      expect(updateErr(setupFile({}), { packageEnv: { A: { nested: 'x' } } }).details).toEqual([message]);
+      expect(updateErr(setupFile({}), {
+        servicePackaging: { access: { packageEnv: { A: true } } },
+      }).details).toEqual([
+        '"servicePackaging.access.packageEnv" must be an object of string values (null removes a key)',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
     });
   });
 });

@@ -304,9 +304,17 @@ watch(() => props.bucketName, () => {
               >
                 {{ t('buckets.download') }}
               </TButton>
+              <!-- `tone` is a real TButton prop since 0.29, and this row is
+                   why it exists: on `ghost` it inks only the label, so Delete
+                   reads destructive next to a quiet Download instead of
+                   outweighing it the way a filled `variant="danger"` would.
+                   Writing `variant="ghost" tone="danger"` here used to be a
+                   guess — the prop did not exist and Vue dropped it silently,
+                   leaving this button indistinguishable from Download. -->
               <TButton
                 size="sm"
                 variant="ghost"
+                tone="danger"
                 @click="deleteObject(String(row.key))"
               >
                 {{ t('common.delete') }}

@@ -99,7 +99,9 @@ describe('serverless-emitted raw routes on the framework\'s own HttpApi', () => 
 
   it('(A) keeps resolving the framework\'s own Fn::Join targets (no regression)', () => {
     const { resources } = assembleUsersService();
-    const mirror = resources.find(r => r.logicalId === 'HttpApiRouteGetUsers') as { integrationRef?: string };
+    const mirror = resources.find(
+      r => 'logicalId' in r && r.logicalId === 'HttpApiRouteGetUsers',
+    ) as { integrationRef?: string };
     expect(mirror.integrationRef).toBe('HttpApiIntegrationListUsers');
   });
 

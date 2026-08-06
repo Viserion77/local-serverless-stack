@@ -27,6 +27,20 @@ function jsonResponse(status: number, payload: unknown): Response {
   });
 }
 
+// The data-plane error a search is expected to reject with. `.catch(e => e)`
+// hands back `unknown` — assigning it to a typed variable is an error the
+// editor showed on every one of these tests — and it would also let a call that
+// unexpectedly RESOLVED flow into the same variable. This asserts the rejection
+// once and types it once.
+async function rejection(promise: Promise<unknown>): Promise<OpenSearchDataPlaneError> {
+  try {
+    await promise;
+  } catch (error) {
+    return error as OpenSearchDataPlaneError;
+  }
+  throw new Error('expected the data-plane call to reject, but it resolved');
+}
+
 function fetchedUrl(call = 0): URL {
   return new URL(String(fetchSpy.mock.calls[call][0]));
 }
@@ -243,7 +257,7 @@ describe('search', () => {
         status: 400,
       }),
     );
-    const err: OpenSearchDataPlaneError = await explorer.search('products', {}).catch(e => e);
+    const err = await rejection(explorer.search('products', {}));
     expect(err).toBeInstanceOf(OpenSearchDataPlaneError);
     expect(err.status).toBe(400);
     expect(err.message).toBe('unsupported query: [foo]');
@@ -251,7 +265,7 @@ describe('search', () => {
 
   it('falls back to a generic message for a non-JSON error body', async () => {
     fetchSpy.mockResolvedValue(new Response('<html>oops</html>', { status: 500 }));
-    const err: OpenSearchDataPlaneError = await explorer.search('products', {}).catch(e => e);
+    const err = await rejection(explorer.search('products', {}));
     expect(err).toBeInstanceOf(OpenSearchDataPlaneError);
     expect(err.status).toBe(500);
     expect(err.message).toBe('OpenSearch data plane answered HTTP 500');
@@ -259,20 +273,20 @@ describe('search', () => {
 
   it('falls back to a generic message when the error payload is JSON null', async () => {
     fetchSpy.mockResolvedValue(new Response('null', { status: 502 }));
-    const err: OpenSearchDataPlaneError = await explorer.search('products', {}).catch(e => e);
+    const err = await rejection(explorer.search('products', {}));
     expect(err.message).toBe('OpenSearch data plane answered HTTP 502');
   });
 
   it('falls back to a generic message when the payload has no error object', async () => {
     fetchSpy.mockResolvedValue(jsonResponse(418, {}));
-    const err: OpenSearchDataPlaneError = await explorer.search('products', {}).catch(e => e);
+    const err = await rejection(explorer.search('products', {}));
     expect(err.status).toBe(418);
     expect(err.message).toBe('OpenSearch data plane answered HTTP 418');
   });
 
   it('falls back to a generic message when error.reason is missing', async () => {
     fetchSpy.mockResolvedValue(jsonResponse(400, { error: {}, status: 400 }));
-    const err: OpenSearchDataPlaneError = await explorer.search('products', {}).catch(e => e);
+    const err = await rejection(explorer.search('products', {}));
     expect(err.message).toBe('OpenSearch data plane answered HTTP 400');
   });
 });

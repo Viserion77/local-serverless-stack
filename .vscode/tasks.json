@@ -98,9 +98,14 @@
     },
     {
       "label": "typecheck: all projects",
-      "detail": "tsc --noEmit em server/client/mcp + vue-tsc na UI",
+      "detail": "tsc --noEmit em server/client/mcp/tests + vue-tsc na UI",
       "type": "shell",
-      "command": "npx tsc --noEmit -p src/server/tsconfig.json && npx tsc --noEmit -p src/client/tsconfig.json && npx tsc --noEmit -p src/mcp/tsconfig.json && cd src/ui && npx vue-tsc --noEmit",
+      // `tests/tsconfig.json` entrou aqui porque era o único TypeScript do repo
+      // que ninguém checava: ts-jest transpila arquivo a arquivo e não vê erro
+      // de tipo, e os quatro projetos de src/ excluem tests/. Resultado: ~45
+      // erros acumulados, invisíveis no CI e vermelhos no editor — um deles
+      // escondendo um waitFor() que não esperava nada.
+      "command": "npx tsc --noEmit -p src/server/tsconfig.json && npx tsc --noEmit -p src/client/tsconfig.json && npx tsc --noEmit -p src/mcp/tsconfig.json && npx tsc --noEmit -p tests/tsconfig.json && cd src/ui && npx vue-tsc --noEmit",
       "group": "test",
       "icon": { "id": "verified", "color": "terminal.ansiBlue" },
       "problemMatcher": ["$tsc"]

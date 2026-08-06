@@ -27,6 +27,9 @@ export const opensearch: AreaMessages = {
     endpoint: 'Data-plane endpoint',
     unmanaged: 'unmanaged',
     browse: 'Browse',
+    // Accessible name of the row link (TTable `rowLabel`). Without it every row
+    // link is announced as the whole row text — name, service, endpoint.
+    openCollectionLabel: 'Open collection {name}',
     loadCollectionsError: 'Failed to load OpenSearch collections',
     // Collection explorer
     backToCollections: 'Collections',
@@ -75,6 +78,7 @@ export const opensearch: AreaMessages = {
     endpoint: 'Endpoint do data plane',
     unmanaged: 'sem dono',
     browse: 'Explorar',
+    openCollectionLabel: 'Abrir a coleção {name}',
     loadCollectionsError: 'Não foi possível carregar as coleções do OpenSearch',
     // Collection explorer
     backToCollections: 'Coleções',
@@ -123,6 +127,7 @@ export const opensearch: AreaMessages = {
     endpoint: 'Endpoint del data plane',
     unmanaged: 'sin dueño',
     browse: 'Explorar',
+    openCollectionLabel: 'Abrir la colección {name}',
     loadCollectionsError: 'No se pudieron cargar las colecciones de OpenSearch',
     // Collection explorer
     backToCollections: 'Colecciones',

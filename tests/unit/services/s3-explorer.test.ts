@@ -132,10 +132,20 @@ describe('getBucket', () => {
     s3Mock.on(HeadBucketCommand).resolves({});
     s3Mock.on(GetBucketLocationCommand).resolves({ LocationConstraint: 'eu-central-1' });
     s3Mock.on(GetBucketVersioningCommand).resolves({ Status: 'Enabled' });
+    // The snapshot only counts these, but a configuration without its ARN and
+    // events is not a shape S3 can return — `{}` typechecked as nothing and
+    // documented nothing.
     s3Mock.on(GetBucketNotificationConfigurationCommand).resolves({
-      LambdaFunctionConfigurations: [{}, {}],
-      QueueConfigurations: [{}],
-      TopicConfigurations: [{}],
+      LambdaFunctionConfigurations: [
+        { LambdaFunctionArn: 'arn:aws:lambda:us-east-1:000000000000:function:a', Events: ['s3:ObjectCreated:*'] },
+        { LambdaFunctionArn: 'arn:aws:lambda:us-east-1:000000000000:function:b', Events: ['s3:ObjectRemoved:*'] },
+      ],
+      QueueConfigurations: [
+        { QueueArn: 'arn:aws:sqs:us-east-1:000000000000:q', Events: ['s3:ObjectCreated:*'] },
+      ],
+      TopicConfigurations: [
+        { TopicArn: 'arn:aws:sns:us-east-1:000000000000:t', Events: ['s3:ObjectCreated:*'] },
+      ],
     });
     s3Mock.on(ListObjectsV2Command).resolves({
       KeyCount: 3,

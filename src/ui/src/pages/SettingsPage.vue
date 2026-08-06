@@ -8,7 +8,7 @@ import {
   TCard, TStack, TGrid, TBadge, TButton, TSpinner, TText, TIcon, TAlert,
   TFormField, TInput, TSelect, TSwitch, TToggleGroup, TTagInput, TKeyValueEditor, useToast,
 } from '@treeui/vue';
-import type { TKeyValueEditorValidity } from '@treeui/vue';
+import type { TKeyValueEditorSecretMap, TKeyValueEditorValidity } from '@treeui/vue';
 import { api } from '../services/api';
 import type { LssConfigSnapshot, LssConfigUpdate } from '../services/api';
 import { loadBranding } from '../services/branding';
@@ -43,8 +43,9 @@ const themeOptions = computed(() => [
 ]);
 
 // Flat form model. Most fields are scalar, so dirty tracking is a plain
-// compare; the four structural ones (an argv list and the three token maps)
-// are listed below and compared by content instead.
+// compare; the four structural ones (an argv list and the three token maps) are
+// listed below and compared by content instead, and the write-only env map gets
+// a compare of its own.
 const form = reactive({
   serverPort: 3100,
   region: 'us-east-1',
@@ -66,6 +67,16 @@ const form = reactive({
   autoPackage: false,
   packageCommand: '',
   packageArgs: [] as string[],
+  // packageEnv is write-only, so this is NOT the map: `keys` is the key set the
+  // snapshot reports (`packageEnvKeys`) plus whether each one currently holds a
+  // value, and `pending` holds the values typed in this session — the only
+  // values this screen will ever know. They live in one field on purpose: one
+  // secret edit is one unsaved change in the badge, and the in-flight re-apply
+  // in save() carries the pair together instead of half of it.
+  packageEnv: {
+    keys: {} as TKeyValueEditorSecretMap,
+    pending: {} as Record<string, string>,
+  },
   packageTimeoutMs: 300000,
   seedsDir: '',
   brTitle: '',
@@ -83,7 +94,10 @@ let original: Record<FormKey, unknown> | null = null;
 // so the baseline would mutate along with the field (nothing ever dirty) — and
 // a reference compare would call an edited-then-undone map dirty forever, since
 // the editor emits a fresh object every keystroke. Snapshot by clone, compare
-// by content. JSON is enough: every value here is a string.
+// by content. JSON is enough: every value here is a string. `packageEnv` is
+// cloned in formValues() like these, but it is NOT listed: it compares by
+// signature instead (see envSignature) because two of its states mean nothing
+// to the file.
 const STRUCTURAL_KEYS = ['packageArgs', 'brColors', 'brThemeDark', 'brThemeLight'] as const;
 type StructuralKey = (typeof STRUCTURAL_KEYS)[number];
 
@@ -94,13 +108,34 @@ function isStructural(key: FormKey): key is StructuralKey {
 function formValues(): Record<FormKey, unknown> {
   const values = { ...form } as Record<FormKey, unknown>;
   values.packageArgs = [...form.packageArgs];
+  // Two levels deep (`keys` holds `{ set }` objects), so a spread of the outer
+  // object would leave the baseline sharing them with the live form.
+  values.packageEnv = JSON.parse(JSON.stringify(form.packageEnv));
   values.brColors = { ...form.brColors };
   values.brThemeDark = { ...form.brThemeDark };
   values.brThemeLight = { ...form.brThemeLight };
   return values;
 }
 
+// What a packageEnv edit is WORTH, which is what the compare runs on — the raw
+// field carries two states the file cannot hold:
+//   • a key added without a value has nothing to write, so it can never reach
+//     the patch; calling it an unsaved change would arm a Save that saves
+//     nothing (and, with no config file yet, would create an empty one);
+//   • a cleared key and a removed key both travel as `null`, so they are one
+//     change spelled two ways.
+// Sorting keeps the signature independent of insertion order, which shifts as
+// soon as a row is removed and added back.
+function envSignature(value: unknown): string {
+  const env = value as { keys: TKeyValueEditorSecretMap; pending: Record<string, string> };
+  return JSON.stringify({
+    set: Object.keys(env.keys).filter(key => env.keys[key].set).sort(),
+    pending: env.pending,
+  });
+}
+
 function differs(key: FormKey, a: Record<FormKey, unknown>, b: Record<FormKey, unknown>): boolean {
+  if (key === 'packageEnv') return envSignature(a[key]) !== envSignature(b[key]);
   return isStructural(key) ? JSON.stringify(a[key]) !== JSON.stringify(b[key]) : a[key] !== b[key];
 }
 
@@ -126,6 +161,15 @@ function applySnapshot(s: LssConfigSnapshot) {
   form.autoPackage = s.autoPackage;
   form.packageCommand = s.packageCommand;
   form.packageArgs = [...s.packageArgs];
+  // Every key the file has is `set` by definition — the snapshot only lists the
+  // names of variables that exist, and a variable exists because it has a
+  // value. `pending` restarts empty: a saved secret is gone from this screen
+  // (it was written to the file and never comes back down), and a discarded one
+  // must not survive the discard.
+  form.packageEnv = {
+    keys: Object.fromEntries(s.packageEnvKeys.map(key => [key, { set: true }])),
+    pending: {},
+  };
   form.packageTimeoutMs = s.packageTimeoutMs;
   form.seedsDir = s.seedsDir;
   form.brTitle = s.branding.title;
@@ -142,7 +186,22 @@ const dirtyKeys = computed<FormKey[]>(() => {
   const current = formValues();
   return (Object.keys(current) as FormKey[]).filter(key => differs(key, current, original!));
 });
-const dirtyCount = computed(() => dirtyKeys.value.length);
+
+// The pending draft of the packageArgs tag input: text typed into the field and
+// not yet confirmed with Enter. It is not a field of `form`, so it cannot come
+// from dirtyKeys — and it has to count anyway, because the escape hatch that
+// normally rescues it does not fire here: `commitOnBlur` needs a blur, and
+// clicking a DISABLED Save produces no mousedown, so the field never loses
+// focus. Without this the user stares at a value the form claims not to have.
+// Bound through the emit alone: 0.29 ships `update:draft` but no `draft` prop,
+// so `v-model:draft` would also push a stray `draft="…"` attribute down onto
+// the inner <input> (TTagInput forwards fallthrough attrs to it).
+const argsDraft = ref('');
+const argsInput = ref<InstanceType<typeof TTagInput> | null>(null);
+// Trimmed on purpose: `trim` is on (the default, and the right one for argv —
+// a leading space in `--param` is a typo, never an argument), so a whitespace
+// draft confirms to nothing and must not light up Save.
+const dirtyCount = computed(() => dirtyKeys.value.length + (argsDraft.value.trim() ? 1 : 0));
 
 // One editor per token map. `validity-change` fires on mount and on every real
 // change, so this mirrors what each editor currently thinks. A row with a blank
@@ -180,6 +239,87 @@ const tokenLabels = computed(() => ({
   emptyKey: t('settings.tokenEmptyKey'),
   duplicateKey: t('settings.tokenDuplicateKey'),
 }));
+
+// The write-only editor's copy. `value`/`emptyKey`/`duplicateKey` are absent
+// because `secret` mode has no value input and no row-level validation — the
+// key set is edited one key at a time, so a blank or duplicate never gets in.
+// Computed like every other label block: read once in setup and a language
+// switch would leave the six new strings in the old language.
+const envLabels = computed(() => ({
+  key: t('settings.packageEnvKey'),
+  add: t('settings.packageEnvAdd'),
+  remove: t('settings.packageEnvRemove'),
+  hidden: t('settings.packageEnvSet'),
+  replace: t('settings.packageEnvReplace'),
+  clear: t('settings.packageEnvClear'),
+  newValue: t('settings.packageEnvNewValue'),
+  save: t('settings.packageEnvSave'),
+  cancel: t('settings.packageEnvCancel'),
+}));
+
+// packageEnv is the write-only mode: the editor renders one row per key of
+// `secrets` and never reads a value — there is none to read, the snapshot ships
+// `packageEnvKeys` and nothing else. Three emits describe every edit, and only
+// one of them carries a value.
+//
+// Marking the row `set` after a replacement is the PARENT's job: the component
+// deliberately leaves `secrets` alone there, because emitting the map on every
+// replacement would rebuild the rows mid-typing.
+function onEnvSetValue(key: string, value: string): void {
+  // An EMPTY replacement is not a value. The editor's confirm button is live
+  // the moment the replace field opens, so one stray click — Save where Cancel
+  // was meant, nothing typed — would otherwise write `""` over a real secret
+  // while the row kept reading "set": a lie about the file, and the one state
+  // this screen says the file cannot be in (see buildEnvPatch). Collapse it
+  // into what Clear does: the row flips to unset, so the user SEES it, it
+  // counts as one unsaved change, and it travels as `null` like every other
+  // emptying. A key that was only ever unset lands back where it started, so
+  // opening the field and confirming nothing is a no-op rather than a change.
+  // Exact-empty only: "  " is a value somebody typed on purpose.
+  if (value === '') {
+    delete form.packageEnv.pending[key];
+    form.packageEnv.keys = { ...form.packageEnv.keys, [key]: { set: false } };
+    return;
+  }
+  form.packageEnv.pending[key] = value;
+  form.packageEnv.keys = { ...form.packageEnv.keys, [key]: { set: true } };
+}
+
+// `clear-value` empties a key without removing its row; the editor emits
+// `update:secrets` with `set: false` right after, so all that is left here is
+// dropping a value typed in this session and never saved.
+function onEnvClearValue(key: string): void {
+  delete form.packageEnv.pending[key];
+}
+
+// `update:secrets` fires only when the KEY SET changes — a row added, cleared
+// or removed. A removed row takes its unsaved value with it.
+function onEnvKeysChange(next: TKeyValueEditorSecretMap): void {
+  form.packageEnv.keys = next;
+  for (const key of Object.keys(form.packageEnv.pending)) {
+    if (!(key in next)) delete form.packageEnv.pending[key];
+  }
+}
+
+// The patch for `packageEnv`, per key and never as a whole map: the values are
+// write-only, so a wholesale replace could only be assembled by resending
+// values this screen does not have — the server would delete every sibling it
+// was not shown. A typed value sets the variable; a cleared one, a removed one
+// and a replacement confirmed empty (see onEnvSetValue) all send null, which is
+// what deletes it from the file. The three spellings collapse to one because
+// the file has no "present but empty" state, so a cleared row is simply gone
+// from the snapshot that comes back.
+function buildEnvPatch(): Record<string, string | null> {
+  const env: Record<string, string | null> = {};
+  for (const key of snapshot.value?.packageEnvKeys ?? []) {
+    if (!form.packageEnv.keys[key]?.set) env[key] = null;
+  }
+  // A key added without a value contributes nothing: there is no value to
+  // write, and a null would ask the server to delete a variable that never
+  // existed. The empty row disappears with the next snapshot.
+  Object.assign(env, form.packageEnv.pending);
+  return env;
+}
 
 function isEnvMasked(configKey: string): boolean {
   return Boolean(snapshot.value?.envOverrides.includes(configKey));
@@ -225,6 +365,15 @@ function buildPatch(): { patch: LssConfigUpdate; errors: string[] } {
   // better message than anything this form could guess. An emptied list goes as
   // null (deletes the key) rather than `[]`, exactly like a cleared text field.
   if (dirty.has('packageArgs')) patch.packageArgs = form.packageArgs.length ? [...form.packageArgs] : null;
+  // No `orNull` twin for the env map: clearing the last variable already sends
+  // `{ LAST: null }`, and the server drops the key once the merge leaves the
+  // map empty. Nothing here refuses a variable name either — the blocked
+  // loader hooks (NODE_OPTIONS, LD_PRELOAD, …) are screened by the server,
+  // which answers 400 naming the offending variable.
+  if (dirty.has('packageEnv')) {
+    const env = buildEnvPatch();
+    if (Object.keys(env).length) patch.packageEnv = env;
+  }
   if (dirty.has('packageTimeoutMs')) patch.packageTimeoutMs = asPositive(form.packageTimeoutMs, t('settings.packageTimeout'));
   if (dirty.has('seedsDir')) patch.seedsDir = orNull(form.seedsDir);
 
@@ -283,6 +432,11 @@ async function load() {
 }
 
 async function save() {
+  // Confirm a typed-but-unconfirmed tag BEFORE reading the model: dirtyCount
+  // already counts the draft, so building the patch without it would save a
+  // state that contradicts what the field is showing. `commit()` is a no-op
+  // when there is no draft.
+  argsInput.value?.commit();
   const { patch, errors } = buildPatch();
   if (errors.length) {
     error.value = errors.join('; ');
@@ -341,7 +495,13 @@ async function reloadFromDisk() {
 }
 
 function discard() {
-  if (snapshot.value) applySnapshot(snapshot.value);
+  if (!snapshot.value) return;
+  // Same reason as in save(), other direction: the draft lives inside the
+  // component, so restoring the snapshot would leave it on screen and the form
+  // dirty. `commit()` is the only exposed way to empty the field — the tag it
+  // confirms is thrown away by applySnapshot on the next line.
+  argsInput.value?.commit();
+  applySnapshot(snapshot.value);
 }
 
 onMounted(load);
@@ -545,11 +705,29 @@ onMounted(load);
                  argument instead of splitting on the comma. -->
             <TFormField :label="t('settings.packageArgs')" :hint="t('settings.packageArgsHint')">
               <TTagInput
+                ref="argsInput"
                 v-model="form.packageArgs"
                 :allow-duplicates="true"
                 :separator="null"
                 :placeholder="t('settings.packageArgsPlaceholder')"
                 :remove-label="t('settings.packageArgsRemove')"
+                @update:draft="argsDraft = $event"
+              />
+            </TFormField>
+            <!-- Write-only: `secrets` instead of `modelValue`, because the
+                 values never come down from the server — the snapshot lists
+                 packageEnvKeys and nothing more, and the editor has no code
+                 path that reads or displays a value. The row shows the name
+                 plus set/unset; replacing or clearing one goes out as a patch
+                 for that key alone. -->
+            <TFormField :label="t('settings.packageEnv')" :hint="t('settings.packageEnvHint')">
+              <TKeyValueEditor
+                mode="secret"
+                :secrets="form.packageEnv.keys"
+                :labels="envLabels"
+                @update:secrets="onEnvKeysChange"
+                @set-value="onEnvSetValue"
+                @clear-value="onEnvClearValue"
               />
             </TFormField>
             <TFormField

@@ -252,6 +252,7 @@ describe('GET /api/lambdas/activity', () => {
     expect(res.body.workers).toEqual([]);
     expect(res.body.residency).toEqual({
       warm: 0, maxWarmWorkers: 4, lazy: true, idleTimeoutMs: 60000,
+      loadedFunctions: 0, registeredFunctions: 0,
     });
   });
 
@@ -261,33 +262,39 @@ describe('GET /api/lambdas/activity', () => {
       { name: 'billing', functions: [] },
     ] as never);
     runtime.getRuntimeInfo
-      .mockReturnValueOnce({ status: 'online', warm: true, pid: 42, startedAt: 10, lastInvokedAt: 20, invocations: 3, errors: 1, resolvedMode: 'source' } as never)
-      .mockReturnValueOnce({ status: 'online', warm: false, invocations: 0, errors: 0 } as never);
+      .mockReturnValueOnce({ status: 'online', warm: true, pid: 42, startedAt: 10, lastInvokedAt: 20, invocations: 3, errors: 1, resolvedMode: 'source', loadedFunctions: ['a'] } as never)
+      .mockReturnValueOnce({ status: 'online', warm: false, invocations: 0, errors: 0, loadedFunctions: [] } as never);
 
     const res = await request(appWith()).get('/api/lambdas/activity');
     expect(res.body.workers).toEqual([
-      { service: 'orders', status: 'online', warm: true, pid: 42, startedAt: 10, lastInvokedAt: 20, invocations: 3, errors: 1, functions: 2, executionMode: 'source' },
-      { service: 'billing', status: 'online', warm: false, invocations: 0, errors: 0, functions: 0 },
+      { service: 'orders', status: 'online', warm: true, pid: 42, startedAt: 10, lastInvokedAt: 20, invocations: 3, errors: 1, functions: 2, loadedFunctions: ['a'], executionMode: 'source' },
+      { service: 'billing', status: 'online', warm: false, invocations: 0, errors: 0, functions: 0, loadedFunctions: [] },
     ]);
     // Only the forked one counts against the residency cap.
     expect(res.body.residency.warm).toBe(1);
+    // And the unit the operator actually asked about: a warm worker is a
+    // process; only ONE of the service's two declared functions is loaded.
+    expect(res.body.residency).toMatchObject({ loadedFunctions: 1, registeredFunctions: 2 });
   });
 
   // `warm` only exists on a RuntimeInfo once a worker process has been forked;
   // for a service that was registered but never invoked the flag is simply
   // absent. The row must then read "cold" instead of leaking `undefined` into
-  // the panel, and must not be counted against the warm-worker cap.
-  it('reads a RuntimeInfo without a warm flag as cold', async () => {
+  // the panel, and must not be counted against the warm-worker cap. Same for
+  // `loadedFunctions`: no worker means no module cache, so the honest answer is
+  // an empty list rather than a hole the panel has to guess at.
+  it('reads a RuntimeInfo without a warm flag (or a loaded list) as cold and empty', async () => {
     registry.listServices.mockReturnValue([
       { name: 'orders', functions: [{ name: 'a' }] },
     ] as never);
-    // The suite-wide stub deliberately carries no `warm` key.
+    // The suite-wide stub deliberately carries neither key.
 
     const res = await request(appWith()).get('/api/lambdas/activity');
     expect(res.body.workers).toEqual([
-      { service: 'orders', status: 'online', warm: false, invocations: 2, errors: 1, functions: 1, executionMode: 'source' },
+      { service: 'orders', status: 'online', warm: false, invocations: 2, errors: 1, functions: 1, loadedFunctions: [], executionMode: 'source' },
     ]);
     expect(res.body.residency.warm).toBe(0);
+    expect(res.body.residency.loadedFunctions).toBe(0);
   });
 
   it('surfaces recorded spans and the parallelism between them', async () => {

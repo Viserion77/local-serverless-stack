@@ -23,6 +23,22 @@ import { QueueInspector } from '../../../src/server/services/queue-inspector';
 const sqsMock = mockClient(SQSClient);
 const lambdaMock = mockClient(LambdaClient);
 
+// `getCaptured`/`releaseQueue` answer a SENTINEL ('not-found' | 'not-held') or
+// the real thing. The tests below are about the real thing, and `!` only strips
+// null/undefined — it never excluded the sentinels, so `captured!.some(...)`
+// and `res!.dispatched` were reaching into a union that does not have them.
+// Narrowing here fails loudly if a call takes a sentinel path, which is a
+// better outcome than an assertion that cannot even be typed.
+function messagesOf(result: Awaited<ReturnType<QueueInspector['getCaptured']>>) {
+  if (!Array.isArray(result)) throw new Error(`expected captured messages, got "${result}"`);
+  return result;
+}
+
+function releasedOf(result: Awaited<ReturnType<QueueInspector['releaseQueue']>>) {
+  if (typeof result === 'string') throw new Error(`expected a release result, got "${result}"`);
+  return result;
+}
+
 const URL_Q = 'http://localhost:4566/000000000000/q';
 const URL_FIFO = 'http://localhost:4566/000000000000/q.fifo';
 const ARN_Q = 'arn:aws:sqs:us-east-1:000000000000:q';
@@ -371,7 +387,7 @@ describe('hold / captured / release', () => {
 
     const captured = await inspector.getCaptured('q');
     expect(captured).toHaveLength(11);
-    expect(captured!.some(m => m.body === 'tail')).toBe(true);
+    expect(messagesOf(captured).some(m => m.body === 'tail')).toBe(true);
   });
 
   it('tolerates delete failures during capture', async () => {
@@ -403,7 +419,7 @@ describe('hold / captured / release', () => {
 
     const res = await inspector.releaseQueue('q');
     expect(res).toMatchObject({ queue: 'q', released: true });
-    expect(res!.dispatched).toBe(1); // one send ok, one failed (tolerated)
+    expect(releasedOf(res).dispatched).toBe(1); // one send ok, one failed (tolerated)
     expect(lambdaMock.commandCalls(UpdateEventSourceMappingCommand).some(c => (c.args[0].input as any).Enabled === true)).toBe(true);
     expect((inspector as any).held.has(URL_Q)).toBe(false);
   });
@@ -533,7 +549,7 @@ describe('defensive fallback branches', () => {
     sqsMock.on(ReceiveMessageCommand).resolves({ Messages: [] });
     sqsMock.on(SendMessageCommand).resolves({ MessageId: 's' });
     const res = await inspector.releaseQueue('q.fifo');
-    expect(res!.dispatched).toBe(2);
+    expect(releasedOf(res).dispatched).toBe(2);
     const sends = sqsMock.commandCalls(SendMessageCommand).map(c => c.args[0].input as any);
     expect(sends[0].MessageGroupId).toBe('gKept'); // reused original group id
     expect(sends[0].MessageBody).toBe(''); // body ?? ''

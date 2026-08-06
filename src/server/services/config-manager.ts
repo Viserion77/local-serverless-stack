@@ -52,7 +52,9 @@ export interface ResolvedSelfEngineConfig {
 // directory name (basename) OR its path relative to the config file's directory.
 // `packageCommand`/`packageArgs`/`packageEnv` carry the same PUT /api/config
 // fences as their global counterparts (see PACKAGE_RUNNER_VERBS /
-// BLOCKED_PACKAGE_FLAGS / BLOCKED_PACKAGE_ENV_KEYS).
+// BLOCKED_PACKAGE_FLAGS / BLOCKED_PACKAGE_ENV_KEYS), and `packageEnv` is
+// written through that endpoint as the same per-variable patch as the global
+// map — it is redacted to key names on the way out too.
 export interface ServicePackageConfig {
   packageCommand?: string;
   packageArgs?: string[];
@@ -248,7 +250,10 @@ export interface LSSConfig {
 
   // Extra env vars merged over the orchestrator's env for every package child.
   // Loader/interpreter hooks (NODE_OPTIONS, LD_PRELOAD, …) are rejected by
-  // PUT /api/config — see BLOCKED_PACKAGE_ENV_KEYS.
+  // PUT /api/config — see BLOCKED_PACKAGE_ENV_KEYS. Written through that
+  // endpoint the map is a PATCH, one variable at a time (a string sets it, null
+  // removes it): the values are write-only, so a replace would delete the
+  // variables the caller was never shown — see mergeEnvRecord.
   packageEnv?: Record<string, string>;
 
   // Per-service packaging overrides, keyed by the service directory name
@@ -287,8 +292,11 @@ export interface LSSConfig {
 
 // Value shape accepted for each editable top-level key. On update, `object`
 // blocks are merged one level deep (subkeys replace; a null subkey deletes the
-// subkey) so a partial edit never drops sibling settings like `branding.logo`;
-// every other kind replaces the key wholesale. A top-level null deletes the key.
+// subkey) so a partial edit never drops sibling settings like `branding.logo`,
+// and `envRecord` blocks are merged one level deeper still — per VARIABLE, with
+// a null value removing one — because their values are write-only and a client
+// therefore cannot resend them (see mergeEnvRecord). Every other kind replaces
+// the key wholesale. A top-level null deletes the key.
 interface ConfigKeySpec {
   // There is no plain `stringArray`: `packageArgs` is the only array-valued key
   // and it is spawned, so the shape check and the flag screen travel together.
@@ -767,19 +775,27 @@ function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string
       return null;
     }
     case 'stringRecord':
+      return isPlainObject(value) && Object.values(value).every(v => typeof v === 'string')
+        ? null
+        : `"${key}" must be an object of string values`;
+    // Written as a PATCH, one variable at a time (mergeEnvRecord), so `null` is
+    // a value with a meaning here — "remove this variable" — and not just the
+    // top-level "delete the block" spelling. Anything else that is not a string
+    // is still refused: the map ends up in a child process's environment.
     case 'envRecord': {
-      if (!isPlainObject(value) || !Object.values(value).every(v => typeof v === 'string')) {
-        return `"${key}" must be an object of string values`;
+      if (!isPlainObject(value) || !Object.values(value).every(v => typeof v === 'string' || v === null)) {
+        return `"${key}" must be an object of string values (null removes a key)`;
       }
       // An env map is merged into the packaging child's environment, where a
       // handful of names are loader/interpreter hooks: they run code in the
       // child whatever program the command grammar let through, which would
-      // make that grammar decorative.
-      if (spec.kind === 'envRecord') {
-        for (const envKey of Object.keys(value)) {
-          if (BLOCKED_PACKAGE_ENV_KEYS.has(envKey.toLowerCase())) {
-            return `"${key}.${envKey}" cannot be set — it injects code into the packaging process`;
-          }
+      // make that grammar decorative. Screened per variable being SET —
+      // REMOVING one of those names only ever takes capability away, and is the
+      // one way the dashboard can undo a hand-edited config file that carries
+      // it (the fence guards the API, not the read path).
+      for (const [envKey, envValue] of Object.entries(value)) {
+        if (envValue !== null && BLOCKED_PACKAGE_ENV_KEYS.has(envKey.toLowerCase())) {
+          return `"${key}.${envKey}" cannot be set — it injects code into the packaging process`;
         }
       }
       return null;
@@ -820,6 +836,51 @@ function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string
       }
       return null;
     }
+  }
+}
+
+/**
+ * Merge an `envRecord` patch over the map already in the file: a string sets or
+ * replaces one variable, `null` removes one, and every variable the patch does
+ * not name is left exactly as it was.
+ *
+ * Replacing the whole map — what every other non-`object` key does on write —
+ * cannot work for `packageEnv`, because its values are **write-only**:
+ * `GET /api/config` reports `packageEnvKeys`, the NAMES alone (see
+ * routes/config.ts), so the values never leave this process and a client
+ * editing one variable has nothing to resend for its siblings. Under a
+ * wholesale replace, saving `{"A":"v"}` would silently delete `B` and `C` —
+ * secrets the editor was never shown and cannot recover. So the write is a
+ * patch, for the same reason the one-level block merge above exists (a partial
+ * edit must not drop what it could not see), one level deeper.
+ *
+ * A file value that is not an object is replaced rather than merged into,
+ * mirroring how a malformed `object` block is treated.
+ */
+function mergeEnvRecord(existing: unknown, patch: Record<string, unknown>): Record<string, unknown> {
+  const merged: Record<string, unknown> = isPlainObject(existing) ? { ...existing } : {};
+  for (const [envKey, envValue] of Object.entries(patch)) {
+    if (envValue === null) {
+      delete merged[envKey];
+    } else {
+      merged[envKey] = envValue;
+    }
+  }
+  return merged;
+}
+
+/**
+ * Write a merged block back, or drop the key when the merge emptied it — an
+ * empty block carries no setting and would only add noise to the file the human
+ * reviews. It is load-bearing for a map entry: an empty object is truthy, so a
+ * leftover `{}` would shadow a basename-keyed entry for the same service and
+ * silently disable that override.
+ */
+function setOrDeleteBlock(target: Record<string, unknown>, key: string, merged: Record<string, unknown>): void {
+  if (Object.keys(merged).length === 0) {
+    delete target[key];
+  } else {
+    target[key] = merged;
   }
 }
 
@@ -1462,15 +1523,21 @@ export class ConfigManager {
     }
 
     for (const [key, value] of Object.entries(patch)) {
+      const spec = EDITABLE_CONFIG_KEYS[key];
       if (value === null) {
         delete fileConfig[key];
-      } else if (EDITABLE_CONFIG_KEYS[key].kind === 'object') {
+      } else if (spec.kind === 'envRecord') {
+        // Per-variable patch instead of a replace: these values are write-only,
+        // so the client cannot resend the siblings it was never shown and a
+        // replace would delete them. See mergeEnvRecord.
+        setOrDeleteBlock(fileConfig, key, mergeEnvRecord(fileConfig[key], value as Record<string, unknown>));
+      } else if (spec.kind === 'object') {
         // One-level merge so a partial block edit (e.g. branding.title) never
         // drops sibling settings the UI does not round-trip (branding.logo).
         // Map-shaped blocks (serviceRuntime/servicePackaging) merge one level
         // deeper for the same reason: onboarding sending { apiPort } for one
         // service must not drop that entry's execution/packageEnv siblings.
-        const perEntry = Boolean(EDITABLE_CONFIG_KEYS[key].entrySubKeys);
+        const entrySubKeys = spec.entrySubKeys;
         const existing = isPlainObject(fileConfig[key])
           ? (fileConfig[key] as Record<string, unknown>)
           : {};
@@ -1478,14 +1545,21 @@ export class ConfigManager {
         for (const [subKey, subValue] of Object.entries(value as Record<string, unknown>)) {
           if (subValue === null) {
             delete merged[subKey];
-          } else if (perEntry && isPlainObject(subValue)) {
+          } else if (entrySubKeys && isPlainObject(subValue)) {
             const entryExisting = isPlainObject(merged[subKey])
               ? (merged[subKey] as Record<string, unknown>)
               : {};
             const entryMerged: Record<string, unknown> = { ...entryExisting };
-            for (const [entryKey, entryValue] of Object.entries(subValue as Record<string, unknown>)) {
+            for (const [entryKey, entryValue] of Object.entries(subValue)) {
               if (entryValue === null) {
                 delete entryMerged[entryKey];
+              } else if (entrySubKeys[entryKey].kind === 'envRecord') {
+                // servicePackaging[*].packageEnv is as write-only as the global
+                // map (redactPackaging() in routes/config.ts collapses it the
+                // same way), so it patches per variable too. Validation already
+                // rejected any subkey that is not in entrySubKeys, so the spec
+                // lookup here always lands on a declared one.
+                setOrDeleteBlock(entryMerged, entryKey, mergeEnvRecord(entryMerged[entryKey], entryValue as Record<string, unknown>));
               } else {
                 entryMerged[entryKey] = entryValue;
               }
@@ -1493,11 +1567,7 @@ export class ConfigManager {
             // An entry left with no settings carries no meaning and would
             // shadow a basename-keyed entry for the same service (an empty
             // object is truthy), so it is dropped rather than written.
-            if (Object.keys(entryMerged).length === 0) {
-              delete merged[subKey];
-            } else {
-              merged[subKey] = entryMerged;
-            }
+            setOrDeleteBlock(merged, subKey, entryMerged);
           } else {
             merged[subKey] = subValue;
           }

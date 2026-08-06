@@ -95,6 +95,12 @@ router.get('/', (_req: Request, res: Response) => {
 // lss.config.json in the project root when none is loaded) and hot-reload the
 // in-memory config. The human reviews and commits the file — LSS never
 // touches git. Boot-materialized keys come back in restartRequired.
+//
+// `packageEnv` — global and per-service — is patched one VARIABLE at a time (a
+// string sets it, null removes it) rather than replaced, because this router
+// only ever hands out `packageEnvKeys`: a caller that never received the values
+// cannot resend them, so a replace would delete every variable it could not
+// see. See mergeEnvRecord() in config-manager.ts.
 router.put('/', (req: Request, res: Response) => {
   const cm = ConfigManager.getInstance();
   try {

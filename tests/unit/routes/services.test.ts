@@ -1091,7 +1091,12 @@ describe('GET /api/services/:name/logs', () => {
   });
 
   it('200 returns logs', async () => {
-    jest.spyOn(processManager, 'getLogs').mockReturnValue({ logs: ['a'], status: 'running' as never });
+    // The full shape getLogs returns for a KNOWN process: `status: 'running' as
+    // never` typechecked by erasing the type instead of matching it, which then
+    // left the other three fields missing.
+    jest.spyOn(processManager, 'getLogs').mockReturnValue({
+      logs: ['a'], status: 'running', pid: 4242, exitCode: null, startedAt: 1,
+    });
     const res = await request(appWith()).get('/api/services/my-service/logs');
     expect(res.status).toBe(200);
     expect(res.body.logs).toEqual(['a']);
