@@ -105,7 +105,13 @@
       // de tipo, e os quatro projetos de src/ excluem tests/. Resultado: ~45
       // erros acumulados, invisíveis no CI e vermelhos no editor — um deles
       // escondendo um waitFor() que não esperava nada.
-      "command": "npx tsc --noEmit -p src/server/tsconfig.json && npx tsc --noEmit -p src/client/tsconfig.json && npx tsc --noEmit -p src/mcp/tsconfig.json && npx tsc --noEmit -p tests/tsconfig.json && cd src/ui && npx vue-tsc --noEmit",
+      //
+      // O `client:build` antes dele não é enfeite: tests/integration/client.test.ts
+      // importa `../../dist/client` de propósito (é a visão de quem consome o
+      // pacote), então o typecheck do suite precisa desse artefato. Sem isso a
+      // checagem passa na sua máquina — que tem dist/ — e reprova num checkout
+      // limpo, que foi exatamente como ela quebrou o CI.
+      "command": "npx tsc --noEmit -p src/server/tsconfig.json && npx tsc --noEmit -p src/client/tsconfig.json && npx tsc --noEmit -p src/mcp/tsconfig.json && npm run client:build && npx tsc --noEmit -p tests/tsconfig.json && cd src/ui && npx vue-tsc --noEmit",
       "group": "test",
       "icon": { "id": "verified", "color": "terminal.ansiBlue" },
       "problemMatcher": ["$tsc"]

@@ -65,6 +65,7 @@ npm run lint \
   && npx tsc --noEmit -p src/server/tsconfig.json \
   && npx tsc --noEmit -p src/client/tsconfig.json \
   && npx tsc --noEmit -p src/mcp/tsconfig.json \
+  && npm run client:build \
   && npx tsc --noEmit -p tests/tsconfig.json \
   && (cd src/ui && npx vue-tsc --noEmit) \
   && npm run test:coverage \
@@ -78,6 +79,11 @@ UI/client/MCP builds.
 test never fails a run, and every `src/` project excludes `tests/` — which made the suite the only
 TypeScript nobody checked. It had accumulated ~45 errors, invisible to CI and red in the editor, one
 of them hiding a `waitFor()` helper whose wait returned immediately. Keep the tests typechecking.
+
+The `npm run client:build` in front of it is load-bearing: `tests/integration/client.test.ts` imports
+the **built** `dist/client` on purpose (the consumer's view of the package), so typechecking the
+suite needs that artifact. Without it the check passes on a dev box — which has a `dist/` — and fails
+on a clean checkout. That is exactly how it broke CI the first time it ran there.
 
 ### 3. 100% coverage, globally
 
