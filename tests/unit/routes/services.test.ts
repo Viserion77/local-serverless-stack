@@ -752,6 +752,233 @@ describe('GET /api/services/:name', () => {
   });
 });
 
+// The wiring endpoint. The handler is thin — validate, fetch, delegate — but
+// "it delegates" is exactly what has to be asserted on the graph itself: a
+// builder handed the wrong inputs (no region, no metadata routes) still answers
+// 200 with a plausible-looking payload, and a builder that returns nothing at
+// all still answers 200. So every test below reads the nodes and the edges.
+describe('GET /api/services/:name/graph', () => {
+  // The shared TEMPLATE declares one of everything and wires none of it: its
+  // event-source mapping names the function by NAME ('my-fn') rather than by
+  // Ref, so nothing resolves and the graph comes back edgeless. This fixture is
+  // the shape osls actually emits — Ref/Fn::GetAtt intrinsics plus the single
+  // shared execution role — which is what produces edges. TEMPLATE itself is
+  // left alone: a test above pins resourcesCount === 7 against it.
+  const WIRED_TEMPLATE = {
+    Resources: {
+      MyFn: {
+        Type: 'AWS::Lambda::Function',
+        Properties: {
+          FunctionName: 'my-service-dev-worker',
+          Handler: 'h.handler',
+          Runtime: 'nodejs20.x',
+          Role: { 'Fn::GetAtt': ['IamRoleLambdaExecution', 'Arn'] },
+        },
+      },
+      MyTable: { Type: 'AWS::DynamoDB::Table', Properties: { TableName: 'my-table' } },
+      MyQueue: { Type: 'AWS::SQS::Queue', Properties: { QueueName: 'my-queue' } },
+      MyMapping: {
+        Type: 'AWS::Lambda::EventSourceMapping',
+        Properties: {
+          FunctionName: { Ref: 'MyFn' },
+          EventSourceArn: { 'Fn::GetAtt': ['MyQueue', 'Arn'] },
+          BatchSize: 5,
+        },
+      },
+      // The CloudFormation parser drops IAM roles on purpose, so this one only
+      // reaches the graph through the RAW template — and it carries the only
+      // evidence that the function touches the table at all.
+      IamRoleLambdaExecution: {
+        Type: 'AWS::IAM::Role',
+        Properties: {
+          Policies: [{
+            PolicyDocument: {
+              Statement: [
+                { Effect: 'Allow', Action: ['dynamodb:GetItem'], Resource: [{ 'Fn::GetAtt': ['MyTable', 'Arn'] }] },
+                // Every osls role carries this one; `logs:` names no node kind,
+                // so it must not add an arrow.
+                { Effect: 'Allow', Action: ['logs:PutLogEvents'], Resource: '*' },
+              ],
+            },
+          }],
+        },
+      },
+    },
+  };
+
+  // Two functions on one role, a route and its authorizer — the inputs that
+  // come from the registration METADATA rather than from the template. The
+  // grant's ARN is only concrete once the pseudo-parameters are substituted,
+  // which is what makes the region observable in the payload.
+  const ROUTED_TEMPLATE = {
+    Resources: {
+      Worker: {
+        Type: 'AWS::Lambda::Function',
+        Properties: {
+          FunctionName: 'my-service-dev-worker',
+          Handler: 'h.handler',
+          Runtime: 'nodejs20.x',
+          Role: { 'Fn::GetAtt': ['IamRoleLambdaExecution', 'Arn'] },
+        },
+      },
+      Guard: {
+        Type: 'AWS::Lambda::Function',
+        Properties: {
+          FunctionName: 'my-service-dev-guard',
+          Handler: 'h.guard',
+          Runtime: 'nodejs20.x',
+          Role: { 'Fn::GetAtt': ['IamRoleLambdaExecution', 'Arn'] },
+        },
+      },
+      IamRoleLambdaExecution: {
+        Type: 'AWS::IAM::Role',
+        Properties: {
+          Policies: [{
+            PolicyDocument: {
+              Statement: [{
+                Effect: 'Allow',
+                Action: 'sqs:SendMessage',
+                // Another service's queue: the cross-service arrow, and the
+                // only place the region shows up in the answer.
+                Resource: { 'Fn::Sub': 'arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:billing-to-invoice' },
+              }],
+            },
+          }],
+        },
+      },
+    },
+  };
+
+  it('400 on invalid service name', async () => {
+    const res = await request(appWith()).get('/api/services/a..b/graph');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid service name');
+  });
+
+  it('404 when metadata missing', async () => {
+    jest.spyOn(CacheManager.prototype, 'getMetadata').mockResolvedValue(null);
+    const res = await request(appWith()).get('/api/services/my-service/graph');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toBe('Service not found');
+  });
+
+  // A registered service whose cached template is missing (or unreadable, or
+  // corrupt) is not an error — it is a service with nothing to draw. Answering
+  // 500 there would make "the cache lost a file" indistinguishable from "the
+  // builder crashed", so the empty graph carries the reason instead.
+  it('200 with an empty graph and the reason when no template is cached', async () => {
+    jest.spyOn(CacheManager.prototype, 'getMetadata').mockResolvedValue({ ...META });
+    jest.spyOn(CacheManager.prototype, 'getTemplate').mockResolvedValue(null);
+    const res = await request(appWith()).get('/api/services/my-service/graph');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({
+      service: 'my-service',
+      nodes: [],
+      edges: [],
+      edgeKinds: [],
+      warnings: ['No cached CloudFormation template for this service'],
+    });
+  });
+
+  it('200 returns the declared wiring — nodes, edges and the kinds present', async () => {
+    jest.spyOn(CacheManager.prototype, 'getMetadata').mockResolvedValue({ ...META });
+    jest.spyOn(CacheManager.prototype, 'getTemplate').mockResolvedValue(WIRED_TEMPLATE);
+    const res = await request(appWith()).get('/api/services/my-service/graph');
+    expect(res.status).toBe(200);
+    expect(res.body.service).toBe('my-service');
+    // The mapping and the role are wiring, not boxes: three nodes, not five.
+    expect(res.body.nodes.map((n: any) => n.id).sort()).toEqual([
+      'dynamodb:MyTable', 'lambda:MyFn', 'sqs:MyQueue',
+    ]);
+    expect(res.body.edges).toEqual(expect.arrayContaining([
+      // Structural: the mapping says the queue feeds the function, in batches.
+      expect.objectContaining({
+        from: 'sqs:MyQueue', to: 'lambda:MyFn', kind: 'event-source',
+        detail: 'poll ×5', confidence: 'declared',
+      }),
+      // Weaker, and labelled as such: the role only says the function MAY read
+      // the table.
+      expect.objectContaining({
+        from: 'lambda:MyFn', to: 'dynamodb:MyTable', kind: 'iam',
+        detail: 'dynamodb:GetItem', confidence: 'declared',
+      }),
+    ]));
+    expect(res.body.edges).toHaveLength(2);
+    expect(res.body.edgeKinds.sort()).toEqual(['event-source', 'iam']);
+    expect(res.body.warnings).toEqual([]);
+  });
+
+  // Half the graph's inputs never appear in the template: routes, authorizers
+  // and the short function names live in the registration metadata, and the
+  // region decides what every unresolved ARN reduces to. Dropping any of them
+  // on the way to the builder still yields a 200 with a picture — just a
+  // picture missing the entry points.
+  it('200 threads region, functions, routes and authorizers from the metadata', async () => {
+    jest.spyOn(CacheManager.prototype, 'getMetadata').mockResolvedValue({
+      ...META,
+      region: 'eu-west-1',
+      functions: [
+        {
+          name: 'worker', fullName: 'my-service-dev-worker', handler: 'h.handler',
+          runtime: 'nodejs20.x', memorySize: 128, timeout: 6, environment: {}, triggers: ['httpApi'],
+        },
+        {
+          name: 'guard', fullName: 'my-service-dev-guard', handler: 'h.guard',
+          runtime: 'nodejs20.x', memorySize: 128, timeout: 6, environment: {}, triggers: [],
+        },
+      ],
+      routes: [{
+        functionName: 'worker', method: 'GET', path: '/orders',
+        eventType: 'httpApi', cors: false, authorizerName: 'guard-auth',
+      }],
+      authorizers: [{
+        name: 'guard-auth', type: 'request', eventType: 'httpApi', payloadVersion: '2.0',
+        enableSimpleResponses: true, identitySource: ['$request.header.authorization'],
+        resultTtlInSeconds: 0, functionName: 'guard',
+      }],
+    });
+    jest.spyOn(CacheManager.prototype, 'getTemplate').mockResolvedValue(ROUTED_TEMPLATE);
+    const res = await request(appWith()).get('/api/services/my-service/graph');
+    expect(res.status).toBe(200);
+
+    // routes: the granular entry point, and the arrow to whoever serves it.
+    expect(res.body.nodes).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'route:GET /orders', kind: 'route', method: 'GET', path: '/orders' }),
+    ]));
+    expect(res.body.edges).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        from: 'route:GET /orders', to: 'lambda:Worker', kind: 'http-route', detail: 'HTTP API',
+      }),
+      // authorizers: the guard gates that same route.
+      expect.objectContaining({
+        from: 'lambda:Guard', to: 'route:GET /orders', kind: 'authorizer', detail: 'request',
+      }),
+    ]));
+
+    // functions: the node is labelled with the SHORT name only
+    // serverless-state knows — the template carries the qualified one.
+    expect(res.body.nodes.find((n: any) => n.id === 'lambda:Worker')).toMatchObject({
+      label: 'worker', fullName: 'my-service-dev-worker',
+    });
+
+    // region: the grant's `${AWS::Region}` reduced with the metadata's region,
+    // not with the builder's us-east-1 fallback.
+    expect(res.body.nodes.find((n: any) => n.kind === 'external')).toMatchObject({
+      arn: 'arn:aws:sqs:eu-west-1:000000000000:billing-to-invoice',
+      label: 'billing-to-invoice',
+      service: 'sqs',
+    });
+  });
+
+  it('500 when reading the template throws', async () => {
+    jest.spyOn(CacheManager.prototype, 'getMetadata').mockResolvedValue({ ...META });
+    jest.spyOn(CacheManager.prototype, 'getTemplate').mockRejectedValue(new Error('EIO'));
+    const res = await request(appWith()).get('/api/services/my-service/graph');
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe('Failed to build service graph');
+  });
+});
+
 describe('DELETE /api/services/:name', () => {
   it('400 on invalid service name', async () => {
     const res = await request(appWith()).delete('/api/services/a..b');

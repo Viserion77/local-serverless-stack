@@ -80,6 +80,24 @@ export const TOOLS: ToolDefinition[] = [
     run: (_a, http) => http('GET', '/api/services'),
   },
   {
+    name: 'lss_service_graph',
+    description:
+      'How ONE service is wired, derived from its packaged CloudFormation template: nodes (its functions, '
+      + 'tables, queues, topics, buckets, buses, rules, collections, secrets, HTTP routes and shared IAM roles, '
+      + 'plus the resources of OTHER services it references) and the edges between them — each carrying the '
+      + 'evidence it came from (http-route, authorizer, event-source, s3-notification, event-rule-target, '
+      + 'sns-subscription, redrive, iam grant, env var) and whether that evidence is `declared` or merely '
+      + '`inferred` from a name match. Use it to answer "what triggers this function" or "who writes that table" '
+      + 'without reading the template. It reports what the service DECLARED, not live traffic, so it answers '
+      + 'for a stopped service too.',
+    inputSchema: {
+      type: 'object',
+      properties: { name: str('Service name, as listed by lss_services.') },
+      required: ['name'],
+    },
+    run: (a, http) => http('GET', `/api/services/${name(a)}/graph`),
+  },
+  {
     name: 'lss_scan_services',
     description:
       'Discover Serverless Framework / osls services under the project root that could be registered: '

@@ -53,6 +53,7 @@ describe('read-only tools', () => {
     await expectCall('lss_config', {}, ['GET', '/api/config']);
     await expectCall('lss_ports', {}, ['GET', '/api/config/ports']);
     await expectCall('lss_services', {}, ['GET', '/api/services']);
+    await expectCall('lss_service_graph', { name: 'svc' }, ['GET', '/api/services/svc/graph']);
     await expectCall('lss_lambdas', {}, ['GET', '/api/lambdas']);
     await expectCall('lss_apis', {}, ['GET', '/api/apis']);
     await expectCall('lss_resources', {}, ['GET', '/api/resources']);

@@ -13,6 +13,26 @@ provider:
     RECEIPTS_BUCKET: billing-receipts
     BILLING_BUS: billing-events
     AWS_ENDPOINT: http://localhost:14566
+  # See the note in orders-service: the engine allows everything, so these
+  # statements exist as declaration, not enforcement. They are what lets the
+  # dashboard's wiring graph say WHICH resources this service writes to —
+  # `provider.environment` alone would only say that it knows their names.
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - s3:PutObject
+            - s3:GetObject
+            - s3:ListBucket
+          Resource:
+            - Fn::GetAtt: [ReceiptsBucket, Arn]
+            - Fn::Join: ['', [Fn::GetAtt: [ReceiptsBucket, Arn], '/*']]
+        - Effect: Allow
+          Action:
+            - events:PutEvents
+          Resource:
+            Fn::GetAtt: [BillingBus, Arn]
 
 custom:
   accountId: '000000000000'

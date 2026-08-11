@@ -83,10 +83,27 @@ e passa a ser CSS local silencioso, que é exatamente o que a regra 2 proíbe.
 | # | Superfície | O que é | Motivo | Responsável | Condição de remoção |
 |---|---|---|---|---|---|
 | 1 | `pages/OverviewPage.vue` — `<style scoped> .overview-hero { background: linear-gradient(…) }` | Gradiente decorativo do hero da Overview | Último resquício do CSS pré-migração. O `THero` do 0.27 é candidato, mas é uma **banda `<section>` sem borda de card** e o hero atual é um `TCard variant="outline"` — trocar muda aparência e semântica de container | humano (decisão de design, não de refactor) | Decisão explícita de adotar `THero` (ou de manter o `TCard` e pedir um eixo de fundo decorativo à TreeUI) |
+| 2 | `components/graph/graphCanvas.ts` — `canvas.style.width/height`, `host.style.overflowX/maxWidth`, `canvas.style.cursor` | Dimensionamento do `<canvas>` do diagrama de ligações (5 declarações, todas **imperativas e num elemento que o módulo cria e possui** — nenhuma folha, nenhuma classe, nenhum `:deep`, nenhum seletor `t-*`) | A TreeUI 0.29.0 **não tem primitiva de nó-e-aresta** (o `TChart` é `number[]` categórico alinhado a `labels` e sem slot dentro do SVG; o `TSpanLanes` é barra 1-D dentro de uma faixa; o `TTreeView` é lista DOM) e **nenhum componente tem prop que estique um filho**: `height` só existe em `TChart`/`TPane`/`TSkeleton`/`TEmptyState`/`TCodeBlock`/`TTag`. O `useDecorativeCanvas` **mede** (`getBoundingClientRect`) mas nunca dimensiona, é contratualmente `pointer-events: none`, não expõe `requestRedraw()` e é gateado por `(pointer: coarse)`/reduced-motion — num tablet desenha **um** quadro e nunca mais repinta. Um diagrama cujos nós são alvo de clique e cujos dados são refetchados precisa do oposto dos três. O `cursor` é o único caso em que a afordância **não pode** vir de CSS: a área sensível é um retângulo dentro do canvas e nenhuma folha sabe onde ele está | agente do dashboard LSS | Entrega do **TREEUX-018** (primitiva de grafo, ou host de canvas interativo com eixo de altura, `requestRedraw()` e hit-testing). Adotada a API oficial, este arquivo perde as 5 declarações e a linha sai da tabela |
 
-**É a única exceção viva**, e ela é uma decisão de design pendente, não uma lacuna de API. Fora
-desta linha o `src/ui/` tem **zero** `style` inline e **zero** bloco `<style>` — o produto não
-escreve mais CSS.
+**São as duas exceções vivas.** A primeira é decisão de design pendente; a segunda é lacuna de API,
+com item aberto e condição de remoção amarrada a ele. Fora destas duas linhas o `src/ui/` tem
+**zero** `style` inline e **zero** bloco `<style>` — o produto não escreve mais CSS.
+
+> **Por que o canvas não virou um fallback silencioso.** A regra 1 permite componente local quando
+> ele é **composição de domínio**; o `ServiceGraphCard.vue` é isso — `TCard`, `TTabs`, `TTable`,
+> `TCheckbox`, `TBadge`, `TAlert`, `TEmptyState`, `TSpinner`, `TTag`, `TIcon`, e **nenhuma** linha de
+> CSS. O que não existe na biblioteca é só a **superfície de desenho**, e ela ficou confinada a dois
+> módulos `.ts` (`graphLayout.ts` puro, `graphCanvas.ts` com o DOM), com as cores lidas dos tokens
+> `--tree-*` via `getComputedStyle` — então tema, `branding.colors` e o toggle de tema continuam
+> valendo dentro do desenho. As marcas AWS são a arte vendorizada, reproduzida **sem modificação**
+> (só escala uniforme), como a regra 3 e o `NOTICE.md` exigem; o glifo funcional que faltaria para o
+> nó `external` **não** foi desenhado à mão — aquele nó é rotulado, não iconizado no canvas.
+>
+> **Acessibilidade não abriu exceção.** Canvas é opaco para leitor de tela e a regra 6 põe isso no
+> componente. O `TChart` resolve emitindo uma tabela visualmente escondida; esconder exigiria CSS que
+> o produto não pode escrever, então a tabela virou **aba irmã** (`Ligações`), com o mesmo dado, no
+> `TTable`, traduzida nos três idiomas — e o `<canvas>` leva `role="img"` com nome acessível que
+> aponta para ela.
 
 *Saíram da tabela:*
 

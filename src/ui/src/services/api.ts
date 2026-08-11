@@ -659,6 +659,86 @@ export interface ServiceDetail extends ServiceSummary {
   resources: ServiceResource[];
 }
 
+/**
+ * The service wiring graph — `GET /api/services/:name/graph`.
+ *
+ * Mirrored by hand from `src/server/services/service-graph.ts`, like every
+ * other type in this file: the dashboard is a separate tsconfig that must not
+ * reach into server source. Nothing typechecks the two against each other, and
+ * `ServiceResource['type']` above is the cautionary tale — it drifted six
+ * members behind the server. So the kinds below are consumed through an
+ * EXHAUSTIVE map in `icons/resourceIcons.ts`: adding a kind here without
+ * choosing its mark is a `vue-tsc` error, which is the only mechanical link
+ * the two sides can have.
+ */
+export type GraphNodeKind =
+  | 'lambda'
+  | 'dynamodb'
+  | 'sqs'
+  | 'sns'
+  | 's3'
+  | 'eventbus'
+  | 'event-rule'
+  | 'opensearch'
+  | 'secret'
+  | 'route'
+  | 'iam-role'
+  | 'external';
+
+export interface GraphNode {
+  id: string;
+  kind: GraphNodeKind;
+  label: string;
+  logicalId?: string;
+  // Route nodes.
+  method?: string;
+  path?: string;
+  // Lambda nodes.
+  fullName?: string;
+  handler?: string;
+  // External nodes: referenced by this service, declared by another.
+  arn?: string;
+  service?: string;
+}
+
+/**
+ * How the link was established. The dashboard draws `iam` and `env` with a
+ * weaker stroke than the rest on purpose — see `confidence`.
+ */
+export type GraphEdgeKind =
+  | 'http-route'
+  | 'authorizer'
+  | 'event-source'
+  | 's3-notification'
+  | 'event-rule-target'
+  | 'event-bus-rule'
+  | 'sns-subscription'
+  | 'redrive'
+  | 'iam'
+  | 'env';
+
+export interface GraphEdge {
+  id: string;
+  from: string;
+  to: string;
+  kind: GraphEdgeKind;
+  detail?: string;
+  // `declared` — CloudFormation wires it. `inferred` — LSS matched a name and
+  // could be wrong. The two must never look alike on screen.
+  confidence: 'declared' | 'inferred';
+  // The env var is identical on every function of the service, so it came from
+  // `provider.environment` and says nothing about this one function.
+  serviceWide?: boolean;
+}
+
+export interface ServiceGraph {
+  service: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  edgeKinds: GraphEdgeKind[];
+  warnings: string[];
+}
+
 export interface LambdaSummary {
   name: string;
   fullName: string;
@@ -765,6 +845,8 @@ export const api = {
   // Services
   listServices: () => request<ServiceSummary[]>('/api/services'),
   getService: (name: string) => request<ServiceDetail>(`/api/services/${encodeURIComponent(name)}`),
+  getServiceGraph: (name: string) =>
+    request<ServiceGraph>(`/api/services/${encodeURIComponent(name)}/graph`),
   registerService: (servicePath: string) =>
     request<RegisterServiceResult>('/api/services/register', {
       method: 'POST',

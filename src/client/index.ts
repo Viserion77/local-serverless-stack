@@ -93,7 +93,14 @@ export type {
   ApiAuthorizerInfo,
   GatewayListenerStatus,
 } from './namespaces/apis';
-export type { ServiceRuntimeStatus } from './namespaces/services';
+export type {
+  ServiceRuntimeStatus,
+  ServiceGraph,
+  ServiceGraphNode,
+  ServiceGraphEdge,
+  ServiceGraphNodeKind,
+  ServiceGraphEdgeKind,
+} from './namespaces/services';
 export type {
   LifecycleApi,
   StartOptions,

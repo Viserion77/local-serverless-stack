@@ -16,7 +16,7 @@
 // mark is chosen. That is the point: an unknown resource must not silently
 // inherit a neighbour's brand.
 import type { TIconName } from '@treeui/vue';
-import type { EngineServiceName, ResourceBreakdown, ServiceResource } from '../services/api';
+import type { EngineServiceName, GraphNodeKind, ResourceBreakdown, ServiceResource } from '../services/api';
 
 /**
  * Declared-resource kind → AWS service mark.
@@ -40,6 +40,40 @@ export const resourceTypeIcons: Readonly<Record<ServiceResource['type'], TIconNa
   'event-rule': 'aws-eventbridge',
   opensearch: 'aws-opensearch',
   'event-source': 'aws-lambda',
+};
+
+/**
+ * Wiring-graph node kind → mark.
+ *
+ * A separate key space from `resourceTypeIcons`: the graph has three node kinds
+ * that are not declared CFN resources — an HTTP `route`, the execution
+ * `iam-role` that several functions share, and `external`, a resource this
+ * service references but another one declares.
+ *
+ * `external` is the one entry that is deliberately NOT a brand. It does not
+ * stand for an AWS service (it can be a queue, a bus, a table — whatever the
+ * neighbour declared); it stands for "this lives somewhere else", which is a
+ * functional idea, so by rule 3 it takes a TreeUI glyph. `secret` and `route`
+ * do stand for one service each, so they take the AWS marks.
+ *
+ * Exhaustive over `GraphNodeKind` on purpose. The server union and this one are
+ * hand-mirrored across two tsconfigs, and nothing else checks them against each
+ * other — this map is the tripwire that makes a new kind fail `vue-tsc` until
+ * someone decides how it should look.
+ */
+export const graphNodeIcons: Readonly<Record<GraphNodeKind, TIconName>> = {
+  lambda: 'aws-lambda',
+  dynamodb: 'aws-dynamodb',
+  sqs: 'aws-sqs',
+  sns: 'aws-sns',
+  s3: 'aws-s3',
+  eventbus: 'aws-eventbridge',
+  'event-rule': 'aws-eventbridge',
+  opensearch: 'aws-opensearch',
+  secret: 'aws-secrets-manager',
+  route: 'aws-api-gateway',
+  'iam-role': 'aws-iam',
+  external: 'external-link',
 };
 
 /** One counter of the per-service resource breakdown shown in the table. */

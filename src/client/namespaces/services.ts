@@ -61,6 +61,99 @@ export interface PrepareServiceResult {
   output: string;
 }
 
+// --- GET /api/services/:name/graph -------------------------------------------
+// The wiring of one service, mirrored from the orchestrator's own shape rather
+// than imported from it: `rootDir` for this build is `src/client`, so a
+// `src/server` import would not compile into dist/client at all — the same
+// reason `ApiRouteInfo` is redeclared in namespaces/apis.ts instead of reusing
+// the parser's `HttpRoute`.
+
+/**
+ * What a node stands for. `route` and `iam-role` have no counterpart among the
+ * provisioned resource types: a route is declared in `serverless-state.json`,
+ * and a role is never provisioned. `external` is anything the service
+ * references but does not declare — the cross-service links.
+ */
+export type ServiceGraphNodeKind =
+  | 'lambda'
+  | 'dynamodb'
+  | 'sqs'
+  | 'sns'
+  | 's3'
+  | 'eventbus'
+  | 'event-rule'
+  | 'opensearch'
+  | 'secret'
+  | 'route'
+  | 'iam-role'
+  | 'external';
+
+/**
+ * How an edge was established. The distinction is the point of the payload:
+ * `iam` and `env` are far weaker evidence than the rest.
+ */
+export type ServiceGraphEdgeKind =
+  | 'http-route'
+  | 'authorizer'
+  | 'event-source'
+  | 's3-notification'
+  | 'event-rule-target'
+  | 'event-bus-rule'
+  | 'sns-subscription'
+  | 'redrive'
+  | 'iam'
+  | 'env';
+
+export interface ServiceGraphNode {
+  // Stable within one graph: `<kind>:<logicalId>` for declared resources,
+  // `route:<METHOD> <path>` for routes, `external:<arn-or-name>` otherwise.
+  id: string;
+  kind: ServiceGraphNodeKind;
+  // Never assumed to be unique — two services can both declare an `OrdersTable`.
+  label: string;
+  logicalId?: string;
+  // Route nodes only.
+  method?: string;
+  path?: string;
+  // Lambda nodes only: the fully qualified `<service>-<stage>-<fn>` name.
+  fullName?: string;
+  handler?: string;
+  // External nodes only: the ARN (or bare name) that could not be attributed to
+  // anything this service declares, plus the AWS service it names.
+  arn?: string;
+  service?: string;
+}
+
+export interface ServiceGraphEdge {
+  id: string;
+  from: string;
+  to: string;
+  kind: ServiceGraphEdgeKind;
+  // The HTTP verb, the S3 event names, the granted IAM actions, the env var
+  // name — whatever makes the edge checkable by a human.
+  detail?: string;
+  // `declared` — CloudFormation (or serverless-state) wires this edge.
+  // `inferred` — LSS deduced it from a name match and could be wrong. Only
+  // `env` edges are ever inferred.
+  confidence: 'declared' | 'inferred';
+  // Set on an env-var edge identical on EVERY function of the service — it came
+  // from `provider.environment` and says nothing about this function in
+  // particular, so a consumer should subordinate it.
+  serviceWide?: boolean;
+}
+
+export interface ServiceGraph {
+  service: string;
+  nodes: ServiceGraphNode[];
+  edges: ServiceGraphEdge[];
+  // Which kinds actually occur, so a legend never has to re-scan the edges.
+  edgeKinds: ServiceGraphEdgeKind[];
+  // Non-fatal findings: a reference that pointed at nothing, an unsupported
+  // intrinsic — surfaced rather than swallowed. A service with no cached
+  // template answers an empty graph carrying one of these.
+  warnings: string[];
+}
+
 export interface ServicesApi {
   register(input: RegisterServiceInput): Promise<unknown>;
   /** GET /api/services/scan — discover Serverless/osls services under the project root. */
@@ -71,6 +164,12 @@ export interface ServicesApi {
   package(servicePath: string): Promise<PrepareServiceResult>;
   list(): Promise<unknown[]>;
   get(name: string): Promise<unknown>;
+  /**
+   * GET /api/services/:name/graph — the service's DECLARED wiring (nodes,
+   * edges and the evidence for each), derived from the packaged template. It
+   * answers for a stopped service too: nothing here is read from the engine.
+   */
+  graph(name: string): Promise<ServiceGraph>;
   remove(name: string): Promise<{ success: true }>;
   setStatus(name: string, body: { status?: string; pid?: number }): Promise<{ success: true }>;
   start(name: string, input?: StartServiceInput): Promise<{ success: boolean; pid?: number; status?: string }>;
@@ -93,6 +192,7 @@ export function createServicesApi(http: Http): ServicesApi {
     package: (servicePath) => http.json('POST', '/api/services/package', { body: { servicePath } }),
     list: () => http.json('GET', '/api/services'),
     get: (name) => http.json('GET', base(name)),
+    graph: (name) => http.json('GET', `${base(name)}/graph`),
     remove: (name) => http.json('DELETE', base(name)),
     setStatus: (name, body) => http.json('PATCH', `${base(name)}/status`, { body }),
     start: (name, input) => http.json('POST', `${base(name)}/start`, { body: input ?? {} }),

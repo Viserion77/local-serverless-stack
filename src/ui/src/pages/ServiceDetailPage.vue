@@ -9,6 +9,7 @@ import {
 import type { TBadgeTone } from '@treeui/vue';
 import { api } from '../services/api';
 import type { ServiceDetail, ServiceResource } from '../services/api';
+import ServiceGraphCard from '../components/services/ServiceGraphCard.vue';
 import { ENGINE_LABEL } from '../services/engine';
 import { resourceTypeIcons } from '../icons/resourceIcons';
 import { useI18n } from '../i18n';
@@ -52,6 +53,22 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+const graphCard = ref<InstanceType<typeof ServiceGraphCard> | null>(null);
+
+/**
+ * The Refresh button, as distinct from the 10 s poll.
+ *
+ * The poll re-reads the service (status, PID, ports) because those change on
+ * their own. The wiring graph does not: it is derived from the packaged
+ * template, which only changes on a re-register — so re-laying it out every ten
+ * seconds would make a static diagram twitch for nothing. An explicit Refresh
+ * is the one moment the user has said they want everything re-read.
+ */
+async function refreshAll() {
+  await load();
+  await graphCard.value?.reload();
 }
 
 async function startSvc() {
@@ -200,7 +217,7 @@ watch(() => props.serviceName, load);
           {{ t('services.stop') }}
         </TButton>
         <TButton size="sm" variant="ghost" @click="openLogs">{{ t('services.logs') }}</TButton>
-        <TButton size="sm" variant="ghost" :loading="loading" @click="load">{{ t('common.refresh') }}</TButton>
+        <TButton size="sm" variant="ghost" :loading="loading" @click="refreshAll">{{ t('common.refresh') }}</TButton>
         <!-- This one STAYS filled — `variant="solid" tone="danger"` is the
              non-deprecated spelling of what it already rendered, not a change
              of weight. The two siblings that went quiet (`ghost tone="danger"`
@@ -275,6 +292,17 @@ watch(() => props.serviceName, load);
           </TDescriptionItem>
         </TDescriptionList>
       </TCard>
+
+      <!--
+        The wiring sits ABOVE the flat resource list on purpose: the list
+        answers "what does this service declare", which the graph then answers
+        better AND extends with "and how are they connected". Reading order
+        follows that — the picture first, the inventory below it as the detail.
+        It carries its own fetch (`GET /api/services/:name/graph`) rather than
+        riding this page's 10 s poll: a re-layout every ten seconds would make
+        a static diagram twitch for nothing.
+      -->
+      <ServiceGraphCard ref="graphCard" :service-name="serviceName" />
 
       <TCard variant="outline">
         <template #header>

@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import path from 'path';
 import fs from 'fs';
 import { CloudFormationParser } from '../services/cloudformation-parser.js';
+import { buildServiceGraph } from '../services/service-graph.js';
 import { runServerlessPackage, ServerlessPackageError } from '../services/serverless-packager.js';
 import { CacheManager } from '../services/cache-manager.js';
 import { ResourceProvisioner } from '../services/resource-provisioner.js';
@@ -407,6 +408,51 @@ router.get('/:name', async (req: Request, res: Response) => {
   } catch (error) {
     console.error('Error fetching service:', error);
     return res.status(500).json({ error: 'Failed to fetch service details' });
+  }
+});
+
+// The service's wiring: which declared resources talk to which, and on what
+// evidence. Derived from the cached template + the registration metadata, so it
+// answers for a stopped service too — see service-graph.ts for why it is
+// deliberately DECLARED rather than reconciled against the running engine.
+router.get('/:name/graph', async (req: Request, res: Response) => {
+  try {
+    await ensureCacheInit();
+    const serviceName = req.params.name;
+    if (!serviceName || typeof serviceName !== 'string' || serviceName.includes('/') || serviceName.includes('..')) {
+      return res.status(400).json({ error: 'Invalid service name' });
+    }
+    const metadata = await cache.getMetadata(serviceName);
+    if (!metadata) {
+      return res.status(404).json({ error: 'Service not found' });
+    }
+
+    // getTemplate() returns null for a missing/unreadable/corrupt file, and
+    // parse() dereferences its argument — so an empty graph is returned here
+    // rather than letting a 500 stand in for "registered, nothing cached".
+    const template = await cache.getTemplate(serviceName);
+    if (!template) {
+      return res.json({
+        service: serviceName,
+        nodes: [],
+        edges: [],
+        edgeKinds: [],
+        warnings: ['No cached CloudFormation template for this service'],
+      });
+    }
+
+    return res.json(buildServiceGraph({
+      serviceName,
+      template,
+      resources: parser.parse(template),
+      region: metadata.region,
+      functions: metadata.functions,
+      routes: metadata.routes,
+      authorizers: metadata.authorizers,
+    }));
+  } catch (error) {
+    console.error('Error building service graph:', error);
+    return res.status(500).json({ error: 'Failed to build service graph' });
   }
 });
 
