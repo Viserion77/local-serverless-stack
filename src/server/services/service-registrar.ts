@@ -22,12 +22,18 @@ import { LambdaRuntimeManager } from './lambda-runtime-manager.js';
 import { GatewayManager } from './gateway-manager.js';
 import { SourceWatcher } from './source-watcher.js';
 import { runServerlessPackage, ServerlessPackageError } from './serverless-packager.js';
+import { detectStaleArtifact, formatStaleArtifactWarning } from './artifact-staleness.js';
 
 export interface RegisterInput {
   servicePath: string;
   invokePort?: number;
   apiPort?: number;
   region?: string;
+  // Run the service's packaging command before reading the template, even when
+  // a template is already on disk. `autoPackage` only covers the MISSING-template
+  // case, so without this the only way to load edited code was to know the
+  // stack's packaging command from outside and run it by hand.
+  repackage?: boolean;
 }
 
 export interface RegisterResult {
@@ -98,7 +104,12 @@ export class ServiceRegistrar {
     const dirName = path.basename(resolvedPath);
 
     const warnings: string[] = [];
-    const template = await this.readTemplate(resolvedPath, dirName) as Parameters<CloudFormationParser['parse']>[0];
+    const template = await this.readTemplate(
+      resolvedPath,
+      dirName,
+      warnings,
+      input.repackage ?? false,
+    ) as Parameters<CloudFormationParser['parse']>[0];
     const resources = cfnParser.parse(template, warnings);
     const templateHash = cfnParser.calculateHash(template);
 
@@ -367,61 +378,101 @@ export class ServiceRegistrar {
     FunctionRegistry.getInstance().removeService(serviceName);
   }
 
-  private async readTemplate(resolvedPath: string, serviceName: string): Promise<Record<string, unknown>> {
+  private async readTemplate(
+    resolvedPath: string,
+    serviceName: string,
+    warnings: string[],
+    repackage: boolean,
+  ): Promise<Record<string, unknown>> {
     const configManager = ConfigManager.getInstance();
     const templatePath = path.join(resolvedPath, '.serverless', 'cloudformation-template-update-stack.json');
-    let templateContent: string;
-    try {
-      templateContent = await fs.readFile(templatePath, 'utf-8');
-    } catch (err) {
-      const isENOENT = (err as NodeJS.ErrnoException)?.code === 'ENOENT';
-      if (!isENOENT) throw err;
 
-      if (!configManager.isAutoPackage()) {
-        throw new RegistrationError(
-          400,
-          `CloudFormation template not found at ${templatePath}. Run 'serverless package' in the service directory, or enable autoPackage in lss.config.json.`,
-        );
-      }
+    // `--repackage` skips the read entirely: the whole point is to not register
+    // what is already on disk.
+    const existing = repackage ? null : await this.readTemplateIfPresent(templatePath);
 
-      const pkgConfig = configManager.getPackageConfigForService(resolvedPath);
-      const displayCmd = [pkgConfig.command, ...pkgConfig.args].join(' ');
-      console.log(`📦 Template missing — running '${displayCmd}' in ${pkgConfig.cwd} (service: ${serviceName})`);
-      try {
-        const result = await runServerlessPackage({
-          command: pkgConfig.command,
-          args: pkgConfig.args,
-          cwd: pkgConfig.cwd,
-          timeoutMs: pkgConfig.timeoutMs,
-          env: pkgConfig.env,
-        });
-        console.log(`✅ Auto-package finished for ${resolvedPath} (exit 0)`);
-        if (result.stdout.trim()) {
-          console.log(`--- ${displayCmd} stdout ---\n${result.stdout.trimEnd()}\n--- end ---`);
-        }
-      } catch (packageErr) {
-        if (packageErr instanceof ServerlessPackageError) {
-          console.error(`❌ Auto-package failed for ${resolvedPath}: ${packageErr.message}`);
-          if (packageErr.result.stdout.trim()) {
-            console.error(`--- ${displayCmd} stdout ---\n${packageErr.result.stdout.trimEnd()}\n--- end ---`);
-          }
-          if (packageErr.result.stderr.trim()) {
-            console.error(`--- ${displayCmd} stderr ---\n${packageErr.result.stderr.trimEnd()}\n--- end ---`);
-          }
-        } else {
-          console.error(`❌ Auto-package failed for ${resolvedPath}:`, packageErr);
-        }
-        const detail = packageErr instanceof ServerlessPackageError
-          ? `${packageErr.message}\n${packageErr.result.stderr || packageErr.result.stdout}`.trim()
-          : packageErr instanceof Error ? packageErr.message : 'Unknown error';
-        throw new RegistrationError(
-          500,
-          `Auto-package failed for ${resolvedPath}: ${detail}. Full stderr/stdout is in the orchestrator log (/tmp/lss-orchestrator.log).`,
-        );
-      }
-      templateContent = await fs.readFile(templatePath, 'utf-8');
+    if (existing !== null) {
+      // Registering artifacts that were produced by an earlier packaging run —
+      // faithful, but silent about age. Say it out loud when the code moved on.
+      await this.warnIfArtifactIsStale(resolvedPath, warnings);
+      return JSON.parse(existing);
     }
-    return JSON.parse(templateContent);
+
+    // An explicit `--repackage` is an operator gesture and runs regardless of
+    // `autoPackage`, which governs only the automatic, template-missing path.
+    if (!repackage && !configManager.isAutoPackage()) {
+      throw new RegistrationError(
+        400,
+        `CloudFormation template not found at ${templatePath}. Run 'serverless package' in the service directory, or enable autoPackage in lss.config.json.`,
+      );
+    }
+
+    await this.runPackaging(resolvedPath, serviceName, repackage);
+    return JSON.parse(await fs.readFile(templatePath, 'utf-8'));
+  }
+
+  // ENOENT means "not packaged yet" and is the caller's decision to make; any
+  // other read failure is a real fault and must not be mistaken for one.
+  private async readTemplateIfPresent(templatePath: string): Promise<string | null> {
+    try {
+      return await fs.readFile(templatePath, 'utf-8');
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return null;
+      throw err;
+    }
+  }
+
+  private async warnIfArtifactIsStale(resolvedPath: string, warnings: string[]): Promise<void> {
+    const verdict = await detectStaleArtifact(resolvedPath);
+    if (!verdict) return;
+
+    const pkgConfig = ConfigManager.getInstance().getPackageConfigForService(resolvedPath);
+    const message = formatStaleArtifactWarning(
+      verdict,
+      resolvedPath,
+      [pkgConfig.command, ...pkgConfig.args].join(' '),
+    );
+    console.warn(`⚠ ${resolvedPath}: ${message}`);
+    warnings.push(message);
+  }
+
+  private async runPackaging(resolvedPath: string, serviceName: string, repackage: boolean): Promise<void> {
+    const pkgConfig = ConfigManager.getInstance().getPackageConfigForService(resolvedPath);
+    const displayCmd = [pkgConfig.command, ...pkgConfig.args].join(' ');
+    const reason = repackage ? '--repackage requested' : 'Template missing';
+    console.log(`📦 ${reason} — running '${displayCmd}' in ${pkgConfig.cwd} (service: ${serviceName})`);
+    try {
+      const result = await runServerlessPackage({
+        command: pkgConfig.command,
+        args: pkgConfig.args,
+        cwd: pkgConfig.cwd,
+        timeoutMs: pkgConfig.timeoutMs,
+        env: pkgConfig.env,
+      });
+      console.log(`✅ Packaging finished for ${resolvedPath} (exit 0)`);
+      if (result.stdout.trim()) {
+        console.log(`--- ${displayCmd} stdout ---\n${result.stdout.trimEnd()}\n--- end ---`);
+      }
+    } catch (packageErr) {
+      if (packageErr instanceof ServerlessPackageError) {
+        console.error(`❌ Packaging failed for ${resolvedPath}: ${packageErr.message}`);
+        if (packageErr.result.stdout.trim()) {
+          console.error(`--- ${displayCmd} stdout ---\n${packageErr.result.stdout.trimEnd()}\n--- end ---`);
+        }
+        if (packageErr.result.stderr.trim()) {
+          console.error(`--- ${displayCmd} stderr ---\n${packageErr.result.stderr.trimEnd()}\n--- end ---`);
+        }
+      } else {
+        console.error(`❌ Packaging failed for ${resolvedPath}:`, packageErr);
+      }
+      const detail = packageErr instanceof ServerlessPackageError
+        ? `${packageErr.message}\n${packageErr.result.stderr || packageErr.result.stdout}`.trim()
+        : packageErr instanceof Error ? packageErr.message : 'Unknown error';
+      throw new RegistrationError(
+        500,
+        `Packaging failed for ${resolvedPath}: ${detail}. Full stderr/stdout is in the orchestrator log (/tmp/lss-orchestrator.log).`,
+      );
+    }
   }
 
   private async readState(resolvedPath: string): Promise<Record<string, unknown> | null> {

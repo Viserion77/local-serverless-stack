@@ -404,12 +404,15 @@ function copyToClipboard(text: string) {
         :description="t('queues.noMessagesLoadedDescription')"
       />
 
-      <!-- `rowActivatable` would be wrong here even though the row does open the
-           detail: the actions column holds real Copy/Delete buttons, and a
-           `<tr role="button">` makes its children presentational — the two
-           buttons would stop being announced. So the row stays a `row`, TTable
-           puts `aria-expanded`/`aria-controls` on it from the `detail` slot, and
-           the in-cell control below is what the user operates. -->
+      <!-- The row stays a plain `row`: this is a disclosure, not an activation.
+           `rowActivatable` would announce "button" on something that expands in
+           place, and the actions column already holds the real Copy/Delete
+           controls.
+           Since 0.30 TTable no longer stamps `aria-expanded`/`aria-controls` on
+           every `<tr>` that has a `detail` slot — it announced rows that never
+           expand and pointed at an id the consumer could not reach. The cell
+           slot now hands out `expanded` and `detailId`, so the control that
+           actually toggles carries both, which is where the norm wants them. -->
       <TTable
         v-else
         :columns="messagesColumns"
@@ -425,15 +428,16 @@ function copyToClipboard(text: string) {
              can hold. TLink drops the hand-written `text-decoration:none`;
              the missing piece — a text-level disclosure control that wraps —
              is a TreeUI gap, not something to patch with local CSS. -->
-        <template #cell-preview="{ row }">
+        <template #cell-preview="{ row, expanded, detailId }">
           <TLink
             href="#"
             underline="none"
-            :aria-expanded="expandedRow === (row as any).__key ? 'true' : 'false'"
+            :aria-expanded="expanded ? 'true' : 'false'"
+            :aria-controls="detailId"
             @click.prevent="toggleExpanded(String((row as any).__key))"
           >
             <TText family="mono" size="sm">
-              <TIcon :name="expandedRow === (row as any).__key ? 'chevron-down' : 'chevron-right'" />
+              <TIcon :name="expanded ? 'chevron-down' : 'chevron-right'" />
               {{ (row as any).preview }}
             </TText>
           </TLink>
@@ -534,7 +538,6 @@ function copyToClipboard(text: string) {
       :description="t('queues.purgeConfirmDescription', { queue: props.queue.name })"
       :confirm-label="t('queues.purgeConfirmLabel')"
       :cancel-label="t('common.cancel')"
-      confirm-variant="danger"
       :loading="purging"
       @confirm="doPurge"
     />

@@ -186,7 +186,6 @@ async function redo() {
       :description="t('dynamo.purgeConfirmDesc', { count: tableItemCount })"
       :confirm-label="t('dynamo.purge')"
       :cancel-label="t('common.cancel')"
-      confirm-variant="danger"
       @confirm="purge"
     />
 
@@ -196,7 +195,6 @@ async function redo() {
       :description="t('dynamo.redoConfirmDesc', { current: tableItemCount, seeded: seedItemCount })"
       :confirm-label="t('dynamo.redo')"
       :cancel-label="t('common.cancel')"
-      confirm-variant="danger"
       @confirm="redo"
     />
   </TStack>

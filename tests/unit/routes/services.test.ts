@@ -257,6 +257,25 @@ describe('POST /api/services/register', () => {
     expect(res.status).toBe(200);
   });
 
+  it('passes repackage through to the registrar', async () => {
+    const res = await request(appWith())
+      .post('/api/services/register')
+      .send({ servicePath: '/abs/my-service', repackage: true });
+    expect(res.status).toBe(200);
+    expect(registrar.register).toHaveBeenCalledWith(
+      expect.objectContaining({ repackage: true }),
+    );
+  });
+
+  it('rejects a non-boolean repackage rather than coercing it', async () => {
+    const res = await request(appWith())
+      .post('/api/services/register')
+      .send({ servicePath: '/abs/my-service', repackage: 'yes' });
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('Invalid repackage, must be a boolean');
+    expect(registrar.register).not.toHaveBeenCalled();
+  });
+
   it('maps a RegistrationError to its statusCode (400)', async () => {
     registrar.register.mockRejectedValue(new RegistrationError(400, 'CloudFormation template not found at /x'));
     const res = await request(appWith())

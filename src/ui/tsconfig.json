@@ -7,24 +7,34 @@
     "noEmit": true,
     "jsx": "preserve"
   },
-  // `vueCompilerOptions.strictTemplates` continua DESLIGADO, e a decisão é
-  // registrada no TREEUX-011 de src/ui/treeUxPatterns.md. Ligá-lo é o que ativa
-  // o augment de `GlobalComponents` da TreeUI, que faz o `vue-tsc` pegar prop
-  // inexistente (`<TTag clickable>`, `<TStat :hint>` — bugs reais que já
-  // custaram copy traduzida e nome acessível neste repo).
+  // `vueCompilerOptions.strictTemplates` is still OFF, and this comment is the
+  // reason plus the measurement. Turning it on activates TreeUI's
+  // `GlobalComponents` augmentation, which is what makes `vue-tsc` catch a prop
+  // that does not exist (`<TTag clickable>`, `<TStat :hint>` — real bugs here
+  // that cost translated copy and an accessible name). Vue drops an unknown prop
+  // in silence, so without this the compiler agrees with every typo.
   //
-  // Medido nesta árvore, não estimado:
-  //   @treeui/vue 0.28.0 -> 89 erros (2 reais, 87 atrito de tipo da lib)
-  //   @treeui/vue 0.29.0 -> 50 erros
-  // A 0.29 fechou dois dos três grupos: `aria-label`/`role`/`id`/`on*` em
-  // componente com `inheritAttrs: false` (22 -> 0) e `modelModifiers` nos
-  // componentes de v-model (14 -> 0). Sobram:
-  //   33  `modelValue` largo emitindo para ref estreita (grupo 3 do TREEUX-011,
-  //       com repro entregue à TreeUI);
-  //   17  atributo HTML *do elemento*, fora do allowlist genérico: `min` (15,
-  //       em <input type="number">), `readonly` (1), `href` (1, TButton as="a").
-  // Nenhum dos 50 é bug de runtime. Religar quando os dois grupos fecharem —
-  // e então este comentário sai junto.
+  // Measured in this tree, not estimated, with vue-tsc 3.3.8:
+  //   @treeui/vue 0.28.0 -> 89 errors (2 real, 87 library type friction)
+  //   @treeui/vue 0.29.0 -> 50
+  //   @treeui/vue 0.31.0 -> 12
+  // What 0.31 closed: the element-attribute allowlist (`min`/`max` on a numeric
+  // TInput, `readonly`, `href` on `TButton as="a"` — 17 -> 0) and the wide-model
+  // asymmetry in the components that went generic, TInput/TTabs/TToggleGroup
+  // (33 -> 0). The one error that was OURS is fixed: TToggleGroup takes its
+  // options as `NoInfer`, so a bare literal had to be annotated.
+  //
+  // The remaining 12 are both library-side, both the same two shapes as before,
+  // in components the first round did not cover:
+  //   11  TSelect — `modelValue: string | number` and an emit of the same union,
+  //       so a narrow ref (`ref<string>`, `ref<FilterType>`,
+  //       `ref<'RequestResponse' | 'Event'>`) cannot be bound. Identical to the
+  //       group the generics fixed elsewhere.
+  //    1  TTextarea — `spellcheck` is outside the declared attribute surface
+  //       (`readonly`/`rows`/`minlength`/`maxlength`/`autocomplete` are in it).
+  //       It is a real `<textarea>` attribute and a JSON editor wants it off.
+  // None of the 12 is a runtime bug. Turn this on when they close — and then
+  // this comment goes with it.
   "include": [
     "src/**/*.ts",
     "src/**/*.tsx",

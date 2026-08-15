@@ -141,14 +141,13 @@ function openRow(row: TableRow) {
 // seed-only ghost row has no table to open yet, so it returns undefined and
 // stays un-linked, the same rule `openRow` already had.
 //
-// Read from the shipped 0.29 CSS, not from the prop's doc comment: the hit area
-// is the FIRST CELL, not the whole row. `.t-table__row-link::after` is
-// `position:absolute; inset:0`, but `.t-table__row.is-linked .t-table__cell` is
-// `position:relative`, so the overlay's containing block is that first <td>.
-// `cursor:pointer` and the hover tint, meanwhile, sit on the <tr> and are keyed
-// off the PROP, so even the un-linked ghost rows wear them. Both are TreeUI's to
-// fix (`.t-table__cell:first-child { position: static }` closes the first);
-// correcting either here would be local CSS, which rule 2 forbids.
+// Both of this comment's old caveats are closed as of 0.30, verified in the
+// shipped CSS and render rather than taken on faith: only the cells AFTER the
+// first are positioned (`.t-table__cell + .t-table__cell`), so the overlay's
+// containing block is the <tr> and the hit area is the whole row; and
+// `is-linked` now follows the RESOLVED target, so a seed-only ghost row whose
+// `rowTo` returns undefined wears neither pointer nor hover. Nothing is needed
+// here — fixing either locally would have been the CSS rule 2 forbids.
 function rowTo(row: Record<string, unknown>): string | undefined {
   return row.exists ? `/dynamo/${encodeURIComponent(String(row.name))}` : undefined;
 }
@@ -264,10 +263,10 @@ onBeforeUnmount(() => {
         <template #cell-name="{ row }">
           <TStack direction="vertical" gap="0.125rem">
             <!-- No affordance of its own any more: TTable wraps this cell in the
-                 row link itself, so the name is plain text inside a real <a> —
-                 and this cell is exactly the clickable area (see `rowTo`).
-                 A seed-only row keeps its tag and stays un-linked, because
-                 `rowTo` returns undefined for a table that does not exist. -->
+                 row link itself, so the name is plain text inside a real <a>,
+                 and the clickable area is the whole row. A seed-only row keeps
+                 its tag and stays un-linked — `rowTo` returns undefined for a
+                 table that does not exist, and the affordance follows that. -->
             <TStack direction="horizontal" gap="0.375rem" align="center">
               <TText weight="semibold">{{ row.name }}</TText>
               <TTag v-if="!row.exists" size="sm" variant="soft">{{ t('dynamo.seedOnly') }}</TTag>

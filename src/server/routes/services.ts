@@ -34,10 +34,14 @@ router.post('/register', async (req: Request, res: Response) => {
   try {
     await ensureCacheInit();
 
-    const { servicePath, invokePort, apiPort, region } = req.body;
+    const { servicePath, invokePort, apiPort, region, repackage } = req.body;
 
     if (!servicePath) {
       return res.status(400).json({ error: 'servicePath is required' });
+    }
+
+    if (repackage !== undefined && typeof repackage !== 'boolean') {
+      return res.status(400).json({ error: 'Invalid repackage, must be a boolean' });
     }
 
     // Ports and region resolve inside the registrar (request > packaged
@@ -62,6 +66,7 @@ router.post('/register', async (req: Request, res: Response) => {
       invokePort,
       apiPort,
       region,
+      repackage,
     });
 
     return res.json({

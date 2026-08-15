@@ -353,7 +353,6 @@ onBeforeUnmount(() => {
       :description="t('services.deleteDescription', { engine: ENGINE_LABEL })"
       :confirm-label="t('common.delete')"
       :cancel-label="t('common.cancel')"
-      confirm-variant="danger"
       @confirm="confirmDelete"
     />
   </TCard>

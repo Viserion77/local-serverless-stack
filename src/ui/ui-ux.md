@@ -7,8 +7,8 @@ Este é o contrato **vivo** de UI e UX do frontend do Local Serverless Stack —
 nova orientação de UI ou UX for dada.
 
 As lacunas cuja solução correta pertence à biblioteca de componentes (a **TreeUI**, `@treeui/vue`)
-ficam no documento irmão [`treeUxPatterns.md`](./treeUxPatterns.md). O app consumidor **não** deve
-implementar silenciosamente uma versão local dessas lacunas.
+são levadas à biblioteca e resolvidas lá. O app consumidor **não** deve implementar silenciosamente
+uma versão local dessas lacunas.
 
 > Contexto do repositório: o LSS tem **um** frontend (`src/ui/`). A TreeUI mora em **outro
 > repositório** e é consumida via `@treeui/vue@0.29.0` (`@treeui/icons@0.29.0`,
@@ -18,8 +18,8 @@ implementar silenciosamente uma versão local dessas lacunas.
 > oficiais de serviços AWS (`aws-*`) entram no mesmo registry via `registerAwsIcons()` — o registry
 > deixou de ser só-TreeUI, o catálogo dela continua sendo (ver regra 3).
 >
-> **Números de versão vivem aqui e no cabeçalho de [`treeUxPatterns.md`](./treeUxPatterns.md), em
-> mais lugar nenhum.** Uma versão cravada no meio de uma regra ou de um passo de processo nasce
+> **Números de versão vivem aqui, em mais lugar nenhum.** Uma versão cravada no meio de uma regra ou
+> de um passo de processo nasce
 > errada no bump seguinte — foi o que aconteceu com a linha que dizia `@treeui/tokens@0.15.0` por
 > quatro minors.
 
@@ -33,8 +33,8 @@ O trabalho começou pelo dashboard do LSS com os seguintes objetivos:
 - aproveitar bem monitores grandes, sem espremer o conteúdo numa coluna central cercada por grandes
   áreas cinzas;
 - adotar a TreeUI como fonte única de componentes, ícones e decisões visuais;
-- manter TreeUI e o dashboard alinhados por meio de um backlog explícito
-  ([`treeUxPatterns.md`](./treeUxPatterns.md)), em vez de acumular correções locais de CSS.
+- manter TreeUI e o dashboard alinhados levando cada lacuna à biblioteca, em vez de acumular
+  correções locais de CSS.
 
 Primeiro ajuste concreto: o **header do `TAppShell`** aparecia com marca e controles empilhados à
 esquerda (ver §4). Foi corrigido só com layout TreeUI, sem CSS novo.
@@ -64,8 +64,7 @@ esquerda (ver §4). Foi corrigido só com layout TreeUI, sem CSS novo.
   TreeUI — a prop `size` do `TIcon` e as dimensões dos próprios slots de ícone
   (`.t-nav-menu__icon`, `#icon` de `TTag`/`TStat`/`TEmptyState`). A adoção das marcas AWS não
   introduziu CSS local, `:deep(...)` nem override de classe `t-*`.
-- Se a API pública não expressar o resultado necessário, registre a lacuna em
-  [`treeUxPatterns.md`](./treeUxPatterns.md) e resolva-a na TreeUI.
+- Se a API pública não expressar o resultado necessário, leve a lacuna à TreeUI e resolva-a lá.
 - Uma exceção temporária só pode existir com aprovação explícita, motivo, responsável e condição de
   remoção registrados. Ela não vira precedente.
 
@@ -75,15 +74,14 @@ comportamento e acessibilidade.
 
 #### Exceções temporárias em vigor
 
-Uma exceção só existe se estiver **nesta tabela**. Declará-la em
-[`treeUxPatterns.md`](./treeUxPatterns.md) não basta: aquele arquivo é o canal de negociação com a
-biblioteca e itens saem dele quando o contrato fecha — uma exceção registrada só lá desaparece junto
-e passa a ser CSS local silencioso, que é exatamente o que a regra 2 proíbe.
+Uma exceção só existe se estiver **nesta tabela**. Ter a lacuna registrada junto à biblioteca não
+basta: aquele registro se encerra quando o contrato fecha, e uma exceção anotada só lá desaparece
+junto e passa a ser CSS local silencioso, que é exatamente o que a regra 2 proíbe.
 
 | # | Superfície | O que é | Motivo | Responsável | Condição de remoção |
 |---|---|---|---|---|---|
 | 1 | `pages/OverviewPage.vue` — `<style scoped> .overview-hero { background: linear-gradient(…) }` | Gradiente decorativo do hero da Overview | Último resquício do CSS pré-migração. O `THero` do 0.27 é candidato, mas é uma **banda `<section>` sem borda de card** e o hero atual é um `TCard variant="outline"` — trocar muda aparência e semântica de container | humano (decisão de design, não de refactor) | Decisão explícita de adotar `THero` (ou de manter o `TCard` e pedir um eixo de fundo decorativo à TreeUI) |
-| 2 | `components/graph/graphCanvas.ts` — `canvas.style.width/height`, `host.style.overflowX/maxWidth`, `canvas.style.cursor` | Dimensionamento do `<canvas>` do diagrama de ligações (5 declarações, todas **imperativas e num elemento que o módulo cria e possui** — nenhuma folha, nenhuma classe, nenhum `:deep`, nenhum seletor `t-*`) | A TreeUI 0.29.0 **não tem primitiva de nó-e-aresta** (o `TChart` é `number[]` categórico alinhado a `labels` e sem slot dentro do SVG; o `TSpanLanes` é barra 1-D dentro de uma faixa; o `TTreeView` é lista DOM) e **nenhum componente tem prop que estique um filho**: `height` só existe em `TChart`/`TPane`/`TSkeleton`/`TEmptyState`/`TCodeBlock`/`TTag`. O `useDecorativeCanvas` **mede** (`getBoundingClientRect`) mas nunca dimensiona, é contratualmente `pointer-events: none`, não expõe `requestRedraw()` e é gateado por `(pointer: coarse)`/reduced-motion — num tablet desenha **um** quadro e nunca mais repinta. Um diagrama cujos nós são alvo de clique e cujos dados são refetchados precisa do oposto dos três. O `cursor` é o único caso em que a afordância **não pode** vir de CSS: a área sensível é um retângulo dentro do canvas e nenhuma folha sabe onde ele está | agente do dashboard LSS | Entrega do **TREEUX-018** (primitiva de grafo, ou host de canvas interativo com eixo de altura, `requestRedraw()` e hit-testing). Adotada a API oficial, este arquivo perde as 5 declarações e a linha sai da tabela |
+| 2 | `components/graph/graphCanvas.ts` — `canvas.style.width/height`, `host.style.overflowX/maxWidth`, `canvas.style.cursor` | Dimensionamento do `<canvas>` do diagrama de ligações (5 declarações, todas **imperativas e num elemento que o módulo cria e possui** — nenhuma folha, nenhuma classe, nenhum `:deep`, nenhum seletor `t-*`) | A TreeUI 0.29.0 **não tem primitiva de nó-e-aresta** (o `TChart` é `number[]` categórico alinhado a `labels` e sem slot dentro do SVG; o `TSpanLanes` é barra 1-D dentro de uma faixa; o `TTreeView` é lista DOM) e **nenhum componente tem prop que estique um filho**: `height` só existe em `TChart`/`TPane`/`TSkeleton`/`TEmptyState`/`TCodeBlock`/`TTag`. O `useDecorativeCanvas` **mede** (`getBoundingClientRect`) mas nunca dimensiona, é contratualmente `pointer-events: none`, não expõe `requestRedraw()` e é gateado por `(pointer: coarse)`/reduced-motion — num tablet desenha **um** quadro e nunca mais repinta. Um diagrama cujos nós são alvo de clique e cujos dados são refetchados precisa do oposto dos três. O `cursor` é o único caso em que a afordância **não pode** vir de CSS: a área sensível é um retângulo dentro do canvas e nenhuma folha sabe onde ele está | agente do dashboard LSS | Entrega, pela TreeUI, de uma **primitiva de nó-e-aresta** — ou de um host de canvas interativo com eixo de altura, `requestRedraw()` e hit-testing. Adotada a API oficial, este arquivo perde as 5 declarações e a linha sai da tabela |
 
 **São as duas exceções vivas.** A primeira é decisão de design pendente; a segunda é lacuna de API,
 com item aberto e condição de remoção amarrada a ele. Fora destas duas linhas o `src/ui/` tem
@@ -121,10 +119,9 @@ nenhuma saiu por desistência. É o teste de que ela é um compromisso e não um
 
 - **Ícones funcionais de interface** — ações, navegação, status, objetos e layout — vêm
   exclusivamente da API oficial da TreeUI (`TIcon`, slots de ícone, props tipadas).
-- Quando faltar um ícone funcional, comunique a necessidade com nome sugerido e propósito e
-  registre-a em [`treeUxPatterns.md`](./treeUxPatterns.md). Ele deve ser criado na TreeUI antes do
-  consumo. **Proibido** emoji, caractere Unicode (`⚡ ✓ ⏳ → ← ▶ ▼ ⋮ ⚠ …`), desenho em CSS ou SVG
-  copiado à mão como ícone.
+- Quando faltar um ícone funcional, comunique a necessidade à TreeUI com nome sugerido e propósito.
+  Ele deve ser criado na TreeUI antes do consumo. **Proibido** emoji, caractere Unicode
+  (`⚡ ✓ ⏳ → ← ▶ ▼ ⋮ ⚠ …`), desenho em CSS ou SVG copiado à mão como ícone.
 - **Marcas e logotipos** de empresas, produtos e serviços **não** são ícones funcionais e **não**
   pertencem ao catálogo da TreeUI. No LSS isso inclui **AWS e seus serviços** (DynamoDB, S3, SQS,
   SNS, Lambda, EventBridge, OpenSearch, Secrets Manager, API Gateway) e o **Serverless Framework**.
@@ -157,8 +154,8 @@ nenhuma saiu por desistência. É o teste de que ela é um compromisso e não um
 - Nada disso é exceção à regra 3 — **é** a regra 3. Ícone funcional continua vindo só da TreeUI, e o
   prefixo `aws-` é o que mantém os dois vocabulários separados dentro do mesmo registry: nome sem
   prefixo é ícone funcional da TreeUI, `aws-*` é marca. Marca não substitui ação, navegação ou
-  status; ícone funcional não substitui marca. Uma marca ausente **não** vira item em
-  [`treeUxPatterns.md`](./treeUxPatterns.md) — vira uma linha no catálogo do gerador.
+  status; ícone funcional não substitui marca. Uma marca ausente **não** vira demanda para a
+  TreeUI — vira uma linha no catálogo do gerador.
 - Cobertura registrada hoje: **64 marcas** — 12 dos serviços que o LSS entrega (Lambda, DynamoDB,
   S3, SQS, SNS, EventBridge, OpenSearch, Secrets Manager, API Gateway, CloudFormation, IAM,
   CloudWatch) e 52 de reserva, já importadas para uso futuro. Dois apelidos documentados, porque a
@@ -191,8 +188,8 @@ e controles, sendo dois blocos irmãos, **empilhavam**. O `.app-header-controls 
 auto }` que existia dependia de o slot ser uma linha flex — o que deixou de ser verdade. Correção
 adotada: um único `TStack direction="horizontal" justify="space-between"` como raiz do slot fixa a
 marca no início e os controles no fim, sem CSS. As lacunas de componente que isso revelou (controle
-de largura por item no `TStack`; layout de duas regiões nativo no header do `TAppShell`) estão em
-[`treeUxPatterns.md`](./treeUxPatterns.md).
+de largura por item no `TStack`; layout de duas regiões nativo no header do `TAppShell`) foram
+levadas à TreeUI.
 
 ### 5. A home é uma visão de decisão, não só um relatório
 
@@ -255,12 +252,11 @@ Migramos o `src/ui/` para a TreeUI ao longo de `0.14 → 0.19 → 0.20 → 0.21 
 o gradiente decorativo `.overview-hero`. Eliminados ao longo das rodadas: `.muted`, `.app-main`,
 `.dim-row`, `.logs-pre`, `.brand-logo`, o mono de texto e as linhas rótulo⟷valor manuais.
 
-> **Cuidado com os IDs deste parágrafo.** Os `TREEUX-NNN` daquele ciclo foram removidos do backlog
-> quando aceitos, como o protocolo manda — e a numeração **foi reciclada** depois. `TREEUX-001` aqui
-> significa "fonte mono no `TText`"; em [`treeUxPatterns.md`](./treeUxPatterns.md) hoje significa
-> `TTagInput`. Por isso este parágrafo passou a descrever as entregas **pelo nome**, sem ID: um ID
-> só é confiável dentro do backlog vivo. Zerado aqui não quer dizer zerado hoje — o backlog atual
-> tem itens abertos.
+> **Cuidado com os IDs deste parágrafo.** Os identificadores daquele ciclo eram removidos quando a
+> entrega era aceita, e a numeração **foi reciclada** depois — o mesmo ID significou duas coisas
+> diferentes em momentos diferentes. Por isso este parágrafo passou a descrever as entregas **pelo
+> nome**, sem ID. Zerado aqui não quer dizer zerado hoje: ainda há lacunas abertas junto à
+> biblioteca.
 
 ## Adoção — marcas de serviço AWS (2026-07-31)
 
@@ -288,14 +284,13 @@ genérico.
   número: lá a marca fica no slot padrão do `TTag` (o `#icon` é `aria-hidden`) e recebe `label` com
   a chave i18n já existente, o que também distingue "buses" de "rules" na leitura.
 - **Sem dívida nova:** zero `<style>`, zero classe, zero `:deep(...)`, zero string fora do `t()`,
-  zero item novo em [`treeUxPatterns.md`](./treeUxPatterns.md) — marca nunca gera item. Gate
+  zero lacuna nova levada à TreeUI — marca nunca gera demanda. Gate
   `validate: pre-prod`: lint 0 erros, `vue-tsc` limpo.
 
 ## Adoção — `@treeui/vue` 0.27.0 e quitação do CSS local (2026-08-05)
 
-Subimos de `0.25.0` direto para `0.27.0` (pulando o 0.26.0 — ver TREEUX-001 em
-[`treeUxPatterns.md`](./treeUxPatterns.md)) e usamos a rodada para pagar a dívida da regra 2, que
-nunca tinha sido quantificada.
+Subimos de `0.25.0` direto para `0.27.0` (pulando o 0.26.0) e usamos a rodada para pagar a dívida da
+regra 2, que nunca tinha sido quantificada.
 
 - **CSS local: 79 → 6.** Havia **79** `style="…"` inline em **18** arquivos e um `<style scoped>`.
   Sobraram **6 declarações em 3 arquivos**, e as quatro superfícies estão na tabela de exceções da
@@ -438,12 +433,11 @@ por desistência.
    Prop que não existe é descartada em silêncio pelo Vue: já perdemos copy traduzida assim
    (`TStat :hint`) e carregamos uma prop inexistente por três minors (`TTag clickable`).
 3. Compor a solução com componentes existentes quando a API já for suficiente.
-4. Registrar em [`treeUxPatterns.md`](./treeUxPatterns.md) somente o que realmente pertence à TreeUI.
-5. Sincronizar o arquivo com a TreeUI e responder no próprio item às perguntas/refutações do agente
-   da biblioteca.
-6. Validar no produto toda API entregue pela TreeUI; se aceita, consumir a API oficial e **remover**
-   o item. Se recusada, registrar a réplica e sincronizar de novo.
-7. Validar comportamento, acessibilidade, responsividade e telas largas — e passar o gate
+4. Levar à TreeUI somente o que realmente pertence a ela, com necessidade, evidência (arquivo:linha
+   e contagem) e critério de saída — e responder às perguntas ou refutações da biblioteca.
+5. Validar no produto toda API entregue pela TreeUI; se aceita, consumir a API oficial e remover a
+   exceção correspondente. Se recusada, replicar com o que foi medido no caso real.
+6. Validar comportamento, acessibilidade, responsividade e telas largas — e passar o gate
    `validate: pre-prod` do repositório (lint, `vue-tsc`, build).
 
 ## Situação inicial observada — snapshot de 2026-07-21 (histórico, **não** é o estado atual)
@@ -451,7 +445,7 @@ por desistência.
 > Esta seção é o diagnóstico que abriu o trabalho. Ficou aqui porque explica *por que* as regras
 > existem — mas é uma foto de 2026-07-21, e quase tudo nela já foi resolvido. **Não use como
 > inventário de pendências**: um agente que a leia como estado atual refaz trabalho feito. O que
-> ainda está aberto vive em [`treeUxPatterns.md`](./treeUxPatterns.md) e nas seções de adoção acima.
+> ainda está aberto vive nas seções de adoção acima.
 
 - Único frontend: `src/ui/`, então sobre `@treeui/vue@0.14.0`. Catálogo Branchline com 364 ícones.
 - Havia CSS local legado a migrar: `style.css` global (`muted`, `mono`, `logs-pre`, `brand-logo`,

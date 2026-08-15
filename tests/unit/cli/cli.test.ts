@@ -1531,6 +1531,38 @@ describe('bin/cli.js helpers', () => {
       expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('here: 1 resource(s)'));
     });
 
+    it('sends repackage:false by default, so register keeps its fast path', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      const httpSpy = installHttp({
+        POST: {
+          status: 200,
+          body: JSON.stringify({ serviceName: 'orders', resourcesCount: 1, functionsCount: 1, routesCount: 0 }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'register', 'svc-a']);
+      await cli.registerServices(['svc-a']);
+      const postReq = httpSpy.mock.results.map(r => r.value as any).find(v => v.write.mock.calls.length);
+      expect(JSON.parse(postReq.write.mock.calls[0][0])).toEqual(
+        expect.objectContaining({ repackage: false }),
+      );
+    });
+
+    it('sends repackage:true when --repackage is on the command line', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      const httpSpy = installHttp({
+        POST: {
+          status: 200,
+          body: JSON.stringify({ serviceName: 'orders', resourcesCount: 1, functionsCount: 1, routesCount: 0 }),
+        },
+      });
+      const cli = loadCli(['node', 'cli.js', 'register', 'svc-a', '--repackage']);
+      await cli.registerServices(['svc-a']);
+      const postReq = httpSpy.mock.results.map(r => r.value as any).find(v => v.write.mock.calls.length);
+      expect(JSON.parse(postReq.write.mock.calls[0][0])).toEqual(
+        expect.objectContaining({ repackage: true }),
+      );
+    });
+
     it('exits 1 when a directory does not exist, without calling the API', async () => {
       mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('.pid'));
       const cli = loadCli(['node', 'cli.js', 'register', 'ghost-dir']);

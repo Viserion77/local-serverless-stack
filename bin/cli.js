@@ -759,6 +759,10 @@ async function clearSeed(tableName) {
 async function registerServices(paths) {
   ensureRunningOrExit();
   const targets = paths.length > 0 ? paths : ['.'];
+  // `autoPackage` only packages when the template is MISSING, so on a service
+  // already packaged once `register` faithfully re-registers whatever is on
+  // disk. `--repackage` is how the operator says "build first, then register".
+  const repackage = process.argv.includes('--repackage');
   let failed = 0;
   for (const target of targets) {
     const servicePath = path.resolve(target);
@@ -768,7 +772,7 @@ async function registerServices(paths) {
       continue;
     }
     try {
-      const result = await postJson('/api/services/register', { servicePath });
+      const result = await postJson('/api/services/register', { servicePath, repackage });
       console.log(t('register.ok', {
         name: result.serviceName,
         resources: result.resourcesCount,
@@ -933,6 +937,7 @@ function showHelp() {
     t('help.options'),
     opt('--config <path>', 'help.opt.config'),
     opt('--enable-dynamo-proxy', 'help.opt.dynamoProxy'),
+    opt('--repackage', 'help.opt.repackage'),
     opt('--wait[=<seconds>]', 'help.opt.wait'),
     opt('--yes, -y', 'help.opt.yes'),
     '',

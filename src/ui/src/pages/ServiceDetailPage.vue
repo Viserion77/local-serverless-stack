@@ -531,33 +531,23 @@ watch(() => props.serviceName, load);
       />
     </TModal>
 
-    <!-- `confirm-variant="danger"` is NOT an oversight of the tone migration
-         and must not be "fixed" here. TConfirmDialog was left without a `tone`
-         axis on purpose (TreeUI's own answer under TREEUX-008): it composes a
-         TButton, so the axis was supposed to reach it through `confirmVariant`.
-         It does not. `confirmVariant` is typed `TVariant` and is forwarded
-         straight into that button's `variant`, and `tone` lives on a second
-         prop the dialog does not expose — so the only value here that still
-         reads as destructive is the deprecated `"danger"`, which is also this
-         prop's own default, meaning deleting the line changes nothing either.
-         The dev-only deprecation warning therefore fires from inside the
-         library at all six TConfirmDialog call sites in this app. This is the
-         "caso em que isso não basta" TREEUX-008 explicitly asked to hear about;
-         it wants a `confirmTone` upstream, not a local patch.
-         There IS one escape hatch and it is deliberately not taken: the
-         `actions` slot hands back `{ confirm, cancel, loading }`, so we could
-         render our own `variant="solid" tone="danger"` button. That means
-         re-implementing the whole footer — Cancel included, plus the
-         disabled/loading wiring the component already does — at every call
-         site, to silence a warning with no user-visible effect. That is the
-         local re-implementation of a library gap this contract rejects. -->
+    <!-- No `confirm-variant` here, and that is the fix rather than an omission.
+         The dialog owns its own footer, so the destructive look could only
+         arrive through `confirmVariant`, whose only destructive-reading value
+         was the deprecated `"danger"` — every one of this app's six dialogs
+         therefore fired a deprecation warning from inside the library, with no
+         action available to the consumer short of re-implementing the footer
+         through the `actions` slot at all six sites. The library grew a
+         `confirmTone` axis instead and moved the defaults to
+         `confirmVariant="solid"` + `confirmTone="danger"`, which is exactly the
+         destructive appearance these dialogs already had. So the correct call
+         site now passes neither: the defaults ARE the intent here. -->
     <TConfirmDialog
       v-model:open="deleteDialogOpen"
       :title="t('services.deleteTitleNamed', { name: serviceName })"
       :description="t('services.deleteDescription', { engine: ENGINE_LABEL })"
       :confirm-label="t('common.delete')"
       :cancel-label="t('common.cancel')"
-      confirm-variant="danger"
       @confirm="confirmDelete"
     />
   </TStack>

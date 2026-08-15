@@ -175,6 +175,22 @@ function toSpan(span: InvocationSpan): TSpan {
 const LANE_HEIGHT = 14;
 const LANE_MARKER_SIZE = 10;
 
+// A lane budget, because this panel draws one row per FUNCTION that ran: at the
+// target scale (40 services, ~60 functions each) a ten-minute window can produce
+// well over a hundred lanes, and the panel is a summary, not a log. 12 rows is
+// ~170px, which keeps the timeline the same visual weight as the plot above it.
+//
+// Cutting with `.slice()` here would hide data without saying so, which is worse
+// than a long list — so the cut is TSpanLanes' own `maxRows`, which forces a
+// footer declaring how many lanes were left out. `overflowLabel` is what routes
+// that footer through t(); without it the component falls back to English on
+// purpose, so the count can never silently disappear.
+const MAX_LANES = 12;
+
+function lanesOverflowLabel(hidden: number): string {
+  return t('activity.lanesOverflow', { hidden: String(hidden) });
+}
+
 // The parallelism area: one point per bucket, held flat by `interpolation`.
 const CHART_HEIGHT = 64;
 const concurrencySeries = computed<TChartSeries[]>(() => [{
@@ -329,7 +345,9 @@ onBeforeUnmount(() => {
                  peak is direct-labeled above and the window is labeled below.
                  `ariaLabel` becomes the caption of the data table TChart keeps
                  for screen readers, which is strictly more than the old
-                 `role="img"` polygon offered. -->
+                 `role="img"` polygon offered. `seriesLabel` localises that
+                 table's column header — it was hardcoded "Series", the one
+                 string in this trilingual panel that no t() could reach. -->
             <TChart
               type="area"
               interpolation="step"
@@ -339,6 +357,7 @@ onBeforeUnmount(() => {
               :show-grid="false"
               :show-x-axis="false"
               :show-y-axis="false"
+              :series-label="t('activity.chartSeriesLabel')"
               :aria-label="t('activity.parallelismAria', { peak: peakLabel })"
             />
           </TStack>
@@ -356,6 +375,8 @@ onBeforeUnmount(() => {
               :from="windowStart"
               :to="windowEnd"
               :lane-height="LANE_HEIGHT"
+              :max-rows="MAX_LANES"
+              :overflow-label="lanesOverflowLabel"
               :label="t('activity.timeline')"
             >
               <!-- The lane label is already sized, muted and ellipsised by the

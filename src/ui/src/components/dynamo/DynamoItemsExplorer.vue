@@ -5,6 +5,7 @@ import {
   TInput, TSelect, TDivider, TConfirmDialog, useToast, TFormField,
   TToggleGroup, TCheckbox, TText, TIcon,
 } from '@treeui/vue';
+import type { TToggleGroupOption } from '@treeui/vue';
 import { api } from '../../services/api';
 import type {
   DynamoTableDetail, DynamoScanQueryInput, DynamoScanQueryOutput,
@@ -59,7 +60,13 @@ const pendingDelete = ref<Record<string, unknown> | null>(null);
 
 // `Scan` and `Query` are the DynamoDB API operations — left in English so the
 // toggle names the SDK call the dashboard is about to make.
-const modeOptions = [
+//
+// Annotated rather than inferred: TToggleGroup is generic over the model and
+// takes its options as `NoInfer`, so the MODEL decides the type and the options
+// are checked against it. A bare array literal widens `value` to `string`, which
+// is then not assignable to `Mode` — the annotation is what states the intent,
+// and it is also what would catch a typo'd option value here.
+const modeOptions: TToggleGroupOption<Mode>[] = [
   { value: 'scan', label: 'Scan' },
   { value: 'query', label: 'Query' },
 ];
@@ -372,11 +379,23 @@ function openView(item: Record<string, unknown>) {
 }
 
 // Row activation opens a modal, not a route: there is no URL for "the editor
-// open on this item", so this is `rowActivatable` + `@row-activate` (a
-// <tr role="button">), never `rowTo`. TTable treats the two as mutually
-// exclusive and warns in dev if both are passed.
+// open on this item", so this is `rowActivatable` + `@row-activate`, never
+// `rowTo`. TTable treats the two as mutually exclusive and warns in dev if both
+// are passed. Since 0.30 activation is a real <button> in the first cell rather
+// than a `<tr role="button">`, which is what keeps the row's own controls
+// announced instead of presentational.
 function onRowActivate(row: Record<string, unknown>) {
   openView(row.__raw as Record<string, unknown>);
+}
+
+// The activation button's accessible name. The key attributes ARE the item's
+// identity, so they are the only name that distinguishes one row from the next;
+// without this the name is the whole row's text, every attribute included.
+function rowLabel(row: Record<string, unknown>): string {
+  const key = keyAttrNames.value
+    .map(name => stringifyShort(row[`__attr__${name}`]))
+    .join(' / ');
+  return t('dynamo.openItemLabel', { key });
 }
 
 function requestEditFromView() {
@@ -678,6 +697,7 @@ watch(() => [mode.value, indexName.value], () => {
         :rows="rows"
         row-key="__id"
         row-activatable
+        :row-label="rowLabel"
         :aria-label="t('dynamo.resultsAriaLabel')"
         @row-activate="onRowActivate"
       >
@@ -725,7 +745,6 @@ watch(() => [mode.value, indexName.value], () => {
       :description="t('dynamo.deleteItemDesc', { table: props.table.name })"
       :confirm-label="t('common.delete')"
       :cancel-label="t('common.cancel')"
-      confirm-variant="danger"
       @confirm="doDelete"
     />
   </TStack>

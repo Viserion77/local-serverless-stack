@@ -97,11 +97,22 @@ async function openDetail(name: string) {
 }
 
 // Row activation opens a modal, not a route — a revealed secret has no URL —
-// so this is `rowActivatable` + `@row-activate` (a <tr role="button">), never
-// `rowTo`. TTable treats the two as mutually exclusive and warns in dev if both
-// are passed.
+// so this is `rowActivatable` + `@row-activate`, never `rowTo`. TTable treats
+// the two as mutually exclusive and warns in dev if both are passed.
+//
+// Since 0.30 activation is a real <button> in the first cell, not a
+// `<tr role="button">`. That is what makes this screen expressible at all: the
+// old role turned every cell presentational, so the Inspect button below
+// stopped being announced — a row that activates AND holds a control had no
+// accessible shape.
 function onRowActivate(row: Record<string, unknown>) {
   openDetail(String(row.name));
+}
+
+// The activation button's accessible name. Without it the name is the whole
+// row's text; it runs per render, so t() follows a language switch.
+function rowLabel(row: Record<string, unknown>): string {
+  return t('secrets.openSecretLabel', { name: String(row.name) });
 }
 
 async function reveal() {
@@ -203,6 +214,7 @@ onBeforeUnmount(() => {
         :rows="filteredRows"
         row-key="name"
         row-activatable
+        :row-label="rowLabel"
         :aria-label="t('secrets.tableLabel')"
         @row-activate="onRowActivate"
       >
@@ -229,10 +241,11 @@ onBeforeUnmount(() => {
         </template>
 
         <template #cell-actions="{ row }">
-          <!-- `.stop` because the row is activatable now: without it the click
-               bubbles to the <tr> and openDetail fires twice, two describeSecret
-               requests racing for the same modal. -->
-          <TButton size="sm" variant="soft" @click.stop="openDetail(String(row.name))">{{ t('secrets.inspect') }}</TButton>
+          <!-- No `.stop`: activation is a <button> in the FIRST cell, so this
+               one is its sibling, not its descendant, and the click has nothing
+               to bubble into. The guard existed because activation used to be a
+               click handler on the <tr>. -->
+          <TButton size="sm" variant="soft" @click="openDetail(String(row.name))">{{ t('secrets.inspect') }}</TButton>
         </template>
       </TTable>
     </TCard>

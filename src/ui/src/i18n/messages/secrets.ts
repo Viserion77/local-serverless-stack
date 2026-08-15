@@ -16,6 +16,7 @@ export const secrets: AreaMessages = {
     autoRefresh: 'Refreshes every 15s',
     loadingList: 'Loading secrets…',
     tableLabel: 'Secrets',
+    openSecretLabel: 'Open secret {name}',
 
     columnSecret: 'Secret',
     columnDescription: 'Description',
@@ -58,6 +59,7 @@ export const secrets: AreaMessages = {
     autoRefresh: 'Atualiza a cada 15s',
     loadingList: 'Carregando segredos…',
     tableLabel: 'Segredos',
+    openSecretLabel: 'Abrir o segredo {name}',
 
     columnSecret: 'Segredo',
     columnDescription: 'Descrição',
@@ -100,6 +102,7 @@ export const secrets: AreaMessages = {
     autoRefresh: 'Se actualiza cada 15s',
     loadingList: 'Cargando secretos…',
     tableLabel: 'Secretos',
+    openSecretLabel: 'Abrir el secreto {name}',
 
     columnSecret: 'Secreto',
     columnDescription: 'Descripción',

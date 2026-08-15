@@ -58,12 +58,10 @@ const totals = computed(() => ({
 // which the previous `cursor:pointer` text did. Every collection in this list
 // exists, so every row has a destination.
 //
-// Read from the shipped 0.29 CSS rather than from the prop's doc comment: the
-// clickable area is the FIRST CELL, not the whole row. The overlay
-// (`.t-table__row-link::after`, `inset:0`) is contained by that first <td>,
-// because `.t-table__row.is-linked .t-table__cell` is `position:relative`, while
-// `cursor:pointer` sits on the <tr>. The mismatch is TreeUI's to fix; widening
-// the hit area here would mean local CSS, which rule 2 forbids.
+// The hit-area mismatch this comment used to record is closed as of 0.30: only
+// the cells AFTER the first are positioned, so the overlay is contained by the
+// <tr> and the clickable area is the whole row, which is what `cursor:pointer`
+// on the <tr> was already promising.
 function rowTo(row: Record<string, unknown>): string {
   return `/opensearch/${encodeURIComponent(String(row.name))}`;
 }
@@ -176,7 +174,7 @@ onBeforeUnmount(() => {
           <!-- Plain text: TTable wraps this cell in the row link itself, so the
                affordance is the row's (cursor, hover, focus ring) and the
                hand-rolled `cursor:pointer` + dotted underline goes with it.
-               This cell is also the clickable area — see `rowTo`. -->
+               The clickable area is the whole row — see `rowTo`. -->
           <TText weight="semibold">{{ row.name }}</TText>
         </template>
 
