@@ -71,13 +71,13 @@ describe('SecretsManagerEmulator', () => {
   describe('CreateSecret / GetSecretValue', () => {
     it('creates a secret and reads it back at AWSCURRENT', async () => {
       const created = await call('CreateSecret', {
-        Name: 's7/identity/signing-key', SecretString: 'rs256-private-key',
+        Name: 'acme/identity/signing-key', SecretString: 'rs256-private-key',
       }) as { ARN: string; Name: string; VersionId: string };
-      expect(created.Name).toBe('s7/identity/signing-key');
-      expect(created.ARN).toMatch(new RegExp(`^arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:s7/identity/signing-key-`));
+      expect(created.Name).toBe('acme/identity/signing-key');
+      expect(created.ARN).toMatch(new RegExp(`^arn:aws:secretsmanager:${REGION}:${ACCOUNT}:secret:acme/identity/signing-key-`));
       expect(created.VersionId).toEqual(expect.any(String));
 
-      const got = await call('GetSecretValue', { SecretId: 's7/identity/signing-key' }) as Record<string, unknown>;
+      const got = await call('GetSecretValue', { SecretId: 'acme/identity/signing-key' }) as Record<string, unknown>;
       expect(got.SecretString).toBe('rs256-private-key');
       expect(got.VersionStages).toEqual(['AWSCURRENT']);
       expect(got.VersionId).toBe(created.VersionId);

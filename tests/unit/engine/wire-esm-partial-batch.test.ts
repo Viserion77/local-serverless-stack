@@ -1,5 +1,5 @@
-// End-to-end against the REAL SelfEngineBackend front door (relay/bus/DLQ, s7
-// pattern): a DynamoDB-stream ESM that declares ReportBatchItemFailures honors a
+// End-to-end against the REAL SelfEngineBackend front door (relay/bus/DLQ, real-monorepo
+// wiring): a DynamoDB-stream ESM that declares ReportBatchItemFailures honors a
 // real relay Lambda proxy's partial-batch report — committing the prefix,
 // retrying the failing suffix, and DLQ-ing ONLY that suffix. The relay is a real
 // HTTP proxy invoked over the engine's INVOKE_URL fallback (no mocked runtime),

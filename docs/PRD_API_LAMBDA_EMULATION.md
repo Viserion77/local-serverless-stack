@@ -122,11 +122,11 @@ DEPOIS msg SQS → LocalStack ESM → proxy Lambda → HTTP invoke :13010 → LS
 
 ### RF5 — Lambda authorizers
 
-- **RF5.1**: Suporte a authorizer `request` para REST (v1) e HTTP API (v2, payload 1.0 e 2.0), e `token` para REST. Configurações espelham o serverless.yml (ver Apêndice A com os dois exemplos reais).
+- **RF5.1**: Suporte a authorizer `request` para REST (v1) e HTTP API (v2, payload 1.0 e 2.0), e `token` para REST. Configurações espelham o serverless.yml (ver Apêndice A com os dois exemplos representativos).
 - **RF5.2**: `identitySource` extraído da requisição (`method.request.header.X` no v1; `$request.header.x` no v2). Fonte ausente → 401 imediato (sem invocar o authorizer), como na AWS.
 - **RF5.3**: Resposta do authorizer interpretada conforme o modo: policy IAM (v1 e v2 payload 1.0) com efeito Allow/Deny; *simple response* `{isAuthorized, context}` quando `enableSimpleResponses: true`. Negado → 403 `{"message":"Forbidden"}`. `context` + `principalId` propagados em `requestContext.authorizer` (v1) / `requestContext.authorizer.lambda` (v2).
 - **RF5.4**: Cache por `resultTtlInSeconds`: chave = (serviço, authorizer, valores do identitySource), armazenado em memória com expiração. Endpoint para limpar o cache (essencial em testes e2e: trocar de usuário sem esperar TTL).
-- **RF5.5**: **Resolução cross-service**: authorizer referenciado por `arn` (ex.: `arn:aws:lambda:...:function:authenticate-dev-sessionAuthorizer`) é resolvido no registry global pelo nome completo da função — funciona porque o LSS enxerga todos os serviços registrados. Isso resolve uma limitação real do serverless-offline no monorepo (cada instância só enxerga as próprias funções). Não resolvido → 500 com mensagem apontando qual serviço precisa ser registrado.
+- **RF5.5**: **Resolução cross-service**: authorizer referenciado por `arn` (ex.: `arn:aws:lambda:...:function:auth-service-dev-sessionAuthorizer`) é resolvido no registry global pelo nome completo da função — funciona porque o LSS enxerga todos os serviços registrados. Isso resolve uma limitação real do serverless-offline no monorepo (cada instância só enxerga as próprias funções). Não resolvido → 500 com mensagem apontando qual serviço precisa ser registrado.
 
 ### RF6 — UI: menus Lambdas e APIs
 
@@ -390,13 +390,13 @@ sessionAuthorizerV2:
 ```yaml
 authorizer:
   name: sessionAuthorizer
-  arn: arn:aws:lambda:${self:provider.region}:${self:custom.accountId}:function:authenticate-${self:provider.stage}-sessionAuthorizer
+  arn: arn:aws:lambda:${self:provider.region}:${self:custom.accountId}:function:auth-service-${self:provider.stage}-sessionAuthorizer
   type: request
   identitySource: method.request.header.code
   resultTtlInSeconds: 3600
 ```
 
-→ LSS resolve `authenticate-{stage}-sessionAuthorizer` no registry global (serviço `authenticate` precisa estar registrado); extrai o header `code`; espera policy IAM; propaga `principalId` + `context` em `requestContext.authorizer`.
+→ LSS resolve `auth-service-{stage}-sessionAuthorizer` no registry global (serviço `auth-service` precisa estar registrado); extrai o header `code`; espera policy IAM; propaga `principalId` + `context` em `requestContext.authorizer`.
 
 ## Apêndice B — Formas de invocar um Lambda registrado
 

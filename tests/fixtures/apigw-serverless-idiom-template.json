@@ -486,7 +486,7 @@
       },
       "DependsOn": "HttpApiIntegrationGetUser"
     },
-    "SpacesIntegration": {
+    "GroupsIntegration": {
       "Type": "AWS::ApiGatewayV2::Integration",
       "Properties": {
         "ApiId": {
@@ -500,7 +500,7 @@
         }
       }
     },
-    "SpacesWriteIntegration": {
+    "GroupsWriteIntegration": {
       "Type": "AWS::ApiGatewayV2::Integration",
       "Properties": {
         "ApiId": {
@@ -514,45 +514,45 @@
         }
       }
     },
-    "SpacesGetRoute": {
+    "GroupsGetRoute": {
       "Type": "AWS::ApiGatewayV2::Route",
       "Properties": {
         "ApiId": {
           "Ref": "HttpApi"
         },
-        "RouteKey": "GET /api/identity/spaces",
+        "RouteKey": "GET /api/identity/groups",
         "Target": {
-          "Fn::Sub": "integrations/${SpacesIntegration}"
+          "Fn::Sub": "integrations/${GroupsIntegration}"
         },
         "AuthorizationType": "CUSTOM",
         "AuthorizerId": {
-          "Ref": "IdentitySpacesAuthorizer"
+          "Ref": "IdentityGroupsAuthorizer"
         }
       }
     },
-    "SpacesPostRoute": {
+    "GroupsPostRoute": {
       "Type": "AWS::ApiGatewayV2::Route",
       "Properties": {
         "ApiId": {
           "Ref": "HttpApi"
         },
-        "RouteKey": "POST /api/identity/spaces",
+        "RouteKey": "POST /api/identity/groups",
         "Target": {
-          "Fn::Sub": "integrations/${SpacesWriteIntegration}"
+          "Fn::Sub": "integrations/${GroupsWriteIntegration}"
         },
         "AuthorizationType": "CUSTOM",
         "AuthorizerId": {
-          "Ref": "IdentitySpacesAuthorizer"
+          "Ref": "IdentityGroupsAuthorizer"
         }
       }
     },
-    "IdentitySpacesAuthorizer": {
+    "IdentityGroupsAuthorizer": {
       "Type": "AWS::ApiGatewayV2::Authorizer",
       "Properties": {
         "ApiId": {
           "Ref": "HttpApi"
         },
-        "Name": "identitySpacesAuthorizer",
+        "Name": "identityGroupsAuthorizer",
         "AuthorizerType": "REQUEST",
         "AuthorizerPayloadFormatVersion": "2.0",
         "EnableSimpleResponses": true,
@@ -565,7 +565,7 @@
         }
       }
     },
-    "SpacesInvokePermission": {
+    "GroupsInvokePermission": {
       "Type": "AWS::Lambda::Permission",
       "Properties": {
         "Action": "lambda:InvokeFunction",
@@ -578,7 +578,7 @@
         }
       }
     },
-    "SpacesWriteInvokePermission": {
+    "GroupsWriteInvokePermission": {
       "Type": "AWS::Lambda::Permission",
       "Properties": {
         "Action": "lambda:InvokeFunction",

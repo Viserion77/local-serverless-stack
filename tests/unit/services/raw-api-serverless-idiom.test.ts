@@ -74,7 +74,7 @@ function assembleUsersService(over: { stateRoutes?: HttpRoute[] } = {}) {
 }
 
 describe('serverless-emitted raw routes on the framework\'s own HttpApi', () => {
-  it('registers both /api/identity/spaces routes — the exact shape that used to be skipped', () => {
+  it('registers both /api/identity/groups routes — the exact shape that used to be skipped', () => {
     const { routes, warnings } = assembleUsersService();
 
     // The 0.16.0 symptom, gone.
@@ -82,18 +82,18 @@ describe('serverless-emitted raw routes on the framework\'s own HttpApi', () => 
     expect(warnings).toEqual([]);
 
     expect(routes.map(r => `${r.method} ${r.path}`)).toEqual([
-      'GET /api/identity/spaces',
-      'POST /api/identity/spaces',
+      'GET /api/identity/groups',
+      'POST /api/identity/groups',
     ]);
   });
 
   // --- A: Target via Fn::Sub -----------------------------------------------
   it('(A) resolves Target: !Sub "integrations/${LogicalId}" to the ::Integration', () => {
     const { resources } = assembleUsersService();
-    const raw = resources.filter(r => r.type === 'apigw-route' && r.logicalId.startsWith('Spaces'));
+    const raw = resources.filter(r => r.type === 'apigw-route' && r.logicalId.startsWith('Groups'));
     expect(raw.map(r => (r as { integrationRef?: string }).integrationRef)).toEqual([
-      'SpacesIntegration',
-      'SpacesWriteIntegration',
+      'GroupsIntegration',
+      'GroupsWriteIntegration',
     ]);
   });
 
@@ -117,7 +117,7 @@ describe('serverless-emitted raw routes on the framework\'s own HttpApi', () => 
     const { authorizers } = assembleUsersService();
     expect(authorizers).toEqual([
       {
-        name: 'identitySpacesAuthorizer',
+        name: 'identityGroupsAuthorizer',
         type: 'request',
         eventType: 'httpApi',
         payloadVersion: '2.0',
@@ -134,7 +134,7 @@ describe('serverless-emitted raw routes on the framework\'s own HttpApi', () => 
 
   it('(B) attaches the authorizer to every route that references it', () => {
     const { routes } = assembleUsersService();
-    expect(routes.map(r => r.authorizerName)).toEqual(['identitySpacesAuthorizer', 'identitySpacesAuthorizer']);
+    expect(routes.map(r => r.authorizerName)).toEqual(['identityGroupsAuthorizer', 'identityGroupsAuthorizer']);
   });
 
   // --- C: Permission FunctionName as {Ref} ---------------------------------
@@ -172,10 +172,10 @@ describe('serverless-emitted raw routes on the framework\'s own HttpApi', () => 
     // every compiled mirror plus the raw routes come through exactly once.
     const { routes, warnings } = assembleUsersService({ stateRoutes: [] });
     expect(routes.map(r => `${r.method} ${r.path}`).sort()).toEqual([
-      'GET /api/identity/spaces',
+      'GET /api/identity/groups',
       'GET /users',
       'GET /users/{id}',
-      'POST /api/identity/spaces',
+      'POST /api/identity/groups',
       'POST /users',
     ]);
     expect(warnings).toEqual([]);
@@ -198,8 +198,8 @@ describe('serverless-emitted raw routes on the framework\'s own HttpApi', () => 
       stateRoutes: [],
       warnings,
     });
-    const get = routes.find(r => r.path === '/api/identity/spaces' && r.method === 'GET')!;
-    const post = routes.find(r => r.path === '/api/identity/spaces' && r.method === 'POST')!;
+    const get = routes.find(r => r.path === '/api/identity/groups' && r.method === 'GET')!;
+    const post = routes.find(r => r.path === '/api/identity/groups' && r.method === 'POST')!;
     expect(get.functionArn).toBe(LIST_USERS_ARN);
     expect(post.functionArn).toBe(CREATE_USER_ARN);
     expect(warnings).toEqual([]);

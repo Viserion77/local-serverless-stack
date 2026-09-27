@@ -630,7 +630,7 @@ describe('parseSecret', () => {
         SigningKey: {
           Type: 'AWS::SecretsManager::Secret',
           Properties: {
-            Name: 's7/identity/jwt-signing-key',
+            Name: 'acme/identity/jwt-signing-key',
             Description: 'JWT signing key',
             KmsKeyId: 'alias/aws/secretsmanager',
             SecretString: '{"key":"dev-signing-secret"}',
@@ -642,7 +642,7 @@ describe('parseSecret', () => {
     expect(res).toEqual({
       type: 'secret',
       logicalId: 'SigningKey',
-      name: 's7/identity/jwt-signing-key',
+      name: 'acme/identity/jwt-signing-key',
       description: 'JWT signing key',
       kmsKeyId: 'alias/aws/secretsmanager',
       secretString: '{"key":"dev-signing-secret"}',
@@ -1265,11 +1265,11 @@ describe('parseApiRoute (AWS::ApiGatewayV2::Route)', () => {
         Resources: { R: { Type: 'AWS::ApiGatewayV2::Route', Properties: { RouteKey: 'GET /x', Target } } },
       } as never) as ApiRouteResource[])[0].integrationRef;
 
-    expect(parseTarget({ 'Fn::Sub': 'integrations/${SpacesIntegration}' })).toBe('SpacesIntegration');
+    expect(parseTarget({ 'Fn::Sub': 'integrations/${GroupsIntegration}' })).toBe('GroupsIntegration');
     // Whitespace inside the token and around the value is tolerated.
-    expect(parseTarget({ 'Fn::Sub': ' integrations/${ SpacesIntegration } ' })).toBe('SpacesIntegration');
+    expect(parseTarget({ 'Fn::Sub': ' integrations/${ GroupsIntegration } ' })).toBe('GroupsIntegration');
     // Fn::Sub's list form: [template, vars] — the template still comes first.
-    expect(parseTarget({ 'Fn::Sub': ['integrations/${SpacesIntegration}', {}] })).toBe('SpacesIntegration');
+    expect(parseTarget({ 'Fn::Sub': ['integrations/${GroupsIntegration}', {}] })).toBe('GroupsIntegration');
     // An already-substituted literal under Fn::Sub works the same way.
     expect(parseTarget({ 'Fn::Sub': 'integrations/Int9' })).toBe('Int9');
     // A non-string template (or an empty list) names nothing.

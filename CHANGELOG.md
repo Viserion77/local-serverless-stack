@@ -503,7 +503,7 @@ Corrections from integrating LSS 0.5.0 in a real monorepo using osls 4, serverle
 - **Native TypeScript source loading when available**: in `source` mode, the runtime worker now tries Node's native TypeScript type stripping (`process.features.typescript`) before requiring `esbuild-register`, `tsx`, or `ts-node`.
 
 ### Fixed
-- **Artifact resolution for osls/serverless package output**: `package.artifact` values such as `s7-identity.zip` are now resolved relative to `.serverless/` as well as the service root, and nonexistent declared candidates no longer suppress the `.serverless/*.zip` scan fallback.
+- **Artifact resolution for osls/serverless package output**: `package.artifact` values such as `acme-identity.zip` are now resolved relative to `.serverless/` as well as the service root, and nonexistent declared candidates no longer suppress the `.serverless/*.zip` scan fallback.
 - **Stale LocalStack proxy `INVOKE_URL`**: re-registering a service now updates an existing proxy Lambda when the expected invoke URL changed (port renumbering or `invokeHost` changes).
 - **Service identity collisions**: service registration now uses the `service:` name from `serverless-state.json` instead of the directory basename, with migration for same-root legacy cache entries.
 - **Event source mapping fidelity**: CloudFormation `StartingPosition`, `MaximumRetryAttempts`, `FunctionResponseTypes`, `MaximumBatchingWindowInSeconds`, `FilterCriteria`, and `DestinationConfig.OnFailure` are parsed/applied where supported; duplicate checks compare the resolved live ARN instead of unresolved CFN refs.

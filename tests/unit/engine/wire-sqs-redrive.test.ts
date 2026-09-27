@@ -1,4 +1,4 @@
-// End-to-end against the REAL SelfEngineBackend front door (s7 pattern):
+// End-to-end against the REAL SelfEngineBackend front door (real-monorepo wiring):
 // queue-level redrive. A queue carrying a RedrivePolicy feeds an SQS→Lambda ESM
 // whose handler ALWAYS fails; the message is redelivered until its
 // ApproximateReceiveCount exceeds maxReceiveCount and then moves to the DLQ with

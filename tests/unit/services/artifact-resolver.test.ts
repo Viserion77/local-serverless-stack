@@ -30,8 +30,8 @@ describe('resolveArtifacts', () => {
   });
 
   it('resolves a bare filename against .serverless/ (serverless v3 / osls v4 shape)', () => {
-    const zip = touch('.serverless', 's7-identity.zip');
-    expect(resolveArtifacts(root, ['s7-identity.zip'])).toEqual([zip]);
+    const zip = touch('.serverless', 'acme-identity.zip');
+    expect(resolveArtifacts(root, ['acme-identity.zip'])).toEqual([zip]);
   });
 
   it('resolves a root-relative path (legacy shape)', () => {
