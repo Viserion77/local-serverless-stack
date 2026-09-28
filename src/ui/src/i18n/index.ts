@@ -65,7 +65,26 @@ export function detectLocale(): Locale {
   return DEFAULT_LOCALE;
 }
 
+/**
+ * Mirror the active locale onto `<html lang>`.
+ *
+ * index.html ships `lang="en"` because that is what a static file can know.
+ * Without this the dashboard renders fully translated on a pt-BR browser while
+ * screen readers still pronounce it as English, and the browser's own
+ * translate prompt reads the stale tag too.
+ */
+function applyDocumentLang(next: Locale): void {
+  if (typeof document !== 'undefined') {
+    document.documentElement.lang = next;
+  }
+}
+
 const locale = ref<Locale>(detectLocale());
+
+// The DETECTED locale has to reach the document at boot — not only when the
+// user opens Settings and picks one. A browser-detected language that never
+// updates `<html lang>` is the common half of this bug.
+applyDocumentLang(locale.value);
 
 export function setLocale(next: Locale): void {
   locale.value = next;
@@ -74,9 +93,7 @@ export function setLocale(next: Locale): void {
   } catch {
     // Same as above: the choice still applies for this session.
   }
-  if (typeof document !== 'undefined') {
-    document.documentElement.lang = next;
-  }
+  applyDocumentLang(next);
 }
 
 /**

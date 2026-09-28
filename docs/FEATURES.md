@@ -233,8 +233,10 @@ anything unknown → English); switch it in the ⋮ menu and the choice is remem
 resolves `LSS_LANG` first, then the POSIX `LC_ALL` / `LC_MESSAGES` / `LANG` chain, and falls back to
 English. Both layers are hand-rolled and dependency-free (`src/ui/src/i18n/`, `bin/i18n.js`): a missing
 key falls back to English and then to the key itself, so an untranslated screen still renders something
-actionable. AWS proper nouns, config keys, CLI commands and flags are deliberately never translated.
-Asserted by: unit (`cli/i18n`) + `vue-tsc`.
+actionable. The resolved locale reaches `<html lang>` at boot, not only when the user switches, so a
+translated dashboard is announced in the language it is actually written in. AWS proper nouns, config
+keys, CLI commands and flags are deliberately never translated.
+Asserted by: unit (`cli/i18n`, `ui/i18n-messages`) + `vue-tsc`.
 
 ## 11. Programmatic client (`LssClient`)
 

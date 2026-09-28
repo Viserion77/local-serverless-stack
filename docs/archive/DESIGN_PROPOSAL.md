@@ -1,101 +1,101 @@
-> **Documento histórico (2026-05)** — proposta de design original, anterior à
-> implementação. Preservado como registro; **não reflete o estado atual**.
-> O que existe hoje está em [docs/FEATURES.md](../FEATURES.md),
-> [docs/CONFIGURATION.md](../CONFIGURATION.md) e [docs/SELF_ENGINE.md](../SELF_ENGINE.md).
+> **Historical document (2026-05)** — the original design proposal, written
+> before implementation. Kept as a record; it **does not reflect the current
+> state**. What exists today is in [docs/FEATURES.md](../FEATURES.md),
+> [docs/CONFIGURATION.md](../CONFIGURATION.md) and [docs/SELF_ENGINE.md](../SELF_ENGINE.md).
 
-# Orquestrador Local (proposta)
+# Local Orchestrator (proposal)
 
-## Objetivo
+## Goal
 
-Centralizar recursos DynamoDB, SQS e SNS em um control plane local único, orquestrando start/stop/hot-reload dos microserviços sem que cada um suba seu próprio LocalStack/Serverless Offline.
+Centralise DynamoDB, SQS and SNS resources in a single local control plane, orchestrating start/stop/hot-reload of the microservices without each one booting its own LocalStack/Serverless Offline.
 
-## Arquitetura
+## Architecture
 
-- **Frontend (TS + Vue 3 + Vite)**: build estático leve; servido pelo backend. Usa componentes vanilla e CSS próprio.
-- **Backend (TS + Express)**: rotas `/api/*`; qualquer outra rota entrega o build do frontend. Lê CloudFormation templates de `.serverless/` e mantém cache de estado.
-- **LocalStack interno**: provedor único de AWS (dynamo, sqs, sns). Subprocesso/container gerenciado pelo backend.
-- **Registro de serviços (CloudFormation)**: plugin Serverless notifica o backend após `sls package`/`sls deploy`; o backend lê o CloudFormation template de `.serverless/` e extrai recursos (DynamoDB, SQS, SNS, Lambdas).
-- **Ponte de execução**: eventos em SQS/SNS do control plane disparam o handler real do serviço (usando o artefato .zip gerado ou source diretamente).
-- **Watcher**: escuta mudanças de código/config do serviço e aciona rebuild via `sls package` automático e re-sync de recursos.
-- **Controle de processos**: backend pode identificar PIDs de serviços rodando (ex: `sls offline`) e enviar sinal para parar/restart antes de rodar novo comando.
+- **Frontend (TS + Vue 3 + Vite)**: light static build, served by the backend. Uses vanilla components and its own CSS.
+- **Backend (TS + Express)**: `/api/*` routes; every other route serves the frontend build. Reads CloudFormation templates from `.serverless/` and keeps a state cache.
+- **Internal LocalStack**: the single AWS provider (dynamo, sqs, sns). A subprocess/container managed by the backend.
+- **Service registration (CloudFormation)**: a Serverless plugin notifies the backend after `sls package`/`sls deploy`; the backend reads the CloudFormation template from `.serverless/` and extracts resources (DynamoDB, SQS, SNS, Lambdas).
+- **Execution bridge**: events on the control plane's SQS/SNS fire the service's real handler (using the generated .zip artifact or the source directly).
+- **Watcher**: listens for code/config changes in a service and triggers a rebuild via automatic `sls package` plus a resource re-sync.
+- **Process control**: the backend can identify the PIDs of running services (e.g. `sls offline`) and signal them to stop/restart before running a new command.
 
-## CloudFormation Template como fonte de verdade
+## The CloudFormation template as the source of truth
 
-**Não precisamos criar um manifest customizado.** O Serverless Framework já gera tudo que precisamos em `.serverless/`:
+**We do not need to invent a custom manifest.** The Serverless Framework already generates everything we need in `.serverless/`:
 
-- `cloudformation-template-update-stack.json`: contém todas as definições de recursos (DynamoDB tables, SQS queues, SNS topics, Lambda functions com handlers, runtime, env vars, event sources como SQS triggers, SNS subscriptions, DynamoDB streams).
-- `serverless-state.json`: contém configuração completa do serviço (service name, provider, functions, resources).
-- `<function>.zip`: artefatos de build de cada função.
+- `cloudformation-template-update-stack.json`: holds every resource definition (DynamoDB tables, SQS queues, SNS topics, Lambda functions with handlers, runtime, env vars, event sources such as SQS triggers, SNS subscriptions, DynamoDB streams).
+- `serverless-state.json`: holds the service's full configuration (service name, provider, functions, resources).
+- `<function>.zip`: the build artifact for each function.
 
-### O que o orquestrador extrai do CloudFormation template:
+### What the orchestrator extracts from the CloudFormation template
 
 - **Lambdas** (`AWS::Lambda::Function`): handler path, runtime, env vars, memory, timeout.
 - **DynamoDB** (`AWS::DynamoDB::Table`): table name, key schema, indexes, billing mode, streams.
 - **SQS** (`AWS::SQS::Queue`): queue name, DLQ, visibility timeout, event source mappings.
 - **SNS** (`AWS::SNS::Topic`): topic name, subscriptions.
-- **Event Sources** (`AWS::Lambda::EventSourceMapping`): ligação entre SQS/DynamoDB streams e Lambdas.
-- **Ignora**: API Gateway (não útil localmente), IAM roles, CloudWatch logs.
+- **Event Sources** (`AWS::Lambda::EventSourceMapping`): the link between SQS/DynamoDB streams and Lambdas.
+- **Ignored**: API Gateway (not useful locally), IAM roles, CloudWatch logs.
 
-### Armazenamento do orquestrador
+### Orchestrator storage
 
-Cacheia em `~/.lss/orchestrator/cache/<service>/`:
+Cached under `~/.lss/orchestrator/cache/<service>/`:
 
-- `cloudformation-template.json` (cópia do template)
-- `metadata.json` (caminho raiz do serviço, timestamp, hash do template para detectar mudanças)
-- `artifacts/` (opcional: cópias dos .zip se necessário)
+- `cloudformation-template.json` (a copy of the template)
+- `metadata.json` (service root path, timestamp, template hash for change detection)
+- `artifacts/` (optional: copies of the .zip files when needed)
 
-## API do backend (esboço)
+## Backend API (sketch)
 
-- `POST /api/services/register` → recebe path do serviço, lê `.serverless/cloudformation-template-update-stack.json`, extrai recursos e salva em cache, aplica diff no LocalStack.
-- `POST /api/services/:name/package` → executa `sls package` no serviço e faz register automático após sucesso.
-- `POST /api/services/:name/start` → opcionalmente para PID antigo e executa comando de start.
-- `POST /api/services/:name/stop` → envia sinal para PID registrado.
-- `POST /api/services/:name/redeploy` → re-executa `sls package`, re-lê template, aplica diff.
-- `GET /api/services` → lista serviços, estado, PIDs, última atualização.
-- `GET /api/resources` → lista dynamo/queues/topics provisionados no LocalStack.
-- `GET /api/diff/:name` → diferenças pendentes entre template e estado aplicado no LocalStack.
+- `POST /api/services/register` → takes a service path, reads `.serverless/cloudformation-template-update-stack.json`, extracts resources, caches them and applies the diff to LocalStack.
+- `POST /api/services/:name/package` → runs `sls package` in the service and auto-registers on success.
+- `POST /api/services/:name/start` → optionally stops the old PID and runs the start command.
+- `POST /api/services/:name/stop` → signals the registered PID.
+- `POST /api/services/:name/redeploy` → re-runs `sls package`, re-reads the template, applies the diff.
+- `GET /api/services` → lists services, state, PIDs, last update.
+- `GET /api/resources` → lists the dynamo/queues/topics provisioned in LocalStack.
+- `GET /api/diff/:name` → pending differences between the template and the state applied to LocalStack.
 
-## Fluxo de trabalho local
+## Local workflow
 
-1. Subir backend do orquestrador (`npm run orchestrator:server`). Ele inicia LocalStack, Express e serve o build do frontend.
-2. Frontend buildado é servido automaticamente pelo backend em qualquer rota não `/api/*`.
-3. Em cada microserviço, rodar `sls package` (ou hook automático do plugin) para gerar `.serverless/cloudformation-template-update-stack.json`.
-4. Plugin Serverless notifica o orquestrador (via POST `/api/services/register` com path do serviço).
-5. Backend lê o CloudFormation template, extrai recursos e handlers, aplica no LocalStack e cacheia.
-6. Watcher detecta mudanças em `src/`, `serverless.yml`, etc → re-executa `sls package` → redeploy automático.
-7. UI permite ligar/desligar serviços (start/stop de processos), ver logs, aplicar diffs e reinvocar handlers manualmente.
+1. Boot the orchestrator backend (`npm run orchestrator:server`). It starts LocalStack and Express, and serves the frontend build.
+2. The built frontend is served automatically by the backend on any non-`/api/*` route.
+3. In each microservice, run `sls package` (or the plugin's automatic hook) to generate `.serverless/cloudformation-template-update-stack.json`.
+4. The Serverless plugin notifies the orchestrator (POST `/api/services/register` with the service path).
+5. The backend reads the CloudFormation template, extracts resources and handlers, applies them to LocalStack and caches them.
+6. The watcher detects changes under `src/`, `serverless.yml`, etc. → re-runs `sls package` → automatic redeploy.
+7. The UI lets you start/stop services (process start/stop), view logs, apply diffs and re-invoke handlers by hand.
 
-## Estrutura sugerida no monorepo
+## Suggested monorepo structure
 
 ```
 orchestrator/
   package.json
   tsconfig.json
   server/ (Express + LocalStack runner + watcher)
-  ui/ (Vue 3 + Vite, build para dist/)
-  dist/ (build do UI servido pelo backend)
+  ui/ (Vue 3 + Vite, builds to dist/)
+  dist/ (the UI build served by the backend)
 ```
 
-## Controle de processos
+## Process control
 
-- Backend mantém tabela de PIDs por serviço.
-- Antes de iniciar um serviço, tenta parar PID anterior (SIGINT/SIGTERM). Opcional: integração com terminals já abertos (enviar sinal pelo PID). Se falhar, loga e prossegue.
+- The backend keeps a PID table per service.
+- Before starting a service it tries to stop the previous PID (SIGINT/SIGTERM). Optional: integrate with already-open terminals (signal by PID). On failure, log and carry on.
 
-## Considerações de implementação
+## Implementation considerations
 
-- **Roteamento**: Express serve `/api/*`; fallback `app.get('*')` entrega `dist/index.html` do frontend buildado.
-- **LocalStack**: healthcheck + retry; provisiona recursos via AWS SDK v3 parseando CloudFormation template (converter `AWS::DynamoDB::Table` → chamadas `createTable`, etc).
-- **Drift/diff**: backend persiste snapshot do template aplicado; ao receber novo template (via re-package), calcula diff e aplica mudanças incrementais.
-- **Parser CloudFormation**: extrair apenas recursos relevantes (`AWS::Lambda::Function`, `AWS::DynamoDB::Table`, `AWS::SQS::Queue`, `AWS::SNS::Topic`, `AWS::Lambda::EventSourceMapping`); ignorar API Gateway, IAM roles, logs.
-- **Invocação de handlers**: quando evento chega em SQS/SNS do LocalStack, ponte lê o event source mapping do CloudFormation, identifica o handler correto, carrega o .zip (se existir) ou source direto e invoca com o payload.
-- **Segurança**: variáveis de ambiente do CloudFormation (`Environment.Variables`) são carregadas por handler; secrets não são centralizados.
-- **Logs**: armazenar últimos eventos de package/deploy/invoke em memória + arquivo leve em `~/.lss/orchestrator/logs`.
+- **Routing**: Express serves `/api/*`; the `app.get('*')` fallback serves the frontend build's `dist/index.html`.
+- **LocalStack**: healthcheck + retry; provisions resources through the AWS SDK v3 by parsing the CloudFormation template (turning `AWS::DynamoDB::Table` into `createTable` calls, and so on).
+- **Drift/diff**: the backend persists a snapshot of the applied template; when a new template arrives (via re-package) it computes the diff and applies incremental changes.
+- **CloudFormation parser**: extract only the relevant resources (`AWS::Lambda::Function`, `AWS::DynamoDB::Table`, `AWS::SQS::Queue`, `AWS::SNS::Topic`, `AWS::Lambda::EventSourceMapping`); ignore API Gateway, IAM roles, logs.
+- **Handler invocation**: when an event lands on LocalStack's SQS/SNS, the bridge reads the event source mapping from CloudFormation, identifies the right handler, loads the .zip (if present) or the source directly and invokes it with the payload.
+- **Security**: environment variables from CloudFormation (`Environment.Variables`) are loaded per handler; secrets are not centralised.
+- **Logs**: keep the last package/deploy/invoke events in memory plus a light file under `~/.lss/orchestrator/logs`.
 
-## Próximos passos
+## Next steps
 
-1. Scaffold `orchestrator/server` (Express + LocalStack runner + CloudFormation parser + storage de cache).
-2. Scaffold `orchestrator/ui` (Vue 3 + Vite) com layout mínimo: lista de serviços, estado, ações package/start/stop/redeploy, painel de logs.
-3. Implementar parser de CloudFormation template → extrair recursos relevantes e converter para chamadas AWS SDK v3.
-4. Implementar plugin Serverless com hook `after:package:finalize` para notificar orquestrador (POST `/api/services/register` com path do serviço).
-5. Implementar watcher de arquivos (`src/`, `serverless.yml`) → acionar `sls package` → auto-register.
-6. Implementar ponte de eventos: SQS/SNS/DynamoDB streams do LocalStack → identificar handler → carregar e invocar .zip ou source.
+1. Scaffold `orchestrator/server` (Express + LocalStack runner + CloudFormation parser + cache storage).
+2. Scaffold `orchestrator/ui` (Vue 3 + Vite) with a minimal layout: service list, state, package/start/stop/redeploy actions, log panel.
+3. Implement the CloudFormation template parser → extract the relevant resources and turn them into AWS SDK v3 calls.
+4. Implement the Serverless plugin with an `after:package:finalize` hook to notify the orchestrator (POST `/api/services/register` with the service path).
+5. Implement the file watcher (`src/`, `serverless.yml`) → trigger `sls package` → auto-register.
+6. Implement the event bridge: LocalStack SQS/SNS/DynamoDB streams → identify the handler → load and invoke the .zip or source.

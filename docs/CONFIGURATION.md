@@ -641,7 +641,9 @@ The dashboard and the CLI speak English, Brazilian Portuguese and Spanish.
 
 - **Dashboard**: the ⋮ menu in the header switches language; the choice is stored per browser
   (`lss-locale` in localStorage). With no stored choice the browser's languages decide
-  (`pt` → `pt-BR`, `es-AR` → `es`, anything else → English).
+  (`pt` → `pt-BR`, `es-AR` → `es`, anything else → English). Whichever wins is written to
+  `<html lang>` on load, so screen readers and the browser's own translate prompt agree with
+  what is on screen.
 - **CLI**: `LSS_LANG=pt-BR npx lss scan`, or the shell's own `LC_ALL` / `LC_MESSAGES` / `LANG`
   (in that order of precedence). Unrecognised values fall back to English.
 

@@ -17,7 +17,7 @@
     },
     {
       "label": "build: server",
-      "detail": "tsc do orquestrador + engine (npm run server:build)",
+      "detail": "tsc for the orchestrator + engine (npm run server:build)",
       "type": "npm",
       "script": "server:build",
       "group": "build",
@@ -26,15 +26,15 @@
     },
     {
       "label": "dev: orchestrator + UI (watch)",
-      "detail": "tsx watch no server + vite dev na UI (npm run dev)",
+      "detail": "tsx watch on the server + vite dev on the UI (npm run dev)",
       "type": "npm",
       "script": "dev",
       "icon": { "id": "play-circle", "color": "terminal.ansiCyan" },
       "problemMatcher": []
     },
     {
-      "label": "dev @ example self-hosted (watch, sem build)",
-      "detail": "npm run dev lendo examples/self-hosted/lss.config.json — LSS em :14566 (dashboard, API e AWS wire), UI Vite em :3101",
+      "label": "dev @ example self-hosted (watch, no build)",
+      "detail": "npm run dev reading examples/self-hosted/lss.config.json — LSS on :14566 (dashboard, API and AWS wire), Vite UI on :3101",
       "type": "shell",
       "command": "LSS_CONFIG_PATH=examples/self-hosted/lss.config.json npm run dev",
       "isBackground": true,
@@ -46,7 +46,7 @@
     // ------------------------------------------------------------------
     {
       "label": "test: unit",
-      "detail": "Suite unitária completa (npm test)",
+      "detail": "The full unit suite (npm test)",
       "type": "npm",
       "script": "test",
       "group": { "kind": "test", "isDefault": true },
@@ -55,7 +55,7 @@
     },
     {
       "label": "test: watch",
-      "detail": "Suite unitária em watch mode",
+      "detail": "The unit suite in watch mode",
       "type": "npm",
       "script": "test:watch",
       "icon": { "id": "sync", "color": "terminal.ansiCyan" },
@@ -63,7 +63,7 @@
     },
     {
       "label": "test: coverage (gate 100%)",
-      "detail": "Gate de cobertura do CI (100% em statements/branches/functions/lines)",
+      "detail": "The CI coverage gate (100% statements/branches/functions/lines)",
       "type": "npm",
       "script": "test:coverage",
       "group": "test",
@@ -72,7 +72,7 @@
     },
     {
       "label": "test: integration (self engine, no Docker)",
-      "detail": "Suite de integração ponta a ponta no self engine — sem Docker, sem token",
+      "detail": "End-to-end integration suite on the self engine — no Docker, no token",
       "type": "npm",
       "script": "test:integration",
       "group": "test",
@@ -81,7 +81,7 @@
     },
     {
       "label": "lint",
-      "detail": "eslint no repositório inteiro",
+      "detail": "eslint across the whole repository",
       "type": "npm",
       "script": "lint",
       "group": "test",
@@ -98,19 +98,19 @@
     },
     {
       "label": "typecheck: all projects",
-      "detail": "tsc --noEmit em server/client/mcp/tests + vue-tsc na UI",
+      "detail": "tsc --noEmit on server/client/mcp/tests + vue-tsc on the UI",
       "type": "shell",
-      // `tests/tsconfig.json` entrou aqui porque era o único TypeScript do repo
-      // que ninguém checava: ts-jest transpila arquivo a arquivo e não vê erro
-      // de tipo, e os quatro projetos de src/ excluem tests/. Resultado: ~45
-      // erros acumulados, invisíveis no CI e vermelhos no editor — um deles
-      // escondendo um waitFor() que não esperava nada.
+      // `tests/tsconfig.json` is in here because it was the only TypeScript in
+      // the repo nobody checked: ts-jest transpiles file by file and never sees
+      // a type error, and every src/ project excludes tests/. The result was
+      // ~45 accumulated errors, invisible to CI and red in the editor — one of
+      // them hiding a waitFor() whose wait returned immediately.
       //
-      // O `client:build` antes dele não é enfeite: tests/integration/client.test.ts
-      // importa `../../dist/client` de propósito (é a visão de quem consome o
-      // pacote), então o typecheck do suite precisa desse artefato. Sem isso a
-      // checagem passa na sua máquina — que tem dist/ — e reprova num checkout
-      // limpo, que foi exatamente como ela quebrou o CI.
+      // The `client:build` in front of it is load-bearing, not decoration:
+      // tests/integration/client.test.ts imports `../../dist/client` on purpose
+      // (the consumer's view of the package), so typechecking the suite needs
+      // that artifact. Without it the check passes on a dev box — which has a
+      // dist/ — and fails on a clean checkout, which is exactly how it broke CI.
       "command": "npx tsc --noEmit -p src/server/tsconfig.json && npx tsc --noEmit -p src/client/tsconfig.json && npx tsc --noEmit -p src/mcp/tsconfig.json && npm run client:build && npx tsc --noEmit -p tests/tsconfig.json && cd src/ui && npx vue-tsc --noEmit",
       "group": "test",
       "icon": { "id": "verified", "color": "terminal.ansiBlue" },
@@ -118,7 +118,7 @@
     },
     {
       "label": "validate: pre-prod",
-      "detail": "Gate antes de publicar: lint > typecheck > cobertura 100% > build completo",
+      "detail": "The pre-publish gate: lint > typecheck > 100% coverage > full build",
       "dependsOrder": "sequence",
       "dependsOn": ["lint", "typecheck: all projects", "test: coverage (gate 100%)", "build: all"],
       "group": "test",
@@ -131,7 +131,7 @@
     // ------------------------------------------------------------------
     {
       "label": "example self-hosted: setup",
-      "detail": "npm install nos 4 microserviços do exemplo",
+      "detail": "npm install in the example's 4 microservices",
       "type": "shell",
       "command": "npm run setup",
       "options": { "cwd": "${workspaceFolder}/examples/self-hosted" },
@@ -140,7 +140,7 @@
     },
     {
       "label": "example self-hosted: start (no Docker)",
-      "detail": "Sobe o LSS na 14566 — dashboard, REST API e AWS wire no mesmo listener",
+      "detail": "Boots LSS on 14566 — dashboard, REST API and AWS wire on one listener",
       "type": "shell",
       "command": "npm run lss:start",
       "options": { "cwd": "${workspaceFolder}/examples/self-hosted" },
@@ -149,7 +149,7 @@
     },
     {
       "label": "example self-hosted: register services",
-      "detail": "sls package nos 4 serviços (registra e provisiona na engine)",
+      "detail": "sls package on the 4 services (registers and provisions them on the engine)",
       "type": "shell",
       "command": "npm run register:all",
       "options": { "cwd": "${workspaceFolder}/examples/self-hosted" },
@@ -158,7 +158,7 @@
     },
     {
       "label": "example self-hosted: drive pipeline",
-      "detail": "POST /orders e acompanha o fluxo orders > billing > notifications",
+      "detail": "POST /orders, then follow the orders > billing > notifications flow",
       "type": "shell",
       "command": "curl -s -X POST http://localhost:3631/orders -H 'content-type: application/json' -d '{\"customerId\":\"u-ada\",\"total\":42.5}' && echo && sleep 2 && echo '--- ORDERS:' && curl -s http://localhost:3631/orders && echo && echo '--- RECEIPTS:' && curl -s http://localhost:3632/receipts && echo && echo '--- NOTIFICATIONS:' && curl -s http://localhost:3633/notifications && echo",
       "options": { "cwd": "${workspaceFolder}/examples/self-hosted" },
@@ -167,7 +167,7 @@
     },
     {
       "label": "example self-hosted: drive catalog (OpenSearch)",
-      "detail": "Indexa produtos e roda busca full-text, filtros e agregações",
+      "detail": "Indexes products, then runs full-text search, filters and aggregations",
       "type": "shell",
       "command": "curl -s -X POST http://localhost:3634/products -H 'content-type: application/json' -d '{\"name\":\"Wireless Mouse\",\"category\":\"peripherals\",\"price\":25,\"tags\":[\"usb\",\"wireless\"]}' && echo && curl -s -X POST http://localhost:3634/products -H 'content-type: application/json' -d '{\"name\":\"Mechanical Keyboard\",\"category\":\"peripherals\",\"price\":90,\"tags\":[\"usb\"]}' && echo && curl -s -X POST http://localhost:3634/products -H 'content-type: application/json' -d '{\"name\":\"USB Hub\",\"category\":\"accessories\",\"price\":15,\"tags\":[\"usb\"]}' && echo && echo '--- SEARCH q=wireless:' && curl -s 'http://localhost:3634/search?q=wireless' && echo && echo '--- SEARCH category+maxPrice:' && curl -s 'http://localhost:3634/search?category=peripherals&maxPrice=50' && echo && echo '--- STATS:' && curl -s http://localhost:3634/stats && echo",
       "options": { "cwd": "${workspaceFolder}/examples/self-hosted" },
@@ -184,7 +184,7 @@
     },
     {
       "label": "example self-hosted: restart (rebuild local)",
-      "detail": "build: all > stop > start — o CLI roda o dist/ compilado, então este é o caminho para ver mudanças locais no exemplo",
+      "detail": "build: all > stop > start — the CLI runs the compiled dist/, so this is the way to see local changes in the example",
       "dependsOrder": "sequence",
       "dependsOn": [
         "build: all",
@@ -195,8 +195,8 @@
       "problemMatcher": []
     },
     {
-      "label": "example self-hosted: demo completo",
-      "detail": "start > register > pipeline > catalog — o diferencial do LSS em uma task",
+      "label": "example self-hosted: full demo",
+      "detail": "start > register > pipeline > catalog — what sets LSS apart, in one task",
       "dependsOrder": "sequence",
       "dependsOn": [
         "example self-hosted: start (no Docker)",

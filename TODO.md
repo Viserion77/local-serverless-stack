@@ -76,4 +76,4 @@ since 0.x — see [docs/RELEASE.md](docs/RELEASE.md)). Before tagging it:
 4. ⏳ Self engine hardening items closed
 
 Target: Q4 2026
-- [ ] funcionalidade para avançar tempo, ou acelerar, assim conseguindo testar melhor o ttl do dynamo, o slq do sqs, limpeza do s3....
+- [ ] Time control on the engine (advance or accelerate the clock), so DynamoDB TTL, SQS visibility/delay and S3 lifecycle cleanup become testable without waiting in real time

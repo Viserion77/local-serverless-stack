@@ -5,6 +5,32 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The dashboard's detected language now reaches `<html lang>` at boot.** The locale resolution
+  (stored choice → `navigator.languages` → English) already ran on load, but only an explicit switch
+  in the ⋮ menu wrote the result to the document. A browser set to pt-BR therefore got a fully
+  translated dashboard that still declared `lang="en"` — the tag `index.html` can only ship
+  statically — so screen readers announced Portuguese with English pronunciation and the browser's
+  own translate prompt offered to translate a page already in the reader's language. Resolution and
+  the manual switch now share one `applyDocumentLang()`, and `tests/unit/ui/i18n-messages.test.ts`
+  pins the whole chain (browser languages, stored override, storage disabled, boot, switch) against
+  a stubbed browser.
+
+### Changed
+
+- **The repository is English-only.** English was already the language of the source, but not of
+  everything around it. Translated: the two PRDs (`docs/PRD_SELF_ENGINE.md`,
+  `docs/PRD_API_LAMBDA_EMULATION.md`), the dashboard's UI/UX contract (`src/ui/ui-ux.md`), the
+  archived design proposal, the 2026-07-29 handoff — renamed `REVISAO-2026-07-29.md` →
+  `REVIEW-2026-07-29.md` — plus the `.vscode/tasks.json` labels/details, the last Portuguese line of
+  `TODO.md` and two CHANGELOG entries that quoted CLI output verbatim. What stays non-English is
+  what has to: the `pt-BR`/`es` translation catalogues, the language endonyms
+  (`Português (BR)`, `Español`), the `sa-east-1 — São Paulo` region label, the `confirmar` token
+  `seed:clear` asks the operator to type, and the tests that assert on translated CLI output.
+
 ## [1.0.0] - 2026-07-31
 
 **LSS runs on one engine.** The LocalStack backend is gone — not deprecated, removed. The self
@@ -581,13 +607,13 @@ Testability features for downstream e2e suites: an isolated test instance and a 
 ## [0.1.2] - 2026-05-26
 
 ### Added
-- **`npx lss seed:clear` now requires interactive confirmation**: before issuing any `DeleteRequest`, the CLI lists the exact LocalStack tables it would wipe, prints the LocalStack URL, makes the "this never touches AWS" guarantee explicit, and waits for the user to type `confirmar` (case-sensitive, exact match after trim). Anything else cancels with `🚫 Cancelado — nenhuma alteração feita.` and no clear call is made. `--yes` / `-y` skips the prompt for CI use.
+- **`npx lss seed:clear` now requires interactive confirmation**: before issuing any `DeleteRequest`, the CLI lists the exact LocalStack tables it would wipe, prints the LocalStack URL, makes the "this never touches AWS" guarantee explicit, and waits for the user to type `confirmar` (case-sensitive, exact match after trim). Anything else cancels with `🚫 Cancelled — nothing was changed.` and no clear call is made. `--yes` / `-y` skips the prompt for CI use.
 - **Defensive endpoint guard in `SeedManager`**: `clearTable` and `clearAllSeeded` now refuse to run unless the resolved DynamoDB endpoint hostname is on a hardcoded local allowlist (`localhost`, `127.0.0.1`, `::1`, `0.0.0.0`, `host.docker.internal`, `localstack`, `lss-localstack`, `lss-localstack-<port>`, `*.localhost`). If a future refactor ever pointed `LocalStackManager.getConfig()` at a real AWS endpoint, the guard would throw `Refusing destructive operation: endpoint "..." is not a recognized local LocalStack host. seed:clear may ONLY run against LocalStack — never against AWS.` before any AWS SDK call. Architecture already pinned writes to LocalStack via fake credentials; this is belt-and-braces.
 - **Seed/clear mismatch diagnostic**: `GET /api/seeds` now also returns `liveTables: string[]` (every DynamoDB table currently in LocalStack). When `npx lss seed` skips tables or `npx lss seed:clear` finds no live targets, the CLI prints a two-column diagnostic — seed files inspected on one side, live LocalStack tables on the other — with the hint "Os nomes dos arquivos de seed precisam bater EXATAMENTE com o `TableName` no CloudFormation." This makes seed-name/table-name typos obvious instead of "nothing happened, why?". When the live-tables list is empty, the CLI falls back to the older "run `npx lss start` + `npx serverless deploy` first" hint.
 - **Test infrastructure**: new `tests/unit/seed-manager-guard.test.ts` (27 tests covering the endpoint allowlist matrix, IPv6 bracket handling, malformed URLs, and that `clearTable`/`clearAllSeeded` invoke the guard) and `tests/unit/cli-seed.test.ts` (21 tests spawning `bin/cli.js` against an in-process HTTP stub of the orchestrator — covers confirmation flow, `--yes`/`-y` bypass, "no live tables" diagnostic, name-mismatch diagnostic, and `formatError` robustness against 500-with-empty-body / 500-with-non-JSON / `{error: ""}` responses).
 
 ### Changed
-- **`bin/cli.js` error handling never leaves the user with an empty message**: new `formatError(e)` and `buildHttpError(res, data)` helpers walk a fallback chain (`e.message` → `e.code` → `e.name` → body snippet → HTTP status text → "erro desconhecido (sem detalhes)") so a response 500 with no body, a socket reset during orchestrator startup, or an `Error` with empty `.message` all produce a useful CLI line instead of `❌ Não consegui listar as tabelas antes de limpar:` with a blank suffix. Applied to every `console.error` path in `seed`, `seed:clear`, and the underlying `getJson`/`postJson` helpers.
+- **`bin/cli.js` error handling never leaves the user with an empty message**: new `formatError(e)` and `buildHttpError(res, data)` helpers walk a fallback chain (`e.message` → `e.code` → `e.name` → body snippet → HTTP status text → "unknown error (no details)") so a response 500 with no body, a socket reset during orchestrator startup, or an `Error` with empty `.message` all produce a useful CLI line instead of `❌ Could not list the tables before clearing:` with a blank suffix. Applied to every `console.error` path in `seed`, `seed:clear`, and the underlying `getJson`/`postJson` helpers.
 - **`npx lss seed` hint when tables are missing in LocalStack**: previously printed a generic "tabelas foram puladas" footer. Now it fetches `liveTables` and shows the same mismatch diagnostic as `seed:clear`, so the user sees whether the cause is "I haven't deployed yet" (no live tables) or "my seed file name is wrong" (live tables exist but don't match).
 - **`firstPositional()` arg parser in the CLI**: commands that accept an optional table name (`seed`, `seed:clear`) now skip args starting with `-`. Without this, `npx lss seed:clear --yes` was interpreting `--yes` as the table name.
 - **`SeedManager.assertLocalEndpoint` normalizes IPv6 brackets** so URLs like `http://[::1]:4566` (which `new URL().hostname` reports as `[::1]`) match the `::1` entry in the allowlist instead of being rejected as non-local.
