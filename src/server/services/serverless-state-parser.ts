@@ -74,10 +74,31 @@ export interface ParsedServerlessState {
   apiPort?: number;
   invokePort?: number;
   functions: RegisteredFunction[];
+  // Each function's environment BEFORE sanitizing (provider + function level,
+  // `$ref` pointers followed), keyed by short name. It may still hold CFN
+  // intrinsics; the registrar resolves them to physical values once the
+  // resources exist (cfn-physical-values.ts).
+  rawEnvironment: Record<string, Record<string, unknown>>;
   routes: HttpRoute[];
   authorizers: AuthorizerConfig[];
   // Non-fatal problems (unsupported authorizer types, unparseable events).
   warnings: string[];
+}
+
+// What the CloudFormation side knows that the state cannot: which function a
+// template logical id names. Lets an authorizer declared as
+// `arn: !GetAtt AuthLambdaFunction.Arn` resolve to the function it points at.
+export interface StateParseContext {
+  // Same-template AWS::Lambda::Function logical id → its FunctionName.
+  lambdaNames?: Map<string, string>;
+}
+
+// Where an authorizer's code lives, once its reference is resolved.
+// `unresolved` carries a reference that named nothing this service knows.
+interface AuthorizerTarget {
+  functionName?: string;
+  arn?: string;
+  unresolved?: unknown;
 }
 
 interface StateFunctionDef {
@@ -100,6 +121,7 @@ interface ServerlessState {
     provider?: {
       stage?: string;
       region?: string;
+      stackName?: string;
       runtime?: string;
       memorySize?: number;
       timeout?: number;
@@ -139,6 +161,104 @@ export function sanitizeEnvironmentValues(env: Record<string, unknown>): Record<
   return result;
 }
 
+// The framework's logical id for a function: `getLambdaLogicalId` normalizes
+// `-` → Dash and `_` → Underscore, upper-cases the first letter and appends
+// "LambdaFunction" (`create-order` → `CreateDashorderLambdaFunction`).
+export function lambdaLogicalIdFor(shortName: string): string {
+  const normalized = shortName.replace(/-/g, 'Dash').replace(/_/g, 'Underscore');
+  return `${normalized.charAt(0).toUpperCase()}${normalized.slice(1)}LambdaFunction`;
+}
+
+// serverless-state.json is written with a cycle-safe serializer: an object
+// reachable twice is emitted once and every other occurrence becomes
+// `{"$ref": "$[\"service\"][\"provider\"]…"}`. A reader that does not follow
+// those pointers sees an authorizer, an event or an env value that is just
+// `{$ref}`. Follows a chain of pointers (bounded — a malformed file must not
+// loop) and returns the value it lands on; anything that is not a pointer is
+// returned untouched.
+export function derefStatePointer(value: unknown, root: unknown): unknown {
+  let current = value;
+  for (let hops = 0; hops < 16 && isStatePointer(current); hops++) {
+    const target = followPointer((current as { $ref: string }).$ref, root);
+    if (target === undefined) return current;
+    current = target;
+  }
+  return current;
+}
+
+// `{"$ref": "$…"}` and nothing else. One left after derefStatePointer is a
+// dangling pointer, which readers skip rather than mistake for data.
+export function isStatePointer(value: unknown): boolean {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const pointer = (value as Record<string, unknown>).$ref;
+  return typeof pointer === 'string' && pointer.startsWith('$') && Object.keys(value).length === 1;
+}
+
+// `$["a"]["b"][0]` (and the dotted `$.a.b`) → the value at that path, or
+// undefined when any step is missing.
+function followPointer(pointer: string, root: unknown): unknown {
+  const steps = /\[(\d+)\]|\["((?:[^"\\]|\\.)*)"\]|\.([A-Za-z_$][\w$]*)/gy;
+  steps.lastIndex = 1;
+  let node: unknown = root;
+  while (steps.lastIndex < pointer.length) {
+    const match = steps.exec(pointer);
+    if (!match || !node || typeof node !== 'object') return undefined;
+    const key = match[1] !== undefined
+      ? Number(match[1])
+      : match[2] !== undefined ? (JSON.parse(`"${match[2]}"`) as string) : match[3];
+    node = (node as Record<string | number, unknown>)[key];
+  }
+  return node;
+}
+
+// The bits of the packaged state the registrar needs BEFORE parsing anything:
+// the stack's name, stage and region feed the CloudFormation pseudo parameters.
+export function readStateIdentity(state: ServerlessState | null): {
+  serviceName?: string;
+  stage: string;
+  region?: string;
+  stackName?: string;
+} {
+  const provider = state?.service?.provider || {};
+  const stage = provider.stage || 'dev';
+  const serviceName = state?.service?.service;
+  const region = typeof provider.region === 'string' && provider.region ? provider.region : undefined;
+  const stackName = typeof provider.stackName === 'string' && provider.stackName
+    ? provider.stackName
+    : serviceName ? `${serviceName}-${stage}` : undefined;
+  return { serviceName, stage, region, stackName };
+}
+
+// The stage a packaging command asks for: `--stage X`, `--stage=X`, `-s X`.
+export function stageFromPackageArgs(args: string[]): string | undefined {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    const inline = /^--stage=(.+)$/.exec(arg);
+    if (inline) return inline[1];
+    if ((arg === '--stage' || arg === '-s') && args[i + 1] && !args[i + 1].startsWith('-')) return args[i + 1];
+  }
+  return undefined;
+}
+
+/**
+ * A `.serverless/` directory is whatever the LAST package run left there, for
+ * whichever stage it was run with. Registering it silently meant a service
+ * packaged for `prod` came up locally with prod table names and ARNs and no
+ * hint as to why nothing matched. Returns one warning per expectation the
+ * packaged stage contradicts.
+ */
+export function stageMismatchWarnings(
+  packagedStage: string,
+  expectations: Array<{ stage?: string; source: string }>,
+): string[] {
+  return expectations
+    .filter(e => e.stage && e.stage !== packagedStage)
+    .map(e =>
+      `The packaged artifacts are for stage "${packagedStage}", but ${e.source} says "${e.stage}" — ` +
+      'resource and function names follow the packaged stage. Re-package for the stage you mean (lss register --repackage).',
+    );
+}
+
 // A usable port or nothing — the state file is user-authored, so a string "3010"
 // is accepted but garbage never propagates into a listen() call.
 function asPort(value: unknown): number | undefined {
@@ -147,29 +267,51 @@ function asPort(value: unknown): number | undefined {
 }
 
 export class ServerlessStateParser {
-  parse(state: ServerlessState): ParsedServerlessState {
+  // Per-parse state: the document `$ref` pointers resolve against, and the
+  // function names an authorizer reference may resolve to.
+  private root: unknown = {};
+  private shortNames: string[] = [];
+  private lambdaNames = new Map<string, string>();
+  private fullNames = new Map<string, string>();
+
+  parse(state: ServerlessState, context: StateParseContext = {}): ParsedServerlessState {
     const warnings: string[] = [];
-    const provider = state.service?.provider || {};
-    const stage = provider.stage || 'dev';
-    const serviceName = state.service?.service;
-    const httpApiCors = Boolean(provider.httpApi?.cors);
+    this.root = state;
+    const provider = (this.deref(state.service?.provider) || {}) as NonNullable<NonNullable<ServerlessState['service']>['provider']>;
+    const { stage, serviceName } = readStateIdentity(state);
+    const httpApi = this.deref(provider.httpApi) as NonNullable<typeof provider.httpApi> | undefined;
+    const httpApiCors = Boolean(httpApi?.cors);
 
     const lss = state.service?.custom?.lss || {};
     const apiPort = asPort(lss.apiPort);
     const invokePort = asPort(lss.invokePort);
 
-    const authorizers = this.parseHttpApiAuthorizers(provider.httpApi?.authorizers || {}, warnings);
+    const fnDefs = (this.deref(state.service?.functions) || {}) as Record<string, StateFunctionDef>;
+    this.shortNames = Object.keys(fnDefs);
+    this.lambdaNames = context.lambdaNames ?? new Map();
+    this.fullNames = new Map();
+    for (const [shortName, rawDef] of Object.entries(fnDefs)) {
+      const def = (this.deref(rawDef) || {}) as StateFunctionDef;
+      this.fullNames.set(def.name || `${serviceName || 'unknown'}-${stage}-${shortName}`, shortName);
+    }
+
+    const authorizers = this.parseHttpApiAuthorizers(
+      (this.deref(httpApi?.authorizers) || {}) as Record<string, Record<string, unknown>>,
+      warnings,
+    );
     const functions: RegisteredFunction[] = [];
+    const rawEnvironment: Record<string, Record<string, unknown>> = {};
     const routes: HttpRoute[] = [];
 
-    const fnDefs = state.service?.functions || {};
-    for (const [shortName, def] of Object.entries(fnDefs)) {
-      const events = Array.isArray(def.events) ? def.events : [];
+    for (const [shortName, rawDef] of Object.entries(fnDefs)) {
+      const def = (this.deref(rawDef) || {}) as StateFunctionDef;
+      const rawEvents = this.deref(def.events);
+      const events = Array.isArray(rawEvents) ? rawEvents : [];
       const triggers = new Set<string>();
 
       for (const rawEvent of events) {
-        if (!rawEvent || typeof rawEvent !== 'object') continue;
-        const event = rawEvent as Record<string, unknown>;
+        const event = this.deref(rawEvent) as Record<string, unknown> | null;
+        if (!event || typeof event !== 'object' || isStatePointer(event)) continue;
         const [eventType] = Object.keys(event);
         if (!eventType) continue;
         triggers.add(this.normalizeTriggerName(eventType));
@@ -178,7 +320,7 @@ export class ServerlessStateParser {
           const route = this.parseHttpEvent(
             shortName,
             eventType,
-            event[eventType],
+            this.deref(event[eventType]),
             authorizers,
             httpApiCors,
             warnings,
@@ -187,6 +329,14 @@ export class ServerlessStateParser {
         }
       }
 
+      const env: Record<string, unknown> = {};
+      for (const scope of [provider.environment, def.environment]) {
+        const vars = this.deref(scope);
+        if (!vars || typeof vars !== 'object' || isStatePointer(vars)) continue;
+        for (const [key, value] of Object.entries(vars as Record<string, unknown>)) env[key] = this.deref(value);
+      }
+      rawEnvironment[shortName] = env;
+
       functions.push({
         name: shortName,
         fullName: def.name || `${serviceName || 'unknown'}-${stage}-${shortName}`,
@@ -194,23 +344,87 @@ export class ServerlessStateParser {
         runtime: def.runtime || provider.runtime || 'nodejs20.x',
         memorySize: def.memorySize ?? provider.memorySize ?? DEFAULT_MEMORY_MB,
         timeout: def.timeout ?? provider.timeout ?? DEFAULT_TIMEOUT_SECONDS,
-        environment: sanitizeEnvironmentValues({ ...(provider.environment || {}), ...(def.environment || {}) }),
+        environment: sanitizeEnvironmentValues(env),
         triggers: [...triggers],
         artifact: def.package?.artifact || state.package?.artifact,
       });
     }
 
+    this.checkAuthorizerTargets(authorizers, warnings);
+
     return {
       serviceName,
       stage,
-      region: typeof provider.region === 'string' && provider.region ? provider.region : undefined,
+      region: readStateIdentity(state).region,
       apiPort,
       invokePort,
       functions,
+      rawEnvironment,
       routes,
       authorizers,
       warnings,
     };
+  }
+
+  private deref(value: unknown): unknown {
+    return derefStatePointer(value, this.root);
+  }
+
+  // An authorizer pointing at a function this service does not declare is a
+  // route that will answer 500 on every request — say so now, at registration,
+  // rather than at the first call. Cross-service ARNs are not checked: their
+  // owner may simply register later.
+  private checkAuthorizerTargets(authorizers: AuthorizerConfig[], warnings: string[]): void {
+    for (const auth of authorizers) {
+      if (auth.functionName && !this.shortNames.includes(auth.functionName)) {
+        warnings.push(`Authorizer "${auth.name}" targets function "${auth.functionName}", which this service does not declare — routes using it will answer 500.`);
+      } else if (!auth.functionName && !auth.arn) {
+        warnings.push(`Authorizer "${auth.name}" has no function to invoke (neither a function name nor a resolvable ARN) — routes using it will answer 500.`);
+      }
+    }
+  }
+
+  /**
+   * An authorizer's function reference → the function to invoke. A string is
+   * an ARN (or a name) handed through as-is. A CFN reference to a Lambda in
+   * the same template — `!GetAtt AuthLambdaFunction.Arn`, `!Ref …`, or a lone
+   * `!Sub '${AuthLambdaFunction.Arn}'` — is resolved to the LOCAL function it
+   * names, via the template's FunctionName or, failing that, the framework's
+   * logical-id convention. Used to be dropped, which left the authorizer keyed
+   * by its display name and every route behind it answering 500.
+   */
+  private resolveAuthorizerTarget(raw: unknown): AuthorizerTarget {
+    const value = this.deref(raw);
+    if (value === undefined || value === null) return {};
+    if (typeof value === 'string') return { arn: value };
+    const logicalId = this.lambdaLogicalIdOf(value);
+    if (logicalId) {
+      const fullName = this.lambdaNames.get(logicalId);
+      const shortName = (fullName && this.fullNames.get(fullName))
+        ?? this.shortNames.find(name => lambdaLogicalIdFor(name) === logicalId);
+      if (shortName) return { functionName: shortName };
+      if (fullName) return { arn: fullName };
+    }
+    return { unresolved: value };
+  }
+
+  private warnUnresolvedAuthorizer(label: string, target: AuthorizerTarget, warnings: string[]): void {
+    warnings.push(`Authorizer "${label}": function reference ${JSON.stringify(target.unresolved).slice(0, 160)} does not resolve to a Lambda in this service — routes using it will answer 500.`);
+  }
+
+  // The logical id inside `{Ref}`, `{Fn::GetAtt: [Id, Arn]}` / `"Id.Arn"`, or
+  // a Fn::Sub whose whole template is `${Id}` / `${Id.Arn}`.
+  private lambdaLogicalIdOf(value: unknown): string | undefined {
+    if (!value || typeof value !== 'object') return undefined;
+    const obj = value as Record<string, unknown>;
+    if (typeof obj.Ref === 'string') return obj.Ref;
+    const getAtt = obj['Fn::GetAtt'];
+    if (Array.isArray(getAtt) && typeof getAtt[0] === 'string') return getAtt[0];
+    if (typeof getAtt === 'string') return getAtt.split('.')[0];
+    const sub = obj['Fn::Sub'];
+    const template = Array.isArray(sub) ? sub[0] : sub;
+    const token = typeof template === 'string' ? /^\$\{([^}.]+)(?:\.Arn)?\}$/.exec(template.trim()) : null;
+    return token ? token[1] : undefined;
   }
 
   private normalizeTriggerName(eventType: string): string {
@@ -223,7 +437,8 @@ export class ServerlessStateParser {
     warnings: string[],
   ): AuthorizerConfig[] {
     const authorizers: AuthorizerConfig[] = [];
-    for (const [name, def] of Object.entries(defs)) {
+    for (const [name, rawDef] of Object.entries(defs)) {
+      const def = (this.deref(rawDef) || {}) as Record<string, unknown>;
       const type = String(def.type || 'request').toLowerCase();
       if (type === 'jwt') {
         warnings.push(`Authorizer "${name}" is a JWT authorizer — not supported by the LSS gateway yet; routes using it will return 500.`);
@@ -233,6 +448,9 @@ export class ServerlessStateParser {
         warnings.push(`Authorizer "${name}" has unsupported type "${type}"; routes using it will return 500.`);
         continue;
       }
+      const functionName = typeof def.functionName === 'string' ? def.functionName : undefined;
+      const target = functionName ? {} : this.resolveAuthorizerTarget(def.arn ?? def.functionArn);
+      if (target.unresolved !== undefined) this.warnUnresolvedAuthorizer(name, target, warnings);
       authorizers.push({
         name,
         type: 'request',
@@ -241,8 +459,8 @@ export class ServerlessStateParser {
         enableSimpleResponses: Boolean(def.enableSimpleResponses),
         identitySource: this.normalizeIdentitySource(def.identitySource),
         resultTtlInSeconds: this.parseTtl(def.resultTtlInSeconds),
-        functionName: typeof def.functionName === 'string' ? def.functionName : undefined,
-        arn: this.extractArn(def.arn ?? def.functionArn),
+        functionName: functionName ?? target.functionName,
+        arn: target.arn,
       });
     }
     return authorizers;
@@ -288,7 +506,7 @@ export class ServerlessStateParser {
       }
       if (event.cors !== undefined) cors = Boolean(event.cors);
 
-      authorizerName = this.registerEventAuthorizer(functionName, eventType, event.authorizer, authorizers, warnings);
+      authorizerName = this.registerEventAuthorizer(functionName, eventType, this.deref(event.authorizer), authorizers, warnings);
     }
 
     if (!method || !path) {
@@ -328,9 +546,11 @@ export class ServerlessStateParser {
       return `__unresolved__:${functionName}`;
     }
 
-    // REST event authorizer: string shorthand → local function reference.
+    // REST event authorizer: string shorthand → local function reference, or
+    // the ARN of a function elsewhere (the framework accepts both spellings).
     if (typeof raw === 'string') {
       const name = `${functionName}:${raw}`;
+      const isArn = raw.startsWith('arn:');
       authorizers.push({
         name,
         type: 'token',
@@ -339,16 +559,24 @@ export class ServerlessStateParser {
         enableSimpleResponses: false,
         identitySource: ['method.request.header.Authorization'],
         resultTtlInSeconds: DEFAULT_AUTHORIZER_TTL,
-        functionName: raw,
+        functionName: isArn ? undefined : raw,
+        arn: isArn ? raw : undefined,
       });
       return name;
     }
 
     if (typeof raw === 'object') {
       const def = raw as Record<string, unknown>;
-      const arn = this.extractArn(def.arn);
-      const localFn = typeof def.name === 'string' && !arn ? def.name : undefined;
       const displayName = typeof def.name === 'string' ? def.name : `${functionName}-authorizer`;
+      // `arn` wins when present; `name` alone names a local function. An `arn`
+      // that does not resolve still falls back to `name` when that IS one of
+      // this service's functions — the common `{ name: auth, arn: !GetAtt … }`.
+      const target = def.arn !== undefined ? this.resolveAuthorizerTarget(def.arn) : {};
+      const arn = target.arn;
+      const nameIsFallback = typeof def.name === 'string' && !arn
+        && (def.arn === undefined || this.shortNames.includes(def.name));
+      const localFn = target.functionName ?? (nameIsFallback ? def.name as string : undefined);
+      if (target.unresolved !== undefined && !localFn) this.warnUnresolvedAuthorizer(displayName, target, warnings);
       const type = String(def.type || 'token').toLowerCase();
       if (type !== 'token' && type !== 'request') {
         warnings.push(`Function "${functionName}": authorizer "${displayName}" has unsupported type "${type}"; route will return 500.`);
@@ -382,13 +610,6 @@ export class ServerlessStateParser {
     const parsed = Number(raw);
     if (Number.isFinite(parsed) && parsed >= 0) return parsed;
     return DEFAULT_AUTHORIZER_TTL;
-  }
-
-  private extractArn(raw: unknown): string | undefined {
-    if (typeof raw === 'string') return raw;
-    // CFN intrinsics (Fn::GetAtt on the authorizer function) mean "local function",
-    // which the caller captures via `name`/`functionName` instead.
-    return undefined;
   }
 
   private normalizePath(path: string): string {

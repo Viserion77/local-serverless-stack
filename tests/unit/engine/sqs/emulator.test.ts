@@ -113,6 +113,46 @@ describe('SqsEmulator', () => {
     expect(emulator.jsonVersion).toBe('1.0');
   });
 
+  describe('MaximumMessageSize', () => {
+    test('the body plus its attributes must fit the queue limit (default 256 KiB)', async () => {
+      const url = await createQueue('sized');
+      await expect(call('SendMessage', { QueueUrl: url, MessageBody: 'x'.repeat(262_144) })).resolves.toHaveProperty('MessageId');
+      await expect(call('SendMessage', { QueueUrl: url, MessageBody: 'x'.repeat(262_145) })).rejects.toMatchObject({
+        code: 'InvalidParameterValue',
+        message: 'One or more parameters are invalid. Reason: Message must be shorter than 262144 bytes.',
+      });
+      // Multi-byte characters count in UTF-8 bytes.
+      await expect(call('SendMessage', { QueueUrl: url, MessageBody: 'é'.repeat(131_073) })).rejects.toMatchObject({
+        code: 'InvalidParameterValue',
+      });
+    });
+
+    test('a lowered MaximumMessageSize counts attribute names, types and values', async () => {
+      const url = await createQueue('tiny', { MaximumMessageSize: '1024' });
+      const body = 'x'.repeat(1000);
+      await expect(
+        call('SendMessage', {
+          QueueUrl: url,
+          MessageBody: body,
+          MessageAttributes: { trace: { DataType: 'String', StringValue: 'abc' } },
+        }),
+      ).resolves.toHaveProperty('MessageId');
+      // 1000 + "blob" (4) + "Binary" (6) + 32 decoded bytes > 1024
+      await expect(
+        call('SendMessage', {
+          QueueUrl: url,
+          MessageBody: body,
+          MessageAttributes: { blob: { DataType: 'Binary', BinaryValue: Buffer.alloc(32).toString('base64') } },
+        }),
+      ).rejects.toMatchObject({ code: 'InvalidParameterValue' });
+      const batch = await call('SendMessageBatch', {
+        QueueUrl: url,
+        Entries: [{ Id: 'big', MessageBody: 'x'.repeat(2000) }],
+      });
+      expect(batch.Failed).toEqual([expect.objectContaining({ Id: 'big', Code: 'InvalidParameterValue' })]);
+    });
+  });
+
   describe('CreateQueue / GetQueueUrl / ListQueues / DeleteQueue', () => {
     test('creates a queue and returns the endpoint-based QueueUrl', async () => {
       const url = await createQueue('orders');
@@ -186,6 +226,47 @@ describe('SqsEmulator', () => {
       expect(all.QueueUrls).toHaveLength(3);
       const filtered = await call('ListQueues', { QueueNamePrefix: 'svc-' });
       expect(filtered.QueueUrls).toEqual([`${URL_PREFIX}/svc-a`, `${URL_PREFIX}/svc-b`]);
+    });
+
+    test('ListQueues pages with MaxResults + NextToken', async () => {
+      for (const name of ['q-a', 'q-b', 'q-c']) await createQueue(name);
+      const first = await call('ListQueues', { MaxResults: 2 });
+      expect(first.QueueUrls).toEqual([`${URL_PREFIX}/q-a`, `${URL_PREFIX}/q-b`]);
+      expect(first.NextToken).toEqual(expect.any(String));
+      const second = await call('ListQueues', { MaxResults: 2, NextToken: first.NextToken });
+      expect(second).toEqual({ QueueUrls: [`${URL_PREFIX}/q-c`] });
+      // An exact fit returns no token, and an empty NextToken is "start over".
+      expect(await call('ListQueues', { MaxResults: 3, NextToken: '' })).not.toHaveProperty('NextToken');
+    });
+
+    test('ListQueues validates MaxResults and requires it alongside NextToken', async () => {
+      await expect(call('ListQueues', { MaxResults: 0 })).rejects.toMatchObject({ code: 'InvalidParameterValue' });
+      await expect(call('ListQueues', { MaxResults: 1001 })).rejects.toMatchObject({ code: 'InvalidParameterValue' });
+      await expect(call('ListQueues', { NextToken: 'eA' })).rejects.toMatchObject({
+        code: 'InvalidParameterValue',
+        message: expect.stringContaining('MaxResults is a mandatory parameter'),
+      });
+    });
+
+    test('ListDeadLetterSourceQueues lists the queues redriving into a DLQ', async () => {
+      const dlqUrl = await createQueue('orders-dlq');
+      const policy = JSON.stringify({ deadLetterTargetArn: 'arn:aws:sqs:us-east-1:000000000000:orders-dlq', maxReceiveCount: 3 });
+      await createQueue('orders-b', { RedrivePolicy: policy });
+      await createQueue('orders-a', { RedrivePolicy: policy });
+      await createQueue('billing', { RedrivePolicy: 'not-json' });
+      await createQueue('plain');
+
+      expect(await call('ListDeadLetterSourceQueues', { QueueUrl: dlqUrl })).toEqual({
+        QueueUrls: [`${URL_PREFIX}/orders-a`, `${URL_PREFIX}/orders-b`],
+      });
+      const paged = await call('ListDeadLetterSourceQueues', { QueueUrl: dlqUrl, MaxResults: 1 });
+      expect(paged.QueueUrls).toEqual([`${URL_PREFIX}/orders-a`]);
+      expect(paged.NextToken).toEqual(expect.any(String));
+      // A queue nobody redrives into answers an empty list, not an omitted one.
+      expect(await call('ListDeadLetterSourceQueues', { QueueUrl: `${URL_PREFIX}/plain` })).toEqual({ QueueUrls: [] });
+      await expect(
+        call('ListDeadLetterSourceQueues', { QueueUrl: `${URL_PREFIX}/missing` }),
+      ).rejects.toMatchObject({ code: 'AWS.SimpleQueueService.NonExistentQueue' });
     });
 
     test('regions are isolated', async () => {
@@ -814,7 +895,7 @@ describe('SqsEmulator', () => {
       expect(moved.Messages[0].Attributes.ApproximateReceiveCount).toBe('1');
     });
 
-    test('the policy is re-read per redelivery: SetQueueAttributes wires a DLQ created later', async () => {
+    test('the policy is re-read per receive: SetQueueAttributes wires a DLQ created later', async () => {
       const url = await createQueue('late', { VisibilityTimeout: '0' });
       await call('SendMessage', { QueueUrl: url, MessageBody: 'x' });
       expect(await receiveOnce(url)).toBeDefined();
@@ -826,8 +907,8 @@ describe('SqsEmulator', () => {
         Attributes: { RedrivePolicy: policyFor('late-dlq', 1) },
       });
 
-      // The next delivery exceeds the freshly-attached threshold and moves.
-      expect((await receiveOnce(url)).Attributes.ApproximateReceiveCount).toBe('2');
+      // The next receive would exceed the freshly-attached threshold, so it
+      // moves the message instead of delivering it a second time.
       expect(await receiveOnce(url)).toBeUndefined();
       const moved = await call('ReceiveMessage', { QueueUrl: dlqUrl });
       expect(moved.Messages).toHaveLength(1);

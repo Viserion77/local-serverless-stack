@@ -21,9 +21,9 @@ const item: AttributeMap = {
   tags: { SS: ['alpha', 'beta'] },
   scores: { NS: ['1', '2.5'] },
   blobs: { BS: [b64('one'), b64('two')] },
-  data: { B: b64('hello') },
+  payload: { B: b64('hello') },
   history: { L: [{ S: 'x' }, { N: '2' }, { M: { deep: { S: 'y' } } }] },
-  profile: { M: { name: { S: 'Ana' }, address: { M: { city: { S: 'SP' } } }, pets: { L: [{ S: 'cat' }] } } },
+  profile: { M: { nick: { S: 'Ana' }, address: { M: { city: { S: 'SP' } } }, pets: { L: [{ S: 'cat' }] } } },
 };
 
 function evaluate(expression: string, values?: AttributeMap, names?: Record<string, string>): boolean {
@@ -57,14 +57,14 @@ describe('compileCondition: comparators', () => {
     ['age < :n', { ':n': { N: '9' } }, false], // numeric, not lexicographic
     ['age <= :n', { ':n': { N: '29.999' } }, false],
     ['id < :v', { ':v': { S: 'zzz' } }, true],
-    ['data < :b', { ':b': { B: b64('zzz') } }, true],
+    ['payload < :b', { ':b': { B: b64('zzz') } }, true],
     ['age > :n', { ':n': { S: '25' } }, false], // ordering across types is false
     ['active = :b', { ':b': { BOOL: true } }, true],
     ['nothing = :nul', { ':nul': { NULL: true } }, true],
     ['ghost = :v', { ':v': { S: 'x' } }, false], // missing attribute
-    ['ghost <> :v', { ':v': { S: 'x' } }, false], // missing attribute: even <> is false
+    ['ghost <> :v', { ':v': { S: 'x' } }, true], // missing attribute compares not-equal
     [':v = id', { ':v': { S: 'user-1' } }, true], // value on the left
-    ['profile.name = history[0]', {}, false], // path vs path
+    ['profile.nick = history[0]', {}, false], // path vs path
   ];
   test.each(cases)('%s -> %p', (expression, values, expected) => {
     expect(evaluate(expression, values)).toBe(expected);
@@ -82,7 +82,7 @@ describe('compileCondition: BETWEEN and IN', () => {
     ['id IN (:a, :b)', { ':a': { S: 'nope' }, ':b': { S: 'user-1' } }, true],
     ['id IN (:a, :b)', { ':a': { S: 'nope' }, ':b': { S: 'also-nope' } }, false],
     ['ghost IN (:a)', { ':a': { S: 'x' } }, false],
-    ['id IN (profile.name, :a)', { ':a': { S: 'user-1' } }, true], // path member
+    ['id IN (profile.nick, :a)', { ':a': { S: 'user-1' } }, true], // path member
   ];
   test.each(cases)('%s -> %p', (expression, values, expected) => {
     expect(evaluate(expression, values)).toBe(expected);
@@ -126,7 +126,7 @@ describe('compileCondition: functions', () => {
     ['attribute_type(ghost, :t)', { ':t': { S: 'S' } }, false],
     ['begins_with(id, :p)', { ':p': { S: 'user' } }, true],
     ['begins_with(id, :p)', { ':p': { S: 'x' } }, false],
-    ['begins_with(data, :p)', { ':p': { B: b64('hel') } }, true],
+    ['begins_with(payload, :p)', { ':p': { B: b64('hel') } }, true],
     ['begins_with(age, :p)', { ':p': { S: '3' } }, false], // N target: false, not error
     ['contains(id, :s)', { ':s': { S: 'ser-' } }, true],
     ['contains(id, :s)', { ':s': { S: 'xyz' } }, false],
@@ -142,10 +142,10 @@ describe('compileCondition: functions', () => {
     ['size(blobs) = :n', { ':n': { N: '2' } }, true],
     ['size(history) > :n', { ':n': { N: '2' } }, true],
     ['size(profile) = :n', { ':n': { N: '3' } }, true],
-    ['size(data) = :n', { ':n': { N: '5' } }, true],
+    ['size(payload) = :n', { ':n': { N: '5' } }, true],
     ['size(ghost) = :n', { ':n': { N: '0' } }, false], // missing path: false
     [':n <= size(id)', { ':n': { N: '5' } }, true], // size on the right
-    ['size(id) > size(profile.name)', {}, true],
+    ['size(id) > size(profile.nick)', {}, true],
     ['size(id) BETWEEN :a AND :b', { ':a': { N: '5' }, ':b': { N: '7' } }, true],
   ];
   test.each(cases)('%s -> %p', (expression, values, expected) => {
@@ -165,7 +165,7 @@ describe('compileCondition: document paths and placeholders', () => {
 
   it('resolves #name placeholders per segment', () => {
     expect(evaluate('#p.#a.city = :c', { ':c': { S: 'SP' } }, { '#p': 'profile', '#a': 'address' })).toBe(true);
-    expect(evaluate('#p.name = :n', { ':n': { S: 'Ana' } }, { '#p': 'profile' })).toBe(true);
+    expect(evaluate('#p.nick = :n', { ':n': { S: 'Ana' } }, { '#p': 'profile' })).toBe(true);
   });
 
   it('rejects undefined placeholders with the AWS wording', () => {

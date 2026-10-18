@@ -51,19 +51,25 @@ function runtimePaths() {
 /**
  * Load configuration. An explicit `--config <path>` (or LSS_CONFIG env) wins over
  * the cwd/home search so an isolated instance can point at its own config file.
- * A missing or unparseable explicit file warns and falls back to the search,
- * rather than hard-exiting, so stop/status/logs never orphan a running instance.
+ *
+ * A missing or unparseable explicit file is a hard error (exit 1), for every
+ * command. It used to warn and fall back to the cwd/home search — and that
+ * search resolves to whatever instance the default config describes, so a typo
+ * in `lss stop --config ./wrong.json` stopped a DIFFERENT running stack. Naming
+ * a file is a statement about which instance you mean; guessing another one is
+ * never the safe default.
  */
 function loadConfig() {
   if (EXPLICIT_CONFIG) {
-    if (fs.existsSync(EXPLICIT_CONFIG)) {
-      try {
-        return JSON.parse(fs.readFileSync(EXPLICIT_CONFIG, 'utf-8'));
-      } catch (error) {
-        console.warn(t('config.parseFailed', { path: EXPLICIT_CONFIG }));
-      }
-    } else {
-      console.warn(t('config.notFound', { path: EXPLICIT_CONFIG }));
+    if (!fs.existsSync(EXPLICIT_CONFIG)) {
+      console.error(t('config.explicitNotFound', { path: EXPLICIT_CONFIG }));
+      process.exit(1);
+    }
+    try {
+      return JSON.parse(fs.readFileSync(EXPLICIT_CONFIG, 'utf-8'));
+    } catch (error) {
+      console.error(t('config.explicitParseFailed', { path: EXPLICIT_CONFIG, error: formatError(error) }));
+      process.exit(1);
     }
   }
 
@@ -106,8 +112,9 @@ function envPort(name) {
  * documented workflow (docs/CONFIGURATION.md), so it has to agree end to end.
  */
 function getConfig(config) {
+  const serverPort = envPort('LSS_DASHBOARD_PORT') || envPort('PORT') || config.serverPort || DEFAULT_PORT;
   return {
-    serverPort: envPort('LSS_DASHBOARD_PORT') || envPort('PORT') || config.serverPort || DEFAULT_PORT,
+    serverPort,
     enableDynamoProxy: process.env.LSS_ENABLE_DYNAMO_PROXY
       ? process.env.LSS_ENABLE_DYNAMO_PROXY === 'true' || process.env.LSS_ENABLE_DYNAMO_PROXY === '1'
       : config.enableDynamoProxy || false,
@@ -115,7 +122,9 @@ function getConfig(config) {
     mode: config.mode || 'managed',
     stateDir: config.stateDir,
     engine: config.engine,
-    selfEnginePort: envPort('LSS_ENGINE_PORT') || (config.selfEngine && config.selfEngine.port) || DEFAULT_PORT,
+    // Follows serverPort unless set explicitly, exactly like the server
+    // (ConfigManager.getSelfEnginePort): one port for the whole stack.
+    selfEnginePort: envPort('LSS_ENGINE_PORT') || (config.selfEngine && config.selfEngine.port) || serverPort,
   };
 }
 
@@ -497,19 +506,23 @@ function buildHttpError(res, data) {
   return new Error(snippet ? `HTTP ${statusText}: ${snippet}` : t('error.httpNoBody', { status: statusText }));
 }
 
-function postJson(path, body) {
+// `options.port` / `options.headers` address the engine's own listener when it
+// is split from the orchestrator (`lss reset`); everything else talks to the
+// orchestrator API on serverPort.
+function postJson(path, body, options = {}) {
   return new Promise((resolve, reject) => {
     const http = require('http');
     const payload = JSON.stringify(body || {});
     const req = http.request(
       {
         hostname: 'localhost',
-        port: getServerPort(),
+        port: options.port || getServerPort(),
         path,
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           'Content-Length': Buffer.byteLength(payload),
+          ...options.headers,
         },
       },
       res => {
@@ -741,6 +754,47 @@ async function clearSeed(tableName) {
 }
 
 /**
+ * `lss reset` — wipe every emulator's state (tables, queues, buckets, topics,
+ * rules, secrets, collections…) in the running engine, without restarting it.
+ *
+ * Talks to the engine's own `POST /_lss/reset`, on selfEnginePort: that is the
+ * shared port by default, and the engine's separate listener when the two are
+ * split. Registered services stay registered — `lss register` re-provisions
+ * their resources. Asks for the same `confirmar` token as seed:clear.
+ */
+async function resetEngine() {
+  ensureRunningOrExit();
+  const cfg = getConfig(loadConfig());
+  const engineUrl = `http://localhost:${cfg.selfEnginePort}`;
+  console.log(t('clear.warning'));
+  console.log(t('reset.target'));
+  console.log(t('clear.engine', { url: engineUrl }));
+  console.log(t('clear.noAws'));
+  console.log('');
+
+  if (process.argv.includes('--yes') || process.argv.includes('-y')) {
+    console.log(t('clear.skipPrompt'));
+  } else {
+    const ok = await promptConfirmation('confirmar');
+    if (!ok) {
+      console.log(t('seed.aborted'));
+      return;
+    }
+  }
+
+  try {
+    const res = await postJson('/_lss/reset', {}, {
+      port: cfg.selfEnginePort,
+      headers: { 'x-lss-confirm-reset': 'true' },
+    });
+    console.log(t(res.persistence ? 'reset.donePersistent' : 'reset.done'));
+  } catch (e) {
+    console.error(t('reset.failed'), formatError(e));
+    process.exit(1);
+  }
+}
+
+/**
  * `lss mcp` — run the Model Context Protocol server on stdio.
  *
  * Started by an MCP client (Claude Code reads .mcp.json), never by a human at a
@@ -931,6 +985,7 @@ function showHelp() {
     cmd('scan', 'help.cmd.scan'),
     cmd('register [path...]', 'help.cmd.register'),
     cmd('seed:clear [table]', 'help.cmd.seedClear'),
+    cmd('reset', 'help.cmd.reset'),
     cmd('mcp', 'help.cmd.mcp'),
     cmd('help', 'help.cmd.help'),
     '',
@@ -945,6 +1000,7 @@ function showHelp() {
     opt('LSS_DASHBOARD_PORT', 'help.env.dashboardPort'),
     opt('LSS_ENGINE_PORT', 'help.env.enginePort'),
     opt('LSS_ENGINE_DATA_DIR', 'help.env.engineDataDir'),
+    opt('LSS_FALLBACK_ENDPOINT', 'help.env.fallbackEndpoint'),
     opt('AWS_REGION', 'help.env.awsRegion'),
     opt('LSS_LANG', 'help.env.lang'),
     '',
@@ -978,6 +1034,7 @@ function showHelp() {
     helpExample('npx lss seed users', t('help.ex.seedTable')),
     helpExample('npx lss seed:clear users', t('help.ex.seedClear')),
     helpExample('npx lss seed:clear users --yes', t('help.ex.seedClearYes')),
+    helpExample('npx lss reset --yes', t('help.ex.reset')),
     '',
   ].join('\n'));
 }
@@ -1054,6 +1111,7 @@ module.exports = {
   showLogs,
   runSeed,
   clearSeed,
+  resetEngine,
   showHelp,
 };
 
@@ -1078,6 +1136,9 @@ if (require.main === module) {
       break;
     case 'seed:clear':
       clearSeed(firstPositional());
+      break;
+    case 'reset':
+      resetEngine();
       break;
     case 'register':
       registerServices(allPositionals());

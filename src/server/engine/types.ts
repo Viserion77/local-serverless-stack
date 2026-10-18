@@ -47,6 +47,8 @@ export type EngineServiceName =
   | 'lambda'
   | 'sts'
   | 'secretsmanager'
+  // SSM Parameter Store (X-Amz-Target AmazonSSM.*).
+  | 'ssm'
   // OpenSearch Serverless — the SigV4 signing name, shared by the control
   // plane (X-Amz-Target OpenSearchServerless.*) and the data plane REST API.
   | 'aoss';
@@ -134,6 +136,10 @@ export interface SelfEngineResolvedConfig {
   memoryBudgetMb: number;
   fsync: boolean;
   fallbackEndpoint: string | null;
+  // Per-service fallback targets keyed by SigV4 signing name ("kinesis",
+  // "iam"…); a hit wins over `fallbackEndpoint`. Optional so hand-built test
+  // contexts need not spell it out.
+  fallbackEndpoints?: Record<string, string>;
   persistence: boolean;
 }
 

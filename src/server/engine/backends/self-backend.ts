@@ -6,6 +6,7 @@
 
 import http from 'http';
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import type { Socket } from 'net';
 import type { AddressInfo } from 'net';
@@ -23,12 +24,13 @@ import { EventsEmulator } from '../emulators/events/index.js';
 import { SnsEmulator } from '../emulators/sns/index.js';
 import { StsEmulator } from '../emulators/sts.js';
 import { SecretsManagerEmulator } from '../emulators/secretsmanager/index.js';
+import { SsmEmulator } from '../emulators/ssm/index.js';
 import { LambdaCtlEmulator } from '../emulators/lambda-ctl/index.js';
 import { OpenSearchEmulator } from '../emulators/opensearch/index.js';
 import { EngineDispatcher } from '../dispatch/dispatcher.js';
 import { EngineScheduler } from '../dispatch/scheduler.js';
 
-const SERVICES = ['dynamodb', 'sqs', 'sns', 's3', 'events', 'lambda', 'sts', 'secretsmanager', 'aoss'] as const;
+const SERVICES = ['dynamodb', 'sqs', 'sns', 's3', 'events', 'lambda', 'sts', 'secretsmanager', 'ssm', 'aoss'] as const;
 const SQS_SNAPSHOT_FILE = 'sqs-messages.snapshot.json';
 
 export class SelfEngineBackend {
@@ -43,6 +45,7 @@ export class SelfEngineBackend {
   private config: ResolvedSelfEngineConfig | null = null;
   private store: EngineStore | null = null;
   private sqs: SqsEmulator | null = null;
+  private dynamo: DynamoDbEmulator | null = null;
   private dispatcher: EngineDispatcher | null = null;
   private scheduler: EngineScheduler | null = null;
   private server: http.Server | null = null;
@@ -50,6 +53,17 @@ export class SelfEngineBackend {
   private readonly sockets = new Set<Socket>();
   private boundPort: number | null = null;
   private running = false;
+  // Set while reset() rebuilds the engine; the stable front handler parks new
+  // requests on it so none reaches a half-torn-down emulator.
+  private resetting: Promise<void> | null = null;
+  // What the listener (ours or the orchestrator's) actually calls. Stable for
+  // the backend's lifetime: reset() swaps `handler` underneath it, and the
+  // orchestrator captured this reference once, at startEmbedded().
+  private readonly frontHandler = (req: http.IncomingMessage, res: http.ServerResponse): void => {
+    const dispatch = (): void => (this.handler as (r: http.IncomingMessage, s: http.ServerResponse) => void)(req, res);
+    if (this.resetting) void this.resetting.then(dispatch, dispatch);
+    else dispatch();
+  };
 
   // `overrides` merge over ConfigManager's resolved self-engine config —
   // tests use it for ephemeral ports (0) and temp data dirs.
@@ -64,8 +78,7 @@ export class SelfEngineBackend {
   async startEmbedded(): Promise<(req: http.IncomingMessage, res: http.ServerResponse) => void> {
     this.embedded = true;
     await this.start();
-    // start() always assigns the handler before returning.
-    return this.handler as (req: http.IncomingMessage, res: http.ServerResponse) => void;
+    return this.frontHandler;
   }
 
   async start(): Promise<void> {
@@ -101,9 +114,11 @@ export class SelfEngineBackend {
     const sns = new SnsEmulator(ctx);
     const sts = new StsEmulator(ctx);
     const secretsManager = new SecretsManagerEmulator(ctx);
+    const ssm = new SsmEmulator(ctx);
     const lambdaCtl = new LambdaCtlEmulator(ctx);
     const opensearch = new OpenSearchEmulator(ctx);
     this.sqs = sqs;
+    this.dynamo = dynamo;
 
     const dispatcher = new EngineDispatcher({ ctx, sqs, dynamo, s3, events, lambdaCtl });
     ctx.dispatcher = dispatcher;
@@ -124,20 +139,26 @@ export class SelfEngineBackend {
     await dispatcher.start(config.region);
     await scheduler.resync(config.region);
     store.startSweeper();
+    // Background TTL deleter: expired items go away (and emit their stream
+    // REMOVE) without waiting for a read to notice them.
+    dynamo.startTtlSweeper();
 
     const handler = createEngineRequestHandler({
       ctx,
-      emulators: [dynamo, sqs, s3, events, sns, sts, secretsManager, lambdaCtl, opensearch],
+      onReset: () => this.reset(),
+      emulators: [dynamo, sqs, s3, events, sns, sts, secretsManager, ssm, lambdaCtl, opensearch],
     });
     this.handler = handler;
 
-    if (this.embedded) {
-      // The orchestrator owns the listener; everything above is already live.
+    // Embedded: the orchestrator owns the listener. Rebuilt by reset(): the
+    // listener from the first start() is still bound and already routes
+    // through frontHandler. Either way everything above is already live.
+    if (this.embedded || this.server) {
       this.running = true;
       return;
     }
 
-    const server = http.createServer(handler);
+    const server = http.createServer(this.frontHandler);
     server.on('connection', socket => {
       this.sockets.add(socket);
       socket.on('close', () => this.sockets.delete(socket));
@@ -183,8 +204,7 @@ export class SelfEngineBackend {
     if (!this.running) return;
     this.running = false;
 
-    this.scheduler?.stop();
-    this.dispatcher?.stop();
+    this.haltBackgroundWork();
 
     const config = this.config as ResolvedSelfEngineConfig;
     if (config.persistence && this.sqs && this.store) {
@@ -213,6 +233,51 @@ export class SelfEngineBackend {
     this.boundPort = null;
   }
 
+  /**
+   * Wipe every emulator's state — tables, queues and their messages, buckets
+   * and objects, topics, buses and rules, secrets, parameters, collections,
+   * Lambda metadata and event source mappings — without restarting the process
+   * or rebinding a port. Served as `POST /_lss/reset`.
+   *
+   * Implemented as teardown + rebuild rather than a per-emulator `clear()`:
+   * every emulator, the dispatcher's delivery loops and the scheduler come back
+   * exactly as a cold boot over an empty data dir builds them, so a new
+   * emulator is covered with no reset code of its own. In persistent mode the
+   * data dir's contents are deleted (after a final flush, so no debounced
+   * write lands in the fresh tree); in memory mode the old store is simply
+   * dropped. Concurrent calls share one reset.
+   */
+  async reset(): Promise<void> {
+    if (!this.running) throw new Error('The self engine is not running');
+    this.resetting ??= this.doReset().finally(() => {
+      this.resetting = null;
+    });
+    return this.resetting;
+  }
+
+  private async doReset(): Promise<void> {
+    const config = this.config as ResolvedSelfEngineConfig;
+    const store = this.store as EngineStore;
+    this.haltBackgroundWork();
+    store.stopSweeper();
+    // Settle every pending write first: a debounced catalog flush firing after
+    // the wipe would resurrect a file in the fresh tree. Deliberately no SQS
+    // snapshot — that is the graceful-shutdown path, and the point here is to
+    // forget the messages.
+    await store.flushAll();
+    if (config.persistence) await wipeDataDir(config.dataDir);
+    this.running = false;
+    await this.start();
+    console.log(`[self-engine] reset: every emulator is empty${config.persistence ? ` (${config.dataDir} wiped)` : ''}`);
+  }
+
+  // Everything that runs on a timer or a loop, outside request handling.
+  private haltBackgroundWork(): void {
+    this.scheduler?.stop();
+    this.dynamo?.stopTtlSweeper();
+    this.dispatcher?.stop();
+  }
+
   isRunning(): boolean {
     return this.running;
   }
@@ -221,9 +286,13 @@ export class SelfEngineBackend {
     return `http://localhost:${this.boundPort ?? this.resolveConfig().port}`;
   }
 
-  /** The AWS wire handler — non-null once start()/startEmbedded() resolved. */
+  /**
+   * The AWS wire handler — non-null once start()/startEmbedded() resolved.
+   * Always the stable front handler, so a caller that keeps it keeps working
+   * across reset().
+   */
   getRequestHandler(): ((req: http.IncomingMessage, res: http.ServerResponse) => void) | null {
-    return this.handler;
+    return this.handler ? this.frontHandler : null;
   }
 
   getConfig(): { endpoint: string; region: string; credentials: { accessKeyId: string; secretAccessKey: string } } {
@@ -261,6 +330,32 @@ export class SelfEngineBackend {
       console.warn(`[self-engine] ignoring unreadable SQS snapshot ${file}:`, err);
     }
   }
+}
+
+// Delete the CONTENTS of the engine data dir (the dir itself stays, so a
+// symlinked or bind-mounted one survives). `selfEngine.dataDir` is
+// user-configurable, so before deleting anything this checks the directory is
+// not something far bigger than engine state: a filesystem root, the home
+// directory, the working directory, or a directory holding a project's own
+// files. The engine's tree never contains any of those markers.
+const PROJECT_MARKERS = ['package.json', '.git', 'lss.config.json', '.lssrc', 'serverless.yml'];
+
+export async function wipeDataDir(dataDir: string): Promise<void> {
+  const dir = path.resolve(dataDir);
+  if (dir === path.parse(dir).root || dir === path.resolve(os.homedir()) || dir === process.cwd()) {
+    throw new Error(`Refusing to wipe ${dir}: selfEngine.dataDir must be a dedicated engine directory`);
+  }
+  const entries = await fs.promises.readdir(dir).catch((err: NodeJS.ErrnoException) => {
+    if (err.code === 'ENOENT') return [] as string[];
+    throw err;
+  });
+  const marker = entries.find(entry => PROJECT_MARKERS.includes(entry));
+  if (marker) {
+    throw new Error(
+      `Refusing to wipe ${dir}: it contains ${marker}, so it is not a dedicated engine data directory`,
+    );
+  }
+  await Promise.all(entries.map(entry => fs.promises.rm(path.join(dir, entry), { recursive: true, force: true })));
 }
 
 function notReadyDispatcher(): DispatcherApi {

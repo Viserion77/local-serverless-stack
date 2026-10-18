@@ -53,7 +53,8 @@ const MESSAGES = {
     'scan.warning.invalid-json': 'serverless.json is not valid JSON',
     // --- config discovery --------------------------------------------------
     'config.parseFailed': '⚠️  Failed to parse config file {path}',
-    'config.notFound': '⚠️  Config file not found: {path}',
+    'config.explicitNotFound': '❌ Config file not found: {path} (given by --config / LSS_CONFIG). Not falling back to the default config search — it could address a different instance.',
+    'config.explicitParseFailed': '❌ Could not parse config file {path} (given by --config / LSS_CONFIG): {error}',
 
     // --- lifecycle ---------------------------------------------------------
     'start.already': '⚠️  LSS Orchestrator is already running (PID: {pid})',
@@ -154,6 +155,10 @@ const MESSAGES = {
     'clear.skipPrompt': '↳ --yes given, skipping the interactive confirmation.',
     'clear.listFailed': '❌ Could not list the tables before clearing:',
     'clear.failed': '❌ Clear failed:',
+    'reset.target': '   Target:    ALL engine state — tables, queues, buckets, topics, rules, secrets, collections',
+    'reset.done': '✅ Engine reset: every emulator is empty. Run `lss register` to re-provision your services\' resources.',
+    'reset.donePersistent': '✅ Engine reset: every emulator is empty and its data directory was wiped. Run `lss register` to re-provision your services\' resources.',
+    'reset.failed': '❌ Reset failed:',
 
     // --- mcp ---------------------------------------------------------------
     'mcp.missing': '❌ MCP server build not found. Run `npm run build` first.',
@@ -177,6 +182,7 @@ const MESSAGES = {
     'help.cmd.scan': 'List every Serverless/osls service found under the project root (registered/installed/packaged flags, ports and package command)',
     'help.cmd.register': 'Register services with the running orchestrator (defaults to the current directory; packaging runs on demand via autoPackage)',
     'help.cmd.seedClear': 'Delete every item from the given table (or from every table that has a seed file). Asks for interactive confirmation (type "confirmar") before any write.',
+    'help.cmd.reset': 'Wipe ALL engine state (every table, queue, bucket, topic, rule, secret and collection) without restarting. Asks for interactive confirmation (type "confirmar").',
     'help.cmd.mcp': 'Run the Model Context Protocol server on stdio, so an MCP client can drive this stack with tools. Requires a running orchestrator; see docs/MCP.md.',
     'help.cmd.help': 'Show this help message',
     'help.opt.config': 'Load config from this file (precedes the cwd/home search). Applies to start/stop/status/logs, so an isolated instance can be addressed without cd-ing into its folder.',
@@ -187,6 +193,7 @@ const MESSAGES = {
     'help.env.dashboardPort': 'Orchestrator port (overrides serverPort)',
     'help.env.enginePort': 'Self engine port (overrides selfEngine.port)',
     'help.env.engineDataDir': 'Self engine state directory (overrides selfEngine.dataDir)',
+    'help.env.fallbackEndpoint': 'Forward AWS services the engine does not emulate to this endpoint (overrides selfEngine.fallbackEndpoint)',
     'help.env.awsRegion': 'Default region for provisioning and the explorers',
     'help.env.lang': 'CLI language: en, pt-BR or es (falls back to LC_ALL/LC_MESSAGES/LANG)',
     'help.config.intro': 'Create a lss.config.json or .lssrc file in your project root to customize:',
@@ -204,6 +211,7 @@ const MESSAGES = {
     'help.ex.seedTable': 'Seed only the "users" table',
     'help.ex.seedClear': 'Delete every item from "users" (with confirmation)',
     'help.ex.seedClearYes': 'Same thing, without the prompt (CI)',
+    'help.ex.reset': 'Empty every emulator, without the prompt (CI)',
   },
 
   'pt-BR': {
@@ -214,7 +222,8 @@ const MESSAGES = {
     'scan.warning.unreadable-config': 'não consegui ler {file}',
     'scan.warning.invalid-json': 'serverless.json não é um JSON válido',
     'config.parseFailed': '⚠️  Não consegui ler o arquivo de config {path}',
-    'config.notFound': '⚠️  Arquivo de config não encontrado: {path}',
+    'config.explicitNotFound': '❌ Arquivo de config não encontrado: {path} (informado por --config / LSS_CONFIG). Sem fallback para a busca padrão de config — ela poderia apontar para outra instância.',
+    'config.explicitParseFailed': '❌ Não consegui ler o arquivo de config {path} (informado por --config / LSS_CONFIG): {error}',
 
     'start.already': '⚠️  O orquestrador LSS já está rodando (PID: {pid})',
     'start.starting': '🚀 Iniciando o orquestrador LSS...',
@@ -305,6 +314,10 @@ const MESSAGES = {
     'clear.skipPrompt': '↳ --yes informado, pulando a confirmação interativa.',
     'clear.listFailed': '❌ Não consegui listar as tabelas antes de limpar:',
     'clear.failed': '❌ A limpeza falhou:',
+    'reset.target': '   Alvo:      TODO o estado do engine — tabelas, filas, buckets, tópicos, regras, secrets, coleções',
+    'reset.done': '✅ Engine resetado: todos os emuladores estão vazios. Rode `lss register` para reprovisionar os recursos dos seus serviços.',
+    'reset.donePersistent': '✅ Engine resetado: todos os emuladores estão vazios e o diretório de dados foi apagado. Rode `lss register` para reprovisionar os recursos dos seus serviços.',
+    'reset.failed': '❌ O reset falhou:',
 
     'mcp.missing': '❌ Build do servidor MCP não encontrado. Rode `npm run build` antes.',
     'mcp.startFailed': '❌ Não consegui subir o servidor MCP:',
@@ -324,6 +337,7 @@ const MESSAGES = {
     'help.cmd.scan': 'Lista todo serviço Serverless/osls encontrado sob a raiz do projeto (flags registrado/instalado/empacotado, portas e comando de package)',
     'help.cmd.register': 'Registra serviços no orquestrador que está rodando (usa o diretório atual por padrão; o empacotamento roda sob demanda via autoPackage)',
     'help.cmd.seedClear': 'Apaga todos os itens da tabela informada (ou de todas as tabelas com arquivo de seed). Pede confirmação interativa (digitar "confirmar") antes de qualquer escrita.',
+    'help.cmd.reset': 'Apaga TODO o estado do engine (todas as tabelas, filas, buckets, tópicos, regras, secrets e coleções) sem reiniciar. Pede confirmação interativa (digitar "confirmar").',
     'help.cmd.mcp': 'Roda o servidor Model Context Protocol no stdio, para um cliente MCP dirigir esta stack com tools. Precisa do orquestrador rodando; veja docs/MCP.md.',
     'help.cmd.help': 'Mostra esta ajuda',
     'help.opt.config': 'Carrega a config deste arquivo (tem precedência sobre a busca em cwd/home). Vale para start/stop/status/logs, então dá para endereçar uma instância isolada sem entrar na pasta dela.',
@@ -334,6 +348,7 @@ const MESSAGES = {
     'help.env.dashboardPort': 'Porta do orquestrador (sobrepõe serverPort)',
     'help.env.enginePort': 'Porta do self engine (sobrepõe selfEngine.port)',
     'help.env.engineDataDir': 'Diretório de estado do self engine (sobrepõe selfEngine.dataDir)',
+    'help.env.fallbackEndpoint': 'Encaminha para este endpoint os serviços AWS que o engine não emula (sobrepõe selfEngine.fallbackEndpoint)',
     'help.env.awsRegion': 'Região padrão para o provisionamento e para os explorers',
     'help.env.lang': 'Idioma da CLI: en, pt-BR ou es (cai para LC_ALL/LC_MESSAGES/LANG)',
     'help.config.intro': 'Crie um lss.config.json ou .lssrc na raiz do projeto para customizar:',
@@ -351,6 +366,7 @@ const MESSAGES = {
     'help.ex.seedTable': 'Semeia só a tabela "users"',
     'help.ex.seedClear': 'Apaga todos os itens de "users" (com confirmação)',
     'help.ex.seedClearYes': 'Mesma coisa, sem prompt (CI)',
+    'help.ex.reset': 'Esvazia todos os emuladores, sem prompt (CI)',
   },
 
   es: {
@@ -361,7 +377,8 @@ const MESSAGES = {
     'scan.warning.unreadable-config': 'no se pudo leer {file}',
     'scan.warning.invalid-json': 'serverless.json no es un JSON válido',
     'config.parseFailed': '⚠️  No se pudo leer el archivo de configuración {path}',
-    'config.notFound': '⚠️  Archivo de configuración no encontrado: {path}',
+    'config.explicitNotFound': '❌ Archivo de configuración no encontrado: {path} (indicado por --config / LSS_CONFIG). Sin recurrir a la búsqueda de configuración por defecto — podría apuntar a otra instancia.',
+    'config.explicitParseFailed': '❌ No se pudo leer el archivo de configuración {path} (indicado por --config / LSS_CONFIG): {error}',
 
     'start.already': '⚠️  El orquestador LSS ya está en marcha (PID: {pid})',
     'start.starting': '🚀 Iniciando el orquestador LSS...',
@@ -452,6 +469,10 @@ const MESSAGES = {
     'clear.skipPrompt': '↳ --yes indicado, saltando la confirmación interactiva.',
     'clear.listFailed': '❌ No se pudieron listar las tablas antes de vaciar:',
     'clear.failed': '❌ El vaciado falló:',
+    'reset.target': '   Objetivo:  TODO el estado del engine — tablas, colas, buckets, tópicos, reglas, secrets, colecciones',
+    'reset.done': '✅ Engine reiniciado: todos los emuladores están vacíos. Ejecuta `lss register` para reaprovisionar los recursos de tus servicios.',
+    'reset.donePersistent': '✅ Engine reiniciado: todos los emuladores están vacíos y su directorio de datos se borró. Ejecuta `lss register` para reaprovisionar los recursos de tus servicios.',
+    'reset.failed': '❌ El reinicio falló:',
 
     'mcp.missing': '❌ No se encontró el build del servidor MCP. Ejecuta `npm run build` primero.',
     'mcp.startFailed': '❌ No se pudo iniciar el servidor MCP:',
@@ -471,6 +492,7 @@ const MESSAGES = {
     'help.cmd.scan': 'Lista cada servicio Serverless/osls encontrado bajo la raíz del proyecto (banderas registrado/instalado/empaquetado, puertos y comando de package)',
     'help.cmd.register': 'Registra servicios en el orquestador en marcha (usa el directorio actual por defecto; el empaquetado corre a demanda con autoPackage)',
     'help.cmd.seedClear': 'Elimina todos los ítems de la tabla indicada (o de todas las tablas con archivo de seed). Pide confirmación interactiva (escribir "confirmar") antes de cualquier escritura.',
+    'help.cmd.reset': 'Borra TODO el estado del engine (todas las tablas, colas, buckets, tópicos, reglas, secrets y colecciones) sin reiniciar. Pide confirmación interactiva (escribir "confirmar").',
     'help.cmd.mcp': 'Ejecuta el servidor Model Context Protocol en stdio, para que un cliente MCP maneje este stack con tools. Requiere el orquestador en marcha; mira docs/MCP.md.',
     'help.cmd.help': 'Muestra esta ayuda',
     'help.opt.config': 'Carga la configuración de este archivo (tiene precedencia sobre la búsqueda en cwd/home). Aplica a start/stop/status/logs, así una instancia aislada se puede direccionar sin entrar a su carpeta.',
@@ -481,6 +503,7 @@ const MESSAGES = {
     'help.env.dashboardPort': 'Puerto del orquestador (sobrescribe serverPort)',
     'help.env.enginePort': 'Puerto del self engine (sobrescribe selfEngine.port)',
     'help.env.engineDataDir': 'Directorio de estado del self engine (sobrescribe selfEngine.dataDir)',
+    'help.env.fallbackEndpoint': 'Redirige a este endpoint los servicios AWS que el engine no emula (sobrescribe selfEngine.fallbackEndpoint)',
     'help.env.awsRegion': 'Región por defecto para el aprovisionamiento y los exploradores',
     'help.env.lang': 'Idioma de la CLI: en, pt-BR o es (cae a LC_ALL/LC_MESSAGES/LANG)',
     'help.config.intro': 'Crea un lss.config.json o .lssrc en la raíz del proyecto para personalizar:',
@@ -498,6 +521,7 @@ const MESSAGES = {
     'help.ex.seedTable': 'Siembra solo la tabla "users"',
     'help.ex.seedClear': 'Elimina todos los ítems de "users" (con confirmación)',
     'help.ex.seedClearYes': 'Lo mismo, sin prompt (CI)',
+    'help.ex.reset': 'Vacía todos los emuladores, sin prompt (CI)',
   },
 };
 

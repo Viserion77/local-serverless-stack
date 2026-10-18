@@ -39,6 +39,9 @@ describe('runtime worker log capture (forked)', () => {
       cwd: REPO_ROOT,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       execArgv: ['--import', 'tsx'],
+      // What the manager's buildWorkerEnv provides at fork: the per-invocation
+      // reset must fall back to these, not delete them.
+      env: { ...process.env, AWS_ENDPOINT_URL: 'http://localhost:14566', LSS_FIXTURE_BASELINE: 'fork' },
     });
     worker.stdout!.on('data', (chunk: Buffer) => { stdoutData += chunk.toString(); });
     worker.stderr!.on('data', () => { /* surfaced by the manager in production */ });
@@ -64,7 +67,7 @@ describe('runtime worker log capture (forked)', () => {
     worker?.kill('SIGTERM');
   });
 
-  function invoke(handler: string, invokeId: string): Promise<WorkerResult> {
+  function invoke(handler: string, invokeId: string, env: Record<string, string> = {}): Promise<WorkerResult> {
     return new Promise((resolve) => {
       results.set(invokeId, resolve);
       worker.send({
@@ -78,11 +81,26 @@ describe('runtime worker log capture (forked)', () => {
         timeoutSeconds: 10,
         memorySize: 128,
         region: 'us-east-1',
-        env: {},
+        env,
         event: {},
       });
     });
   }
+
+  // Functions of one service share the worker process. A variable one
+  // function's env set must not leak into the next invocation of another, and
+  // a key the fork env provided comes back once the override is gone.
+  it('resets the previous invocation\'s env to the fork baseline', async () => {
+    const first = await invoke('env-handler.handler', 'inv-env-1', {
+      TABLE_NAME: 'orders',
+      AWS_ENDPOINT_URL: 'http://localhost:4566',
+      LSS_FIXTURE_BASELINE: 'overridden',
+    });
+    expect(first.payload).toEqual({ table: 'orders', endpoint: 'http://localhost:4566', baseline: 'overridden' });
+
+    const second = await invoke('env-handler.handler', 'inv-env-2', {});
+    expect(second.payload).toEqual({ table: null, endpoint: 'http://localhost:14566', baseline: 'fork' });
+  }, 30000);
 
   it('captures console, stream and fd-level writes in the invocation logs', async () => {
     const result = await invoke('logging-handler.handler', 'inv-logs');

@@ -12,6 +12,8 @@
 // none of these, so it falls through to Express. That also means a bucket named
 // `api` is not a conflict — the SDK signs its request, the browser does not.
 
+import { RESET_PATH } from './reset.js';
+
 export interface AwsRequestProbe {
   method: string;
   // Path only, without the query string.
@@ -21,9 +23,13 @@ export interface AwsRequestProbe {
   query: URLSearchParams;
 }
 
-// Paths the engine owns outright: no AWS client signs a health probe, and the
-// Lambda Invoke API / OpenSearch data plane are reached by plain HTTP too.
-const ENGINE_PATH_PREFIXES = ['/_aoss', '/2015-03-31/', '/_lss/health', '/_localstack/health'];
+// Paths the engine owns outright: no AWS client signs a health probe or a
+// reset, and the Lambda Invoke API / OpenSearch data plane are reached by
+// plain HTTP too.
+const ENGINE_PATH_PREFIXES = ['/_aoss', '/2015-03-31/', '/_lss/health', RESET_PATH, '/_localstack/health'];
+
+// A Query-protocol operation name: PascalCase, as every AWS Action is.
+const QUERY_ACTION = /^[A-Z][A-Za-z0-9]*$/;
 
 export function isAwsRequest(probe: AwsRequestProbe): boolean {
   const header = (name: string): string => {
@@ -36,6 +42,12 @@ export function isAwsRequest(probe: AwsRequestProbe): boolean {
 
   // 2. A presigned URL carries the credential scope in the query instead.
   if (probe.query.has('X-Amz-Credential')) return true;
+
+  // 2b. Query protocol with its parameters in the query string
+  //     (`GET /?Action=ListTopics&Version=2010-03-31`) — valid AWS, and an
+  //     unsigned one (curl, a health script) used to get the dashboard HTML.
+  //     The orchestrator never reads a PascalCase `Action` parameter.
+  if (QUERY_ACTION.test(probe.query.get('Action') ?? '')) return true;
 
   // 3. JSON protocols name their operation in a header (DynamoDB, SQS, SNS…).
   if (header('x-amz-target')) return true;

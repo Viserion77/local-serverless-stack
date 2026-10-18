@@ -13,7 +13,12 @@ import {
 import { beginsWith } from './expressions/evaluate.js';
 import type { CompiledCondition, ExpressionContext, SortKeyOperator } from './expressions/expression-types.js';
 import type { IndexRecord, KeyAttribute, TableRecord } from './schema.js';
-import { canonicalKey, tableKeyAttrs, validateProvidedKey, wireTypeOf } from './schema.js';
+import { canonicalKey, itemSizeBytes, tableKeyAttrs, validateProvidedKey, wireTypeOf } from './schema.js';
+
+// AWS caps one Query/Scan page at 1 MB of data READ — measured before the
+// FilterExpression runs, so a selective filter over big items can return few
+// (even zero) items plus a LastEvaluatedKey. Exported for the tests only.
+export const MAX_PAGE_BYTES = 1024 * 1024;
 
 export interface PageResult {
   // Absent when Select COUNT.
@@ -34,6 +39,7 @@ interface QueryScanWireInput {
   Limit?: unknown;
   ExclusiveStartKey?: unknown;
   Select?: unknown;
+  ConsistentRead?: unknown;
 }
 
 // A "view" over the table: the base key schema or a GSI/LSI. `tuple` is the
@@ -41,6 +47,8 @@ interface QueryScanWireInput {
 // which is exactly what AWS puts in an index query's LastEvaluatedKey.
 interface View {
   index?: IndexRecord;
+  // True for a GSI (false for an LSI or the base table).
+  global: boolean;
   pk: KeyAttribute;
   sk?: KeyAttribute;
   tuple: KeyAttribute[];
@@ -49,7 +57,7 @@ interface View {
 function resolveView(table: TableRecord, indexName: unknown): View {
   const tableKeys = tableKeyAttrs(table);
   if (indexName === undefined) {
-    return { pk: tableKeys[0], sk: tableKeys[1], tuple: tableKeys };
+    return { global: false, pk: tableKeys[0], sk: tableKeys[1], tuple: tableKeys };
   }
   const index = [...table.globalSecondaryIndexes, ...table.localSecondaryIndexes]
     .find((idx) => idx.indexName === indexName);
@@ -62,7 +70,16 @@ function resolveView(table: TableRecord, indexName: unknown): View {
   for (const attr of tableKeys) {
     if (!tuple.some((t) => t.name === attr.name)) tuple.push(attr);
   }
-  return { index, pk: viewKeys[0], sk: viewKeys[1], tuple };
+  return { index, global: table.globalSecondaryIndexes.includes(index), pk: viewKeys[0], sk: viewKeys[1], tuple };
+}
+
+// GSIs are maintained asynchronously on AWS, so a strongly consistent read of
+// one is impossible and the request is rejected outright. LSIs share the base
+// table's partition and DO support ConsistentRead.
+function assertReadConsistencySupported(view: View, input: QueryScanWireInput): void {
+  if (input.ConsistentRead === true && view.global) {
+    throw validationError('Consistent reads are not supported on global secondary indexes');
+  }
 }
 
 // Sparse-index semantics: an item is visible in a view only when every view
@@ -128,6 +145,14 @@ function readLimit(raw: unknown): number | undefined {
 // (ScannedCount) before FilterExpression, not items returned — and a page
 // that stops exactly on the limit still carries a LastEvaluatedKey (AWS
 // cannot know it was the last item; neither do we pretend to).
+//
+// The 1 MB page cap works the same way: every examined item adds its size
+// (itemSizeBytes — attribute-name lengths plus value sizes, the AWS
+// item-size formula approximated in schema.ts; for an index, the size of the
+// projected index entry) BEFORE the filter runs. The item that reaches the
+// cap is still part of the page — so progress is guaranteed even for
+// 400 KB items — and the page then stops with a LastEvaluatedKey, unless that
+// item was the last candidate (nothing left to page through).
 function paginate(
   view: View,
   ordered: AttributeMap[],
@@ -138,20 +163,26 @@ function paginate(
   const limit = readLimit(input.Limit);
   const collected: AttributeMap[] = [];
   let scanned = 0;
+  let readBytes = 0;
   let lastExamined: AttributeMap | undefined;
-  let limitHit = false;
+  let truncated = false;
   for (const item of ordered) {
     scanned++;
     lastExamined = item;
     const visible = stripToProjection(view, item);
+    readBytes += itemSizeBytes(visible);
     if (!filter || filter.evaluate(visible)) collected.push(visible);
     if (limit !== undefined && scanned >= limit) {
-      limitHit = true;
+      truncated = true;
+      break;
+    }
+    if (readBytes >= MAX_PAGE_BYTES && scanned < ordered.length) {
+      truncated = true;
       break;
     }
   }
   const result: PageResult = { count: collected.length, scannedCount: scanned };
-  if (limitHit && lastExamined) result.lastEvaluatedKey = viewKeyOf(view, lastExamined);
+  if (truncated && lastExamined) result.lastEvaluatedKey = viewKeyOf(view, lastExamined);
   if (input.Select !== 'COUNT') {
     result.items = typeof input.ProjectionExpression === 'string'
       ? collected.map((item) => applyProjection(input.ProjectionExpression as string, item, ctx))
@@ -224,6 +255,7 @@ function sortKeyMatches(condition: ResolvedKeyCondition['sort'], actual: Attribu
 export function executeQuery(table: TableRecord, items: AttributeMap[], rawInput: Record<string, unknown>): PageResult {
   const input = rawInput as QueryScanWireInput;
   const view = resolveView(table, input.IndexName);
+  assertReadConsistencySupported(view, input);
   const ctx: ExpressionContext = { names: input.ExpressionAttributeNames, values: input.ExpressionAttributeValues };
   if (typeof input.KeyConditionExpression !== 'string') {
     throw validationError('Either the KeyConditions or KeyConditionExpression parameter must be specified in the request.');
@@ -266,6 +298,7 @@ export function executeQuery(table: TableRecord, items: AttributeMap[], rawInput
 export function executeScan(table: TableRecord, items: AttributeMap[], rawInput: Record<string, unknown>): PageResult {
   const input = rawInput as QueryScanWireInput;
   const view = resolveView(table, input.IndexName);
+  assertReadConsistencySupported(view, input);
   const ctx: ExpressionContext = { names: input.ExpressionAttributeNames, values: input.ExpressionAttributeValues };
   assertPlaceholdersUsed(
     [input.FilterExpression as string | undefined, input.ProjectionExpression as string | undefined],

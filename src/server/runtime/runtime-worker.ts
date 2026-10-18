@@ -50,6 +50,25 @@ const logStorage = new AsyncLocalStorage<string[]>();
 const activeLogs = new Set<string[]>();
 let tsLoaderRegistered = false;
 
+// The env this worker was forked with (buildWorkerEnv: engine endpoint, dummy
+// credentials, service-level overrides) and the keys the previous invocation's
+// function env laid over it. Functions of one service share this process, so
+// without a reset function B ran with whatever function A had set — A's
+// AWS_ENDPOINT_URL, A's TABLE_NAME — and a variable removed from the config
+// stayed set until the worker was restarted.
+const baselineEnv: NodeJS.ProcessEnv = { ...process.env };
+let appliedEnvKeys: string[] = [];
+
+function applyInvocationEnv(env: Record<string, string>): void {
+  for (const key of appliedEnvKeys) {
+    if (Object.prototype.hasOwnProperty.call(env, key)) continue;
+    if (baselineEnv[key] === undefined) delete process.env[key];
+    else process.env[key] = baselineEnv[key];
+  }
+  Object.assign(process.env, env);
+  appliedEnvKeys = Object.keys(env);
+}
+
 // Capture output per invocation without breaking interleaved async handlers —
 // AsyncLocalStorage routes each line to the invocation that emitted it. The
 // capture hooks the stream AND fd layers (not just console.*), so structured
@@ -83,11 +102,15 @@ function hasNativeTypeScriptSupport(): boolean {
   return Boolean((process.features as NodeJS.ProcessFeatures & { typescript?: boolean }).typescript);
 }
 
+// Why the native path was not used, kept for the one-time loader notice.
+let nativeTsSkipReason = 'this Node has no native type stripping';
+
 async function tryNativeTypeScriptImport(file: string): Promise<Record<string, unknown> | null> {
   if (!hasNativeTypeScriptSupport()) return null;
   try {
     return (await import(pathToFileURL(file).href)) as Record<string, unknown>;
-  } catch {
+  } catch (err) {
+    nativeTsSkipReason = `native type stripping failed: ${err instanceof Error ? err.message.split('\n')[0] : String(err)}`;
     return null;
   }
 }
@@ -113,6 +136,10 @@ function ensureTsLoader(serviceRoot: string): void {
           mod.register();
         }
         tsLoaderRegistered = true;
+        // Once per worker, into the invocation that triggered it: a handler
+        // that behaves differently under the fallback loader (decorators,
+        // enums, path aliases) is otherwise a mystery.
+        console.log(`[lss] TypeScript handlers load through ${candidate.id} (${nativeTsSkipReason})`);
         return;
       } catch {
         // Try the next loader/resolver.
@@ -215,8 +242,11 @@ async function handleInvoke(msg: InvokeMessage): Promise<void> {
   const deadline = startedAt + msg.timeoutSeconds * 1000;
 
   // Function env is applied to the shared process env (functions of one service
-  // share a worker, mirroring how serverless-offline behaves).
-  Object.assign(process.env, msg.env, {
+  // share a worker). The previous invocation's keys are reset to the fork
+  // baseline first — see applyInvocationEnv. The template already merged the
+  // manager's overrides in (template < serviceRuntime env < function env).
+  applyInvocationEnv(msg.env ?? {});
+  Object.assign(process.env, {
     AWS_REGION: msg.region,
     AWS_DEFAULT_REGION: msg.region,
     AWS_LAMBDA_FUNCTION_NAME: msg.fullName,

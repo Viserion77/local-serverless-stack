@@ -113,7 +113,7 @@ export interface RedriveTarget {
   move: (message: StoredMessage) => void;
 }
 
-// Re-resolved on EVERY redelivery rather than cached: the dead-letter queue is
+// Re-resolved on EVERY receive rather than cached: the dead-letter queue is
 // frequently declared AFTER the queue that points at it (CloudFormation
 // template order), and SetQueueAttributes can add or replace the policy at any
 // time. Returning undefined means "no redrive" — a missing policy, a malformed
@@ -149,6 +149,13 @@ export class SqsQueue {
   private visible: StoredMessage[] = [];
   private delayed = new Map<string, StoredMessage>();
   private inflight = new Map<string, StoredMessage>();
+  // Receipt handles whose visibility already lapsed (or was zero from the
+  // start) while their message sits visible again, not yet re-received. AWS
+  // keeps the MOST RECENT handle deletable until the next receive replaces it:
+  // a consumer that finishes just after its timeout still deletes the message
+  // instead of getting a silent 200 and a duplicate delivery. Cleared on the
+  // next receive of the message, on delete, purge and retention pruning.
+  private lingering = new Map<string, StoredMessage>();
   // FIFO: messageGroupId -> number of in-flight messages. A group with any
   // in-flight message yields no further messages ("one in-flight batch per
   // group") until they are deleted or become visible again.
@@ -254,26 +261,47 @@ export class SqsQueue {
       }
     }
 
+    // The redrive decision is taken HERE, at receive time, exactly like AWS:
+    // a message whose receive count already reached maxReceiveCount is moved to
+    // the dead-letter queue by the receive that would have delivered it once
+    // too often — not the instant its visibility lapses. Until then it stays a
+    // visible message of this queue, and its most recent handle stays deletable.
+    const target = this.redrive();
     const taken: StoredMessage[] = [];
+    const removed = new Set<string>();
     for (const message of this.visible) {
       // Locked FIFO groups are skipped entirely — and skipping one message of
       // a group blocks the rest of that group to preserve in-group order.
       if (this.fifo && message.messageGroupId && blockedGroups.has(message.messageGroupId)) {
         continue;
       }
+      removed.add(message.messageId);
+      if (target && message.receiveCount >= target.maxReceiveCount) {
+        this.forgetHandle(message);
+        target.move(message);
+        continue;
+      }
       taken.push(message);
       if (taken.length >= options.max) break;
     }
-    if (taken.length === 0) return [];
+    if (removed.size === 0) return [];
+    this.visible = this.visible.filter(message => !removed.has(message.messageId));
 
-    const takenIds = new Set(taken.map(message => message.messageId));
-    this.visible = this.visible.filter(message => !takenIds.has(message.messageId));
-
+    const immediate = options.visibilityMs <= 0;
     for (const message of taken) {
+      this.forgetHandle(message);
       message.receiveCount += 1;
       message.firstReceiveTimestamp ??= now;
-      message.visibleAt = now + options.visibilityMs;
+      message.visibleAt = now + Math.max(0, options.visibilityMs);
       message.receiptHandle = this.newReceiptHandle(message.messageId);
+      if (immediate) {
+        // VisibilityTimeout: 0 — the message is visible again the moment it is
+        // returned (a "peek"), not whenever the queue timer next fires. Its
+        // handle still deletes it, and a FIFO group is never locked by it.
+        this.lingering.set(message.receiptHandle, message);
+        this.insertVisible(message);
+        continue;
+      }
       this.inflight.set(message.receiptHandle, message);
       if (this.fifo && message.messageGroupId) {
         this.groupLocks.set(
@@ -283,14 +311,24 @@ export class SqsQueue {
       }
       this.addDeadline(message.visibleAt);
     }
+    if (immediate && taken.length > 0) this.notifyVisible();
     return taken;
   }
 
   // Deleting with a well-formed handle that is no longer in flight is a
-  // silent success ('stale'), matching AWS's idempotent DeleteMessage.
+  // silent success ('stale'), matching AWS's idempotent DeleteMessage — except
+  // for the message's MOST RECENT handle after its visibility lapsed: that one
+  // still deletes the (visible again) message until the next receive.
   deleteMessage(receiptHandle: string): DeleteMessageResult {
     const message = this.inflight.get(receiptHandle);
     if (!message) {
+      const lapsed = this.lingering.get(receiptHandle);
+      if (lapsed) {
+        this.lingering.delete(receiptHandle);
+        lapsed.receiptHandle = undefined;
+        this.visible = this.visible.filter(candidate => candidate !== lapsed);
+        return 'deleted';
+      }
       return this.isOwnHandle(receiptHandle) ? 'stale' : 'invalid';
     }
     this.inflight.delete(receiptHandle);
@@ -306,7 +344,7 @@ export class SqsQueue {
     }
     if (visibilityMs <= 0) {
       this.inflight.delete(receiptHandle);
-      this.requeue(message);
+      this.requeue(message, receiptHandle);
       this.notifyVisible();
       return 'changed';
     }
@@ -383,6 +421,7 @@ export class SqsQueue {
     this.visible = [];
     this.delayed.clear();
     this.inflight.clear();
+    this.lingering.clear();
     this.groupLocks.clear();
     this.clearTimer();
   }
@@ -462,32 +501,25 @@ export class SqsQueue {
     this.visible.splice(low, 0, message);
   }
 
-  private requeue(message: StoredMessage): void {
-    message.receiptHandle = undefined;
+  // ChangeMessageVisibility(0): visible again right away. Like a lapsed
+  // visibility, the released message is NOT dead-lettered here — the redrive
+  // check runs on the next receive (see receive()), and the group unlocks now so
+  // the rest of a FIFO group is not stalled behind it. Off-by-one, AWS-faithful:
+  // a message moves once its ApproximateReceiveCount would *exceed*
+  // maxReceiveCount — with maxReceiveCount: 2 the consumer sees it twice, and
+  // the third delivery attempt sends it to the DLQ instead.
+  // The released handle keeps deleting the message until it is received again.
+  private requeue(message: StoredMessage, receiptHandle: string): void {
+    this.lingering.set(receiptHandle, message);
     message.visibleAt = Date.now();
     this.unlockGroup(message);
-    if (this.movedToDeadLetterQueue(message)) return;
     this.insertVisible(message);
   }
 
-  // The redrive decision, taken on every path that would make an ALREADY
-  // RECEIVED message visible again. Returns true when the message left this
-  // queue for the dead-letter queue and must not be re-inserted.
-  //
-  // Off-by-one, AWS-faithful: a message moves once its ApproximateReceiveCount
-  // *exceeds* maxReceiveCount. `receiveCount` here is the number of deliveries
-  // already made, so the move happens exactly when the NEXT delivery would push
-  // it past the threshold — with maxReceiveCount: 2 the consumer sees the
-  // message twice, and the third delivery attempt goes to the DLQ instead.
-  //
-  // Callers unlock the FIFO group BEFORE calling this, so moving a poison
-  // message releases its MessageGroupId and the rest of the group flows again
-  // rather than stalling behind it forever.
-  private movedToDeadLetterQueue(message: StoredMessage): boolean {
-    const target = this.redrive();
-    if (!target || message.receiveCount < target.maxReceiveCount) return false;
-    target.move(message);
-    return true;
+  // Drop the lapsed handle a message may still carry (it is being received
+  // again, moved to the DLQ, or pruned).
+  private forgetHandle(message: StoredMessage): void {
+    if (message.receiptHandle) this.lingering.delete(message.receiptHandle);
   }
 
   private unlockGroup(message: StoredMessage): void {
@@ -515,7 +547,7 @@ export class SqsQueue {
   // order, so expired messages are always a prefix.
   private pruneRetention(now: number, retentionMs: number): void {
     while (this.visible.length > 0 && this.visible[0].sentTimestamp + retentionMs <= now) {
-      this.visible.shift();
+      this.forgetHandle(this.visible.shift() as StoredMessage);
     }
   }
 
@@ -558,11 +590,12 @@ export class SqsQueue {
     for (const [handle, message] of this.inflight) {
       if (message.visibleAt <= now) {
         this.inflight.delete(handle);
-        message.receiptHandle = undefined;
+        // The handle outlives the visibility window: it still deletes the
+        // message until the next receive (see `lingering`).
+        this.lingering.set(handle, message);
         this.unlockGroup(message);
-        // Visibility expiry is the redelivery path a failing consumer takes:
-        // the message either goes to the dead-letter queue or becomes visible.
-        if (this.movedToDeadLetterQueue(message)) continue;
+        // Visibility expiry is the redelivery path a failing consumer takes.
+        // The dead-letter move, if due, happens on the next receive.
         this.insertVisible(message);
         becameVisible = true;
       }

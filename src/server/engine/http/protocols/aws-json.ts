@@ -51,3 +51,17 @@ export function lambdaErrorResponse(err: AwsError): AwsResponse {
     body: JSON.stringify({ Type: err.fault === 'Receiver' ? 'Service' : 'User', message: err.message }),
   };
 }
+
+// Generic rest-json error (API Gateway, AppSync, …): the SDKs read the code
+// from x-amzn-ErrorType first and fall back to the body's `code`/`__type`, so
+// both carry it.
+export function restJsonErrorResponse(err: AwsError): AwsResponse {
+  return {
+    status: err.status,
+    headers: {
+      'content-type': 'application/json',
+      'x-amzn-ErrorType': err.code,
+    },
+    body: JSON.stringify({ __type: err.code, code: err.code, message: err.message }),
+  };
+}

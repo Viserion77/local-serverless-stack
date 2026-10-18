@@ -6,7 +6,7 @@ LSS (Local Serverless Stack) supports configuration files to customize the behav
 
 LSS looks for configuration files in the following order:
 
-1. A file passed explicitly: `lss <cmd> --config <path>` (the CLI exports it as `LSS_CONFIG_PATH` so the server reads the same file) — always wins
+1. A file passed explicitly: `lss <cmd> --config <path>` (the CLI exports it as `LSS_CONFIG_PATH` so the server reads the same file) — always wins. A file named this way (or by `LSS_CONFIG`) that is missing or unparseable is a hard error (exit 1) for every command; it never falls back to the search below, so a typo can't silently address another instance
 2. `lss.config.json` in the current working directory
 3. `.lssrc` in the current working directory
 4. `lss.config.json` in the home directory (`~`)
@@ -52,8 +52,9 @@ Both files should contain valid JSON with the following optional properties:
 
 - **serverPort** (number, default: 14566)
   - The one port the whole stack answers on: dashboard, REST API **and** the AWS
-    wire. The Serverless Plugin registers here; your handlers point `AWS_ENDPOINT`
-    here; you open the dashboard here.
+    wire. Services register here; your handlers point `AWS_ENDPOINT_URL` here (the
+    LSS Lambda runtime sets it, with `test` credentials and the service region, in
+    every worker it forks); you open the dashboard here.
   - It shares a listener with the engine because the two traffic shapes are
     distinguishable: a request carrying SigV4, `X-Amz-Target` or any `x-amz-*`
     header goes to the engine, everything else to the API/SPA. A bucket named
@@ -203,14 +204,18 @@ Both files should contain valid JSON with the following optional properties:
     The container recipe needs both.
 
 - **selfEngine** (object, optional)
-  - `port` (default 14566, env `LSS_ENGINE_PORT`) — **equal to `serverPort` by
-    default, which is what puts everything on one listener**; set it to a
+  - `port` (default: `serverPort`, env `LSS_ENGINE_PORT`) — **follows `serverPort`
+    by default, which is what puts everything on one listener**: setting only
+    `serverPort` / `LSS_DASHBOARD_PORT` moves the whole stack. Set it to a
     different value to split them, `dataDir` (default
     `~/.lss/projects/<project-slug>-<hash>/engine`, or `<stateDir>/engine` when
     `stateDir` is set — the home fallback is scoped per project so two checkouts
     never share one set of tables), `account`,
-    `idleUnloadMs`, `memoryBudgetMb`, `fsync`, `fallbackEndpoint` (reverse-proxy
-    AWS operations the engine does not implement to any AWS-compatible endpoint).
+    `idleUnloadMs`, `memoryBudgetMb`, `fsync`, `fallbackEndpoint` (env
+    `LSS_FALLBACK_ENDPOINT`; reverse-proxy calls to AWS services the engine does
+    not emulate to any AWS-compatible endpoint), `fallbackEndpoints` (object,
+    SigV4 signing name → URL, e.g. `{ "kinesis": "http://localhost:4567" }`;
+    a per-service override that wins over the catch-all `fallbackEndpoint`).
   - Full reference: [SELF_ENGINE.md](SELF_ENGINE.md).
 
 - **enableDynamoProxy** (boolean, default: false)
@@ -473,6 +478,12 @@ Both files should contain valid JSON with the following optional properties:
     (works uniformly for TS and JS); `source` requires handlers straight from the service
     source tree (TS via `esbuild-register`/`tsx`/`ts-node` resolved from the service's or
     LSS's node_modules); `auto` picks `artifact` when a zip exists, else `source`.
+    Any zip under `.serverless/` counts, a stale one from an old `sls package`
+    included — set `"execution": "source"` for a service you want to run from source
+    regardless. In `artifact` mode an ESM bundle that keeps a dependency external
+    (`import pg from 'pg'`) resolves it from the service's `node_modules` and from a
+    monorepo's hoisted root: ESM ignores `NODE_PATH`, so LSS links `node_modules`
+    next to the extraction.
   - `watch` (boolean, default: `true` in source mode, `false` in artifact mode): hot
     reload — source changes restart the service worker; `serverless.yml`/`package.json`
     changes trigger a re-package (when `autoPackage` is on) and full re-registration.
@@ -533,14 +544,41 @@ Both files should contain valid JSON with the following optional properties:
 - **serviceRuntime** (object, default: `{}`)
   - Per-service runtime overrides, keyed like `servicePackaging` (directory basename or
     config-relative path; the relative-path key wins).
-  - Each value may set `enabled`, `apiPort`, `invokePort`, `execution`, `watch`.
-    Ports set here win over the register payload and over the service's
-    `custom.lss` hints.
+  - Each value may set `enabled`, `apiPort`, `invokePort`, `execution`, `watch`,
+    `env`, `execArgv` and `functions`. Ports set here win over the register payload
+    and over the service's `custom.lss` hints. A service with no `invokePort` still
+    gets its queues, streams, schedules, rules and bucket notifications wired — the
+    engine delivers to the function in-process.
+  - `env` (object of strings): extra environment for every function of the service,
+    over the template's `environment`. Re-read on every invocation, so an edit
+    (dashboard or `PUT /api/config`) takes effect on the next call without a
+    restart; it is also applied when the worker is forked, so module-init code sees
+    it. Patched one variable at a time through the API (`null` removes one);
+    `NODE_OPTIONS`, `LD_PRELOAD`, `PATH`, `NODE_PATH` and the other loader hooks are
+    refused there. `GET /api/config` shows only the key names (`envKeys`).
+  - `execArgv` (array of strings): Node flags the service's worker is forked with
+    (one worker per service, so service-level only; applies on the next fork).
+    Through the API only an allowlist is accepted: `--inspect` / `--inspect-brk` /
+    `--inspect-wait` / `--inspect-port` (loopback host only), `--enable-source-maps`,
+    `--max-old-space-size=N`, `--max-semi-space-size=N`, `--stack-size=N`,
+    `--stack-trace-limit=N`, `--unhandled-rejections=<mode>`, `--trace-warnings`,
+    `--trace-deprecation`, `--trace-uncaught`, `--no-warnings`, `--no-deprecation`,
+    `--expose-gc` and the strip/transform-types, vm-modules and require-module
+    experimental flags. Anything else (e.g. `--import tsx`) must be written into
+    `lss.config.json` by hand.
+  - `functions.<name>.env`: per-function env, keyed by the short function name (or
+    the full `service-stage-fn` name). Precedence: `functions.<fn>.env` > `env` >
+    the template's environment.
   - Example:
     ```jsonc
     "serviceRuntime": {
       "auth": { "apiPort": 3011, "invokePort": 13011 },
-      "app":  { "apiPort": 3010, "execution": "source", "watch": true }
+      "app":  { "apiPort": 3010, "execution": "source", "watch": true },
+      "orders": {
+        "env": { "LOG_LEVEL": "debug" },
+        "execArgv": ["--enable-source-maps", "--inspect=127.0.0.1:9230"],
+        "functions": { "processOrder": { "env": { "TABLE_NAME": "orders-local" } } }
+      }
     }
     ```
 
@@ -672,8 +710,9 @@ Environment variables can be used instead of — or to override — a configurat
 - `LSS_INVOKE_HOST` - Override `lambdaRuntime.invokeHost`
 - `LSS_LANG` - CLI language (`en`, `pt-BR`, `es`); wins over `LC_ALL`/`LC_MESSAGES`/`LANG`
 - `LSS_SEEDS_DIR` - Directory with DynamoDB seed files
-- `LSS_ENGINE_PORT` - Self engine port (default: 14566)
+- `LSS_ENGINE_PORT` - Self engine port (default: the server port)
 - `LSS_ENGINE_DATA_DIR` - Self engine state directory (overrides `selfEngine.dataDir`)
+- `LSS_FALLBACK_ENDPOINT` - Catch-all fallback for AWS services the engine does not emulate (overrides `selfEngine.fallbackEndpoint`)
 
 ### LssClient environment variables
 

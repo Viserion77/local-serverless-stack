@@ -51,6 +51,13 @@ router.get('/', (_req: Request, res: Response) => {
   return res.json(services);
 });
 
+// Authorizer result cache counters: live entries plus hits/misses since boot
+// (a resultTtlInSeconds: 0 authorizer counts neither). A hit re-evaluates the
+// cached policy against the new request, so a hit can still be a 403.
+router.get('/authorizer-cache', (_req: Request, res: Response) => {
+  return res.json(AuthorizerService.getInstance().getCacheStats());
+});
+
 // Flush the authorizer result cache — essential for e2e flows that switch
 // identities without waiting out resultTtlInSeconds.
 router.post('/authorizer-cache/clear', (req: Request, res: Response) => {

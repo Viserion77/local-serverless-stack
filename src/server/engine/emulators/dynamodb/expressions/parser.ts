@@ -14,6 +14,7 @@ import {
 } from './evaluate.js';
 import type { AttributeTypeName, DocumentPath } from './evaluate.js';
 import { addDecimals, subtractDecimals } from './decimal.js';
+import { isReservedWord } from './reserved-words.js';
 
 export type CompiledPredicate = (item: AttributeMap) => boolean;
 
@@ -136,6 +137,12 @@ class Parser {
       return this.resolveName(token);
     }
     if (token.type === 'ident') {
+      // A bare name that is a DynamoDB reserved word is rejected at parse
+      // time (AWS reports the token as written, not upper-cased); the caller
+      // must alias it through ExpressionAttributeNames.
+      if (isReservedWord(token.text)) {
+        this.semanticError(`Attribute name is a reserved keyword; reserved keyword: ${token.text}`);
+      }
       this.next();
       return token.text;
     }
@@ -250,7 +257,11 @@ class Parser {
       return (item) => {
         const lhs = target.resolve(item);
         const rhs = right.resolve(item);
-        if (lhs === undefined || rhs === undefined) return false;
+        // A missing operand compares not-equal to anything: `a <> :v` is TRUE
+        // when `a` is absent (the idiom behind "attribute absent or different"
+        // guards), while `=` and the ordering comparators are FALSE. This
+        // keeps `a <> :v` and `NOT (a = :v)` equivalent, as on AWS.
+        if (lhs === undefined || rhs === undefined) return symbol === '<>';
         if (symbol === '=') return attributeValuesEqual(lhs, rhs);
         if (symbol === '<>') return !attributeValuesEqual(lhs, rhs);
         return orderedCompare(lhs, rhs, symbol);

@@ -1,5 +1,6 @@
 import crypto from 'crypto';
 import type { GenerateSecretStringSpec } from './secret-value.js';
+import { resolveTemplate, type TemplateResolveOptions } from './cfn-intrinsics.js';
 
 interface CloudFormationTemplate {
   Resources: Record<string, CloudFormationResource>;
@@ -18,7 +19,10 @@ export interface LambdaResource {
   name: string;
   handler: string;
   runtime: string;
-  environment: Record<string, string>;
+  // Environment.Variables after the static intrinsic pass: plain values, plus
+  // any Ref/GetAtt to a resource still in place — those become physical values
+  // in cfn-physical-values.ts once the resources exist.
+  environment: Record<string, unknown>;
   memorySize: number;
   timeout: number;
 }
@@ -116,6 +120,25 @@ export interface SecretsManagerResource {
   // Raw (camelCased) GenerateSecretString spec — the value is synthesized at
   // provision time (parser stays pure), not here.
   generateSecretString?: GenerateSecretStringSpec;
+  tags: Array<{ Key: string; Value: string }>;
+}
+
+// AWS::SSM::Parameter. CloudFormation only creates String and StringList
+// parameters (SecureString is not a CFN-supported Type); Tags is a flat
+// key → value map here, unlike the Key/Value list most resources use.
+export interface SsmParameterResource {
+  type: 'ssm-parameter';
+  logicalId: string;
+  name: string;
+  parameterType: string;
+  // Undefined when Value is still an unresolved intrinsic (a Ref/GetAtt to a
+  // resource) after the static pass — the provisioner reports it instead of
+  // storing "[object Object]".
+  value?: string;
+  description?: string;
+  allowedPattern?: string;
+  tier?: string;
+  dataType?: string;
   tags: Array<{ Key: string; Value: string }>;
 }
 
@@ -264,6 +287,7 @@ export type Resource =
   | SNSResource
   | S3Resource
   | SecretsManagerResource
+  | SsmParameterResource
   | EventBusResource
   | EventRuleResource
   | OpenSearchCollectionResource
@@ -297,24 +321,91 @@ export interface ResolvedArn {
   resolved: boolean;
 }
 
+// Where a template is being deployed — feeds the pseudo parameters and the
+// parameter overrides of the static intrinsic pass (cfn-intrinsics.ts).
+// Without `region` / `stackName` the matching pseudo parameters stay
+// unresolved instead of being invented (resolveArnLike still reduces
+// `AWS::Region` later, given the registration's region).
+export type TemplateParseContext = TemplateResolveOptions;
+
+export interface TemplateParseResult {
+  resources: Resource[];
+  // The template after the static intrinsic pass (Outputs included), for
+  // callers that read more than Resources — e.g. the stack export map.
+  template: CloudFormationTemplate;
+}
+
+// Types parseResource drops with a warning of their own (naming the resource
+// and why); the skipped-types summary leaves them out so each gap is reported
+// exactly once.
+const EXPLICITLY_WARNED_TYPES = new Set([
+  'AWS::Events::Archive',
+  'AWS::OpenSearchServerless::SecurityPolicy',
+  'AWS::OpenSearchServerless::AccessPolicy',
+  'AWS::OpenSearchServerless::VpcEndpoint',
+]);
+
 export class CloudFormationParser {
   // `warnings` collects non-fatal template findings (e.g. resource types LSS
   // deliberately skips) so callers can surface them to the registering client.
-  parse(template: CloudFormationTemplate, warnings?: string[]): Resource[] {
+  parse(template: CloudFormationTemplate, warnings?: string[], context?: TemplateParseContext): Resource[] {
+    return this.parseTemplate(template, warnings, context).resources;
+  }
+
+  parseTemplate(
+    template: CloudFormationTemplate,
+    warnings?: string[],
+    context: TemplateParseContext = {},
+  ): TemplateParseResult {
     const resources: Resource[] = [];
 
     if (!template.Resources) {
-      return resources;
+      return { resources, template };
     }
 
-    for (const [key, resource] of Object.entries(template.Resources)) {
+    // Static intrinsic pass FIRST: Parameters, pseudo parameters, Mappings,
+    // Conditions and the string functions are resolved, conditioned-out
+    // resources removed. What survives as an object is a Ref/GetAtt to a
+    // resource, which the readers below key off by logical id.
+    const resolution = resolveTemplate(template, context, warnings);
+    const resolved = resolution.template as CloudFormationTemplate;
+    if (resolution.droppedByCondition.length > 0) {
+      warnings?.push(
+        `Dropped ${resolution.droppedByCondition.length} resource(s) whose Condition is false: ${resolution.droppedByCondition.join(', ')}.`,
+      );
+    }
+
+    const skipped = new Map<string, number>();
+    for (const [key, resource] of Object.entries(resolved.Resources)) {
       const parsed = this.parseResource(key, resource, warnings);
       if (parsed) {
         resources.push(parsed);
+      } else if (key !== 'ServerlessDeploymentBucket' && !EXPLICITLY_WARNED_TYPES.has(String(resource.Type))) {
+        // The framework's own deployment bucket is skipped on purpose (see
+        // parseResource) — it is not a gap worth reporting — and the types
+        // parseResource already warned about by name are not counted twice.
+        const type = String(resource.Type ?? '(no Type)');
+        skipped.set(type, (skipped.get(type) ?? 0) + 1);
       }
     }
 
-    return resources;
+    // ONE line for everything not modelled, instead of either silence or a
+    // warning per resource: a real stack carries dozens of IAM roles and log
+    // groups, and the point is to see at a glance whether something that
+    // matters (a table, a queue) is among them.
+    if (skipped.size > 0) {
+      const total = [...skipped.values()].reduce((a, b) => a + b, 0);
+      const list = [...skipped.entries()]
+        .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+        .map(([type, count]) => `${type} ×${count}`)
+        .join(', ');
+      warnings?.push(
+        `Skipped ${total} of ${Object.keys(resolved.Resources).length} resource(s) whose type LSS does not provision: ${list}. ` +
+        '(HTTP routes and authorizers declared as function events are served from serverless-state.json regardless.)',
+      );
+    }
+
+    return { resources, template: resolved };
   }
 
   private parseResource(key: string, resource: CloudFormationResource, warnings?: string[]): Resource | null {
@@ -335,6 +426,8 @@ export class CloudFormationParser {
         return this.parseS3(key, resource);
       case 'AWS::SecretsManager::Secret':
         return this.parseSecret(key, resource);
+      case 'AWS::SSM::Parameter':
+        return this.parseSsmParameter(key, resource);
       case 'AWS::Lambda::EventSourceMapping':
         return this.parseEventSource(key, resource);
       case 'AWS::Events::EventBus':
@@ -378,7 +471,7 @@ export class CloudFormationParser {
       name: (props.FunctionName as string) || key,
       handler: (props.Handler as string) || '',
       runtime: (props.Runtime as string) || 'nodejs20.x',
-      environment: ((props.Environment as { Variables?: Record<string, string> })?.Variables) || {},
+      environment: ((props.Environment as { Variables?: Record<string, unknown> })?.Variables) || {},
       memorySize: (props.MemorySize as number) || 128,
       timeout: (props.Timeout as number) || 30,
     };
@@ -567,6 +660,29 @@ export class CloudFormationParser {
         requireEachIncludedType: gen.RequireEachIncludedType as boolean | undefined,
       };
     }
+    return parsed;
+  }
+
+  private parseSsmParameter(key: string, resource: CloudFormationResource): SsmParameterResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    const tags = props.Tags && typeof props.Tags === 'object' && !Array.isArray(props.Tags)
+      ? Object.entries(props.Tags as Record<string, unknown>).map(([Key, Value]) => ({ Key, Value: String(Value) }))
+      : [];
+    const parsed: SsmParameterResource = {
+      type: 'ssm-parameter',
+      logicalId: key,
+      // Name is optional in CFN (AWS generates one) — fall back to the logical
+      // id so the parameter is still addressable locally.
+      name: (props.Name as string) || key,
+      parameterType: (props.Type as string) || 'String',
+      tags,
+    };
+    const value = props.Value;
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') parsed.value = String(value);
+    if (props.Description !== undefined) parsed.description = props.Description as string;
+    if (props.AllowedPattern !== undefined) parsed.allowedPattern = props.AllowedPattern as string;
+    if (props.Tier !== undefined) parsed.tier = props.Tier as string;
+    if (props.DataType !== undefined) parsed.dataType = props.DataType as string;
     return parsed;
   }
 

@@ -6,6 +6,11 @@
 import {
   ServerlessStateParser,
   sanitizeEnvironmentValues,
+  derefStatePointer,
+  lambdaLogicalIdFor,
+  readStateIdentity,
+  stageFromPackageArgs,
+  stageMismatchWarnings,
 } from '../../../src/server/services/serverless-state-parser';
 
 let parser: ServerlessStateParser;
@@ -125,6 +130,7 @@ describe('functions: provider defaults vs overrides', () => {
       serviceName: undefined,
       stage: 'dev',
       functions: [],
+      rawEnvironment: {},
       routes: [],
       authorizers: [],
       warnings: [],
@@ -350,18 +356,50 @@ describe('REST inline authorizers', () => {
     expect(authorizers[0].arn).toBe('arn:aws:lambda:x:y:function:z');
   });
 
-  it('an intrinsic (Fn::GetAtt) arn means "local function" — name wins', () => {
-    const { authorizers } = parseEvents([
-      {
-        http: {
-          method: 'get',
-          path: '/e',
-          authorizer: { name: 'localAuth', arn: { 'Fn::GetAtt': ['AuthLambdaFunction', 'Arn'] } },
+  it('an intrinsic (Fn::GetAtt) arn resolves to the function it names, not to the authorizer name', () => {
+    const { authorizers, warnings } = parser.parse({
+      service: {
+        service: 's',
+        functions: {
+          fn: { events: [{ http: { method: 'get', path: '/e', authorizer: { name: 'localAuth', arn: { 'Fn::GetAtt': ['AuthLambdaFunction', 'Arn'] } } } }] },
+          auth: {},
         },
       },
-    ]);
-    expect(authorizers[0].functionName).toBe('localAuth');
+    } as never);
+    expect(authorizers[0].name).toBe('fn:localAuth');
+    expect(authorizers[0].functionName).toBe('auth');
     expect(authorizers[0].arn).toBeUndefined();
+    expect(warnings).toEqual([]);
+  });
+
+  it('an unresolvable intrinsic arn falls back to `name` only when that is a declared function', () => {
+    const { authorizers, warnings } = parseEvents([
+      { http: { method: 'get', path: '/e1', authorizer: { name: 'fn', arn: { 'Fn::GetAtt': ['GoneLambdaFunction', 'Arn'] } } } },
+      { http: { method: 'get', path: '/e2', authorizer: { name: 'nope', arn: { 'Fn::GetAtt': ['GoneLambdaFunction', 'Arn'] } } } },
+    ]);
+    expect(authorizers.map(a => a.functionName)).toEqual(['fn', undefined]);
+    expect(warnings).toEqual([
+      'Authorizer "nope": function reference {"Fn::GetAtt":["GoneLambdaFunction","Arn"]} does not resolve to a Lambda in this service — routes using it will answer 500.',
+      'Authorizer "fn:nope" has no function to invoke (neither a function name nor a resolvable ARN) — routes using it will answer 500.',
+    ]);
+  });
+
+  it('a string shorthand that is an ARN is carried as the arn, not as a function name', () => {
+    const { authorizers, warnings } = parseEvents([
+      { http: { method: 'get', path: '/arn', authorizer: 'arn:aws:lambda:us-east-1:000000000000:function:billing-dev-auth' } },
+    ]);
+    expect(authorizers[0].functionName).toBeUndefined();
+    expect(authorizers[0].arn).toBe('arn:aws:lambda:us-east-1:000000000000:function:billing-dev-auth');
+    expect(warnings).toEqual([]);
+  });
+
+  it('warns when a local authorizer names a function the service does not declare', () => {
+    const { warnings } = parseEvents([
+      { http: { method: 'get', path: '/a', authorizer: 'missingFn' } },
+    ]);
+    expect(warnings).toEqual([
+      'Authorizer "fn:missingFn" targets function "missingFn", which this service does not declare — routes using it will answer 500.',
+    ]);
   });
 
   it('unsupported type warns and marks the route unresolved', () => {
@@ -397,7 +435,7 @@ describe('httpApi authorizers (provider.httpApi.authorizers)', () => {
       service: {
         service: 's',
         provider: { httpApi: { authorizers } },
-        functions: { fn: { events } },
+        functions: { fn: { events }, authFn: {} },
       },
     } as never);
   }
@@ -534,5 +572,152 @@ describe('region and custom.lss port hints', () => {
     expect(parsed.region).toBeUndefined();
     expect(parsed.apiPort).toBeUndefined();
     expect(parsed.invokePort).toBeUndefined();
+  });
+});
+
+// serverless-state.json is written cycle-safe: a repeated object becomes a
+// `{"$ref": "$[...]"}` pointer, and a reader that does not follow them sees
+// authorizers, events and env values that are just pointers.
+describe('$ref pointers', () => {
+  it('follows bracketed, dotted and chained pointers; leaves the rest alone', () => {
+    const root = { a: { 'b"c': [10, { d: 'hit' }] }, e: { f: 'dotted' }, chain: { $ref: '$.e' } };
+    expect(derefStatePointer({ $ref: '$["a"]["b\\"c"][1]["d"]' }, root)).toBe('hit');
+    expect(derefStatePointer({ $ref: '$.e.f' }, root)).toBe('dotted');
+    expect(derefStatePointer({ $ref: '$["chain"]' }, root)).toEqual({ f: 'dotted' });
+    // Not pointers: kept verbatim.
+    expect(derefStatePointer('x', root)).toBe('x');
+    expect(derefStatePointer(['x'], root)).toEqual(['x']);
+    expect(derefStatePointer(null, root)).toBeNull();
+    expect(derefStatePointer({ $ref: 5 }, root)).toEqual({ $ref: 5 });
+    expect(derefStatePointer({ $ref: '$.e', other: 1 }, root)).toEqual({ $ref: '$.e', other: 1 });
+    expect(derefStatePointer({ $ref: '#/definitions/x' }, root)).toEqual({ $ref: '#/definitions/x' });
+    // A dangling or malformed path keeps the pointer.
+    expect(derefStatePointer({ $ref: '$["nope"]["deeper"]' }, root)).toEqual({ $ref: '$["nope"]["deeper"]' });
+    expect(derefStatePointer({ $ref: '$!!' }, root)).toEqual({ $ref: '$!!' });
+  });
+
+  it('tolerates null function and authorizer definitions', () => {
+    const parsed = parser.parse({
+      service: { service: 's', provider: { httpApi: { authorizers: { empty: null } } }, functions: { a: null } },
+    } as never);
+    expect(parsed.functions.map(f => f.fullName)).toEqual(['s-dev-a']);
+    expect(parsed.authorizers.map(a => a.name)).toEqual(['empty']);
+  });
+
+  it('stops on a pointer loop instead of spinning', () => {
+    const root: Record<string, unknown> = {};
+    root.loop = { $ref: '$.loop' };
+    expect(derefStatePointer(root.loop, root)).toEqual({ $ref: '$.loop' });
+  });
+
+  // Dangling pointers (fnEnv, apiEvent, authFn are never defined) are skipped,
+  // never read as data: no "$ref" env var, no "$ref" trigger.
+  it('resolves pointered functions, events, authorizers and env values', () => {
+    const shared = { method: 'get', path: '/shared', authorizer: { name: 'auth' } };
+    const parsed = parser.parse({
+      service: {
+        service: 'orders',
+        provider: {
+          environment: { TABLE: { $ref: '$["service"]["custom"]["tableName"]' } },
+          httpApi: { authorizers: { $ref: '$["service"]["custom"]["authorizers"]' } },
+        },
+        custom: {
+          tableName: 'orders-dev',
+          authorizers: { main: { $ref: '$["service"]["custom"]["mainAuthorizer"]' } },
+          mainAuthorizer: { type: 'request', functionName: 'auth' },
+          sharedEvent: shared,
+        },
+        functions: {
+          a: { events: [{ http: { $ref: '$["service"]["custom"]["sharedEvent"]' } }, { $ref: '$["service"]["custom"]["apiEvent"]' }], environment: { $ref: '$["service"]["custom"]["fnEnv"]' } },
+          auth: { $ref: '$["service"]["custom"]["authFn"]' },
+        },
+      },
+    } as never);
+    expect(parsed.routes.map(r => `${r.method} ${r.path} ${r.authorizerName}`)).toEqual(['GET /shared a:auth']);
+    expect(parsed.authorizers.map(a => [a.name, a.functionName])).toEqual([['main', 'auth'], ['a:auth', 'auth']]);
+    expect(parsed.functions.map(f => f.environment)).toEqual([{ TABLE: 'orders-dev' }, { TABLE: 'orders-dev' }]);
+    expect(parsed.rawEnvironment).toEqual({ a: { TABLE: 'orders-dev' }, auth: { TABLE: 'orders-dev' } });
+    expect(parsed.warnings).toEqual([]);
+  });
+});
+
+describe('authorizer function references (template-aware)', () => {
+  function parseWithArn(ref: unknown, context = {}, extraFunctions: Record<string, unknown> = {}) {
+    return parser.parse({
+      service: {
+        service: 'orders',
+        provider: { httpApi: { authorizers: { main: { functionArn: ref } } } },
+        functions: { 'session-auth': {}, ...extraFunctions },
+      },
+    } as never, context);
+  }
+
+  it('resolves GetAtt (both spellings), Ref and a lone Fn::Sub by the framework naming convention', () => {
+    for (const ref of [
+      { 'Fn::GetAtt': ['SessionDashauthLambdaFunction', 'Arn'] },
+      { 'Fn::GetAtt': 'SessionDashauthLambdaFunction.Arn' },
+      { Ref: 'SessionDashauthLambdaFunction' },
+      { 'Fn::Sub': '${SessionDashauthLambdaFunction.Arn}' },
+      { 'Fn::Sub': ['${SessionDashauthLambdaFunction}', {}] },
+    ]) {
+      const { authorizers, warnings } = parseWithArn(ref);
+      expect(authorizers[0].functionName).toBe('session-auth');
+      expect(warnings).toEqual([]);
+    }
+  });
+
+  it('prefers the template FunctionName, and hands a non-local name through as the arn', () => {
+    const custom = parseWithArn(
+      { 'Fn::GetAtt': ['CustomAuth', 'Arn'] },
+      { lambdaNames: new Map([['CustomAuth', 'orders-dev-session-auth'], ['Elsewhere', 'billing-dev-auth']]) },
+    );
+    expect(custom.authorizers[0].functionName).toBe('session-auth');
+    const elsewhere = parseWithArn({ 'Fn::GetAtt': ['Elsewhere', 'Arn'] }, {
+      lambdaNames: new Map([['Elsewhere', 'billing-dev-auth']]),
+    });
+    expect(elsewhere.authorizers[0]).toEqual(expect.objectContaining({ functionName: undefined, arn: 'billing-dev-auth' }));
+  });
+
+  it('warns about references it cannot resolve', () => {
+    for (const ref of [{ 'Fn::ImportValue': 'x' }, { 'Fn::Sub': 'arn:${AWS::Partition}:x' }, { 'Fn::Sub': 5 }, { 'Fn::GetAtt': [5] }, 'not-an-object'.length]) {
+      const { authorizers, warnings } = parseWithArn(ref);
+      expect(authorizers[0].functionName).toBeUndefined();
+      expect(warnings[0]).toMatch(/^Authorizer "main": function reference .* does not resolve to a Lambda in this service/);
+    }
+  });
+
+  it('names the function after the framework convention', () => {
+    expect(lambdaLogicalIdFor('create-order')).toBe('CreateDashorderLambdaFunction');
+    expect(lambdaLogicalIdFor('get_user')).toBe('GetUnderscoreuserLambdaFunction');
+  });
+});
+
+describe('stage helpers', () => {
+  it('readStateIdentity derives the stack name, honouring provider.stackName', () => {
+    expect(readStateIdentity(null)).toEqual({ serviceName: undefined, stage: 'dev', region: undefined, stackName: undefined });
+    expect(readStateIdentity({ service: { service: 'orders', provider: { stage: 'qa', region: 'eu-west-1' } } } as never))
+      .toEqual({ serviceName: 'orders', stage: 'qa', region: 'eu-west-1', stackName: 'orders-qa' });
+    expect(readStateIdentity({ service: { service: 'orders', provider: { stackName: 'custom-stack', region: '' } } } as never))
+      .toEqual({ serviceName: 'orders', stage: 'dev', region: undefined, stackName: 'custom-stack' });
+  });
+
+  it('stageFromPackageArgs reads --stage X, --stage=X and -s X', () => {
+    expect(stageFromPackageArgs(['package', '--stage', 'prod'])).toBe('prod');
+    expect(stageFromPackageArgs(['package', '--stage=qa'])).toBe('qa');
+    expect(stageFromPackageArgs(['package', '-s', 'local'])).toBe('local');
+    expect(stageFromPackageArgs(['package', '--stage'])).toBeUndefined();
+    expect(stageFromPackageArgs(['package', '--stage', '--verbose'])).toBeUndefined();
+    expect(stageFromPackageArgs(['package'])).toBeUndefined();
+  });
+
+  it('stageMismatchWarnings speaks only for contradicting expectations', () => {
+    expect(stageMismatchWarnings('prod', [
+      { stage: 'dev', source: 'the packaging command (npx sls package --stage dev)' },
+      { stage: 'prod', source: 'the previous registration of this service' },
+      { stage: undefined, source: 'nothing' },
+    ])).toEqual([
+      'The packaged artifacts are for stage "prod", but the packaging command (npx sls package --stage dev) says "dev" — ' +
+      'resource and function names follow the packaged stage. Re-package for the stage you mean (lss register --repackage).',
+    ]);
   });
 });

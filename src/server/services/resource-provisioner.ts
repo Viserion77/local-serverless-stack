@@ -12,7 +12,7 @@ import {
   ListObjectsV2Command,
   DeleteObjectCommand,
 } from '@aws-sdk/client-s3';
-import { SecretsManagerClient, CreateSecretCommand } from '@aws-sdk/client-secrets-manager';
+import { SecretsManagerClient, CreateSecretCommand, DescribeSecretCommand } from '@aws-sdk/client-secrets-manager';
 import { LambdaClient, CreateFunctionCommand, GetFunctionCommand, DeleteFunctionCommand, AddPermissionCommand, UpdateFunctionConfigurationCommand } from '@aws-sdk/client-lambda';
 import { CreateEventSourceMappingCommand, ListEventSourceMappingsCommand, DeleteEventSourceMappingCommand } from '@aws-sdk/client-lambda';
 import {
@@ -35,6 +35,7 @@ import { EngineManager } from '../engine/engine-manager.js';
 import { ConfigManager } from './config-manager.js';
 import { SeedManager } from './seed-manager.js';
 import { resolveGeneratedSecretString } from './secret-value.js';
+import { emptyRuntimeAttributes, type RuntimeAttributes } from './cfn-physical-values.js';
 import type {
   Resource,
   DynamoDBResource,
@@ -42,6 +43,7 @@ import type {
   SNSResource,
   S3Resource,
   SecretsManagerResource,
+  SsmParameterResource,
   EventBusResource,
   EventRuleResource,
   OpenSearchCollectionResource,
@@ -230,6 +232,10 @@ export class ResourceProvisioner {
             break;
           case 'secret':
             await this.createSecret(resource);
+            provisionedCount++;
+            break;
+          case 'ssm-parameter':
+            await this.createSsmParameter(resource);
             provisionedCount++;
             break;
           case 'eventbus':
@@ -648,6 +654,56 @@ export class ResourceProvisioner {
     }
   }
 
+  // AWS::SSM::Parameter → PutParameter on the engine. @aws-sdk/client-ssm is
+  // not a dependency, so this speaks the wire directly: AWS JSON 1.1 with
+  // X-Amz-Target AmazonSSM.PutParameter, the region pinned through a
+  // scope-shaped X-Amz-Credential (the engine router reads {region, service}
+  // from it and never verifies a signature — the same approach as the
+  // OpenSearch explorer's data plane). Idempotent + non-fatal like
+  // createSecret: an existing parameter is kept as is — no Overwrite — so a
+  // value changed locally survives a re-registration (ParameterAlreadyExists
+  // is swallowed); every other failure throws into the caller's warnings.
+  private async createSsmParameter(resource: SsmParameterResource): Promise<void> {
+    if (resource.value === undefined) {
+      throw new Error(
+        `SSM parameter ${resource.name} has no literal Value (an unresolved Ref/GetAtt or none at all) — ` +
+          'set it in the template or with PutParameter',
+      );
+    }
+    const url = new URL('/', EngineManager.getInstance().getConfig().endpoint);
+    url.searchParams.set('X-Amz-Credential', `lss-provisioner/00000000/${this.currentRegion}/ssm/aws4_request`);
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-amz-json-1.1', 'x-amz-target': 'AmazonSSM.PutParameter' },
+      body: JSON.stringify({
+        Name: resource.name,
+        Value: resource.value,
+        Type: resource.parameterType,
+        Description: resource.description,
+        AllowedPattern: resource.allowedPattern,
+        Tier: resource.tier,
+        DataType: resource.dataType,
+        Tags: resource.tags.length > 0 ? resource.tags : undefined,
+      }),
+    });
+    if (response.ok) {
+      console.log(`  ✓ Created SSM parameter: ${resource.name}`);
+      return;
+    }
+    const text = await response.text();
+    let payload: { __type?: string; message?: string } = {};
+    try {
+      payload = JSON.parse(text) as { __type?: string; message?: string };
+    } catch {
+      // Not an AWS JSON error body (a proxy or a crashed listener) — report the status.
+    }
+    if (payload.__type === 'ParameterAlreadyExists') {
+      console.log(`  ⚠ SSM parameter already exists: ${resource.name}`);
+      return;
+    }
+    throw new Error(`${payload.__type ?? `HTTP ${response.status}`}: ${payload.message ?? text}`);
+  }
+
   private async configureS3Notifications(
     serviceName: string,
     bucket: S3Resource,
@@ -1045,14 +1101,20 @@ export const handler = async (event, context) => {
       }
     }
 
-    if (!invokeUrl) {
-      throw new Error(`Cannot create Lambda proxy for ${proxyName}: no invoke URL configured for ${serviceName}`);
-    }
-
-    const proxyCode = this.generateProxyLambdaCode(proxyName, invokeName, invokeUrl);
+    // No invoke port is the normal case on the self engine, not an error: the
+    // engine's dispatcher resolves the target through the in-process function
+    // registry FIRST and only falls back to a record's INVOKE_URL for functions
+    // LSS does not run. So the record is still created — the ESM, the
+    // AddPermission and the rule target all hang off it — just without the
+    // HTTP hop. Refusing here used to leave every queue, stream, bucket
+    // notification and schedule of a service registered without ports silently
+    // unwired.
     const zip = new AdmZip();
-    zip.addFile('index.mjs', Buffer.from(proxyCode, 'utf-8'));
+    zip.addFile('index.mjs', Buffer.from(this.generateProxyLambdaCode(proxyName, invokeName, invokeUrl ?? ''), 'utf-8'));
     const zipBuffer = zip.toBuffer();
+    const variables: Record<string, string> = invokeUrl
+      ? { INVOKE_URL: invokeUrl, FUNCTION_NAME: invokeName }
+      : { FUNCTION_NAME: invokeName };
 
     await this.lambdaClient.send(
       new CreateFunctionCommand({
@@ -1063,17 +1125,14 @@ export const handler = async (event, context) => {
         Code: {
           ZipFile: zipBuffer,
         },
-        Environment: {
-          Variables: {
-            INVOKE_URL: invokeUrl,
-            FUNCTION_NAME: invokeName,
-          },
-        },
+        Environment: { Variables: variables },
         MemorySize: 256,
         Timeout: 60,
       }),
     );
-    console.log(`  ✓ Created Lambda proxy: ${proxyName} -> ${invokeUrl}/2015-03-31/functions/${invokeName}/invocations`);
+    console.log(invokeUrl
+      ? `  ✓ Created Lambda proxy: ${proxyName} -> ${invokeUrl}/2015-03-31/functions/${invokeName}/invocations`
+      : `  ✓ Registered Lambda target: ${proxyName} (no invoke port for ${serviceName} — delivered in-process by the LSS runtime)`);
   }
 
   private convertCamelCaseToKebab(camelCase: string): string {
@@ -1195,6 +1254,57 @@ export const handler = async (event, context) => {
     }
 
     throw new Error(`Event source not found: ${arnRef} (resolved as: ${resourceName})`);
+  }
+
+  /**
+   * The attributes of a service's resources that only exist once the resources
+   * do — queue URLs, stream ARNs (the label is minted at CreateTable), secret
+   * ARNs (random suffix), collection id/ARN/endpoint — for the function
+   * environment pass (cfn-physical-values.ts). Called right after
+   * provisionResources, so the clients already target the service's region.
+   * Best-effort by design: a failed lookup leaves the attribute out and the
+   * environment pass warns about the variable that needed it.
+   */
+  async lookupRuntimeAttributes(resources: Resource[]): Promise<RuntimeAttributes> {
+    const attrs = emptyRuntimeAttributes();
+    const attempt = async (what: string, lookup: () => Promise<void>): Promise<void> => {
+      try {
+        await lookup();
+      } catch (error) {
+        console.warn(`  ⚠ Could not look up ${what}: ${errorMessageOf(error)}`);
+      }
+    };
+    const collections: string[] = [];
+    for (const resource of resources) {
+      if (resource.type === 'sqs') {
+        await attempt(`the URL of queue "${resource.name}"`, async () => {
+          const { QueueUrl } = await this.sqsClient.send(new GetQueueUrlCommand({ QueueName: resource.name }));
+          if (QueueUrl) attrs.queueUrls.set(resource.name, QueueUrl);
+        });
+      } else if (resource.type === 'dynamodb' && resource.streamEnabled) {
+        await attempt(`the stream ARN of table "${resource.name}"`, async () => {
+          const described = await this.dynamoClient.send(new DescribeTableCommand({ TableName: resource.name }));
+          const streamArn = described.Table?.LatestStreamArn;
+          if (streamArn) attrs.streamArns.set(resource.name, streamArn);
+        });
+      } else if (resource.type === 'secret') {
+        await attempt(`the ARN of secret "${resource.name}"`, async () => {
+          const { ARN } = await this.secretsManagerClient.send(new DescribeSecretCommand({ SecretId: resource.name }));
+          if (ARN) attrs.secretArns.set(resource.name, ARN);
+        });
+      } else if (resource.type === 'opensearch') {
+        collections.push(resource.name);
+      }
+    }
+    if (collections.length > 0) {
+      await attempt(`OpenSearch collection(s) ${collections.join(', ')}`, async () => {
+        const { collectionDetails } = await this.openSearchClient.send(new BatchGetCollectionCommand({ names: collections }));
+        for (const c of collectionDetails ?? []) {
+          if (c.name) attrs.collections.set(c.name, { id: c.id, arn: c.arn, endpoint: c.collectionEndpoint });
+        }
+      });
+    }
+    return attrs;
   }
 
   async listAllResources(region?: string): Promise<{

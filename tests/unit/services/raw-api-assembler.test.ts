@@ -531,6 +531,40 @@ describe('collectStackExports', () => {
   });
 });
 
+describe('collectStackExports with a physical-value resolver', () => {
+  it('records any value the resolver can make concrete', () => {
+    const target = new Map<string, string>();
+    collectStackExports(
+      parser,
+      [],
+      {
+        Table: { Value: { Ref: 'OrdersTable' }, Export: { Name: 'orders-dev-TableName' } },
+        Unknown: { Value: { Ref: 'Role' }, Export: { Name: 'orders-dev-Role' } },
+      },
+      'sa-east-1',
+      target,
+      value => ((value as { Ref?: string }).Ref === 'OrdersTable' ? 'orders-dev-orders' : undefined),
+    );
+    expect([...target.entries()]).toEqual([['orders-dev-TableName', 'orders-dev-orders']]);
+  });
+});
+
+describe('unresolvable authorizer target', () => {
+  it('warns once at assembly that routes behind it will answer 500', () => {
+    const { authorizers, warnings } = assemble([
+      integration('Int'),
+      route('R', { authorizationType: 'CUSTOM', authorizerRef: 'Auth' }),
+      route('R2', { routeKey: 'GET /gw/other', path: '/gw/other', authorizationType: 'CUSTOM', authorizerRef: 'Auth' }),
+      authorizer('Auth', { authorizerUri: { 'Fn::GetAtt': ['ElsewhereFn', 'Arn'] } }),
+      permission('Perm'),
+    ]);
+    expect(authorizers).toHaveLength(1);
+    expect(warnings.filter(w => w.startsWith('Raw authorizer'))).toEqual([
+      'Raw authorizer "sessionAuthorizerV2": AuthorizerUri did not reduce to a Lambda ARN (got "ElsewhereFn.Arn") — routes using it will answer 500.',
+    ]);
+  });
+});
+
 describe('end-to-end via CloudFormationParser.parse', () => {
   it('assembles a parsed raw template and dedups it away when state already has the route', () => {
     const template = {

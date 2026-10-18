@@ -50,14 +50,24 @@ export function s3Error(code: string, message: string, status: number): AwsError
   return new AwsError(code, message, { status });
 }
 
+// Where the coverage table lives. An absolute GitHub URL rather than a repo
+// path: the npm package ships `dist/` and `bin/` only (package.json `files`),
+// so a `docs/…` path in an error message pointed at a file the reader of the
+// message does not have.
+export const COVERAGE_DOC_URL =
+  'https://github.com/viserion77/local-serverless-stack/blob/main/docs/SELF_ENGINE.md#coverage';
+
 // Service-level gap (router): the whole service is unknown to the engine, so
-// the fallback proxy WOULD forward it — suggesting fallbackEndpoint is honest
-// here (this error is only reachable when no fallback is configured).
+// the fallback proxy WOULD forward it — suggesting a fallback is honest here
+// (this error is only reachable when none is configured for the service).
+// `operation` is the AWS operation name whenever the wire carries one
+// (X-Amz-Target, Action=); REST protocols only have `METHOD /path`.
 export function notImplemented(service: string, operation: string): AwsError {
   return new AwsError(
     'NotImplemented',
-    `${service}.${operation} is not implemented by the LSS self engine — ` +
-      'see docs/SELF_ENGINE.md#coverage, or set selfEngine.fallbackEndpoint to forward it to another AWS-compatible endpoint',
+    `${service}.${operation} is not implemented by the LSS self engine: the ${service} service is not emulated. ` +
+      `See ${COVERAGE_DOC_URL}, or forward it to another AWS-compatible endpoint with ` +
+      `selfEngine.fallbackEndpoints.${service} (one service) or selfEngine.fallbackEndpoint (every unsupported service)`,
     { status: 400 },
   );
 }
@@ -69,7 +79,7 @@ export function notImplemented(service: string, operation: string): AwsError {
 export function notImplementedOperation(service: string, operation: string): AwsError {
   return new AwsError(
     'NotImplemented',
-    `${service}.${operation} is not implemented by the LSS self engine — see docs/SELF_ENGINE.md#coverage. ` +
+    `${service}.${operation} is not implemented by the LSS self engine — see ${COVERAGE_DOC_URL}. ` +
       `(selfEngine.fallbackEndpoint does not apply here: it forwards whole services the engine does not serve, ` +
       `and ${service} — with its data — is served by the self engine.)`,
     { status: 400 },

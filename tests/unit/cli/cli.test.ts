@@ -229,6 +229,15 @@ describe('bin/cli.js helpers', () => {
       expect(out.selfEnginePort).toBe(15000);
     });
 
+    // The engine port follows serverPort unless set explicitly, as on the
+    // server: moving only the dashboard port must not leave the CLI printing
+    // (and `lss reset` targeting) a 14566 nobody listens on.
+    it('derives selfEnginePort from serverPort when the engine port is not set', () => {
+      expect(loadCli(['node', 'cli.js'], { LSS_DASHBOARD_PORT: '3100' }).getConfig({}).selfEnginePort).toBe(3100);
+      expect(loadCli(['node', 'cli.js'], { LSS_DASHBOARD_PORT: undefined }).getConfig({ serverPort: 3200 }).selfEnginePort)
+        .toBe(3200);
+    });
+
     it('LSS_ENABLE_DYNAMO_PROXY set to anything else disables the proxy', () => {
       const cli = loadCli(['node', 'cli.js'], { LSS_ENABLE_DYNAMO_PROXY: 'no' });
       expect(cli.getConfig({ enableDynamoProxy: true }).enableDynamoProxy).toBe(false);
@@ -294,19 +303,32 @@ describe('bin/cli.js helpers', () => {
       expect(cli.loadConfig()).toEqual({ serverPort: 5000 });
     });
 
-    it('warns and falls back when the explicit --config file is unparseable', () => {
-      mockFs.existsSync.mockImplementation((p: any) => String(p).endsWith('/bad.json'));
+    // Falling back to the cwd/home search used to address whatever instance the
+    // DEFAULT config describes — `lss stop --config ./wrong.json` stopped a
+    // different stack. An explicit file that cannot be used is a hard error.
+    it('exits non-zero when the explicit --config file is unparseable, never searching further', async () => {
+      // Every candidate "exists", so a fallback would have found one.
+      mockFs.existsSync.mockReturnValue(true);
       mockFs.readFileSync.mockReturnValue('not json{');
       const cli = loadCli(['node', 'cli.js', '--config', '/abs/bad.json']);
-      expect(cli.loadConfig()).toEqual({});
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Failed to parse config file'));
+      expect(await expectExit(() => cli.loadConfig())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Could not parse config file /abs/bad.json'));
+      expect(mockFs.readFileSync).toHaveBeenCalledTimes(1);
     });
 
-    it('warns when the explicit --config file does not exist', () => {
-      mockFs.existsSync.mockReturnValue(false);
+    it('exits non-zero when the explicit --config file does not exist', async () => {
+      mockFs.existsSync.mockImplementation((p: any) => !String(p).endsWith('/missing.json'));
       const cli = loadCli(['node', 'cli.js', '--config', '/abs/missing.json']);
-      expect(cli.loadConfig()).toEqual({});
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Config file not found'));
+      expect(await expectExit(() => cli.loadConfig())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Config file not found: /abs/missing.json'));
+      expect(mockFs.readFileSync).not.toHaveBeenCalled();
+    });
+
+    it('applies the same hard error to a missing LSS_CONFIG, and to every command (stop included)', async () => {
+      mockFs.existsSync.mockImplementation((p: any) => !String(p).endsWith('/gone.json'));
+      const cli = loadCli(['node', 'cli.js', 'stop'], { LSS_CONFIG: '/abs/gone.json' });
+      expect(await expectExit(() => cli.stopOrchestrator())).toBe(1);
+      expect(killSpy).not.toHaveBeenCalled();
     });
 
     it('honors LSS_CONFIG env when no --config flag is given', () => {
@@ -1281,6 +1303,66 @@ describe('bin/cli.js helpers', () => {
   // ---------------------------------------------------------------------------
   // clearSeed
   // ---------------------------------------------------------------------------
+  describe('resetEngine', () => {
+    function mockReadline(answer: string) {
+      mockCreateInterface.mockReturnValue({
+        question: jest.fn((_q: string, cb: (a: string) => void) => cb(answer)),
+        close: jest.fn(),
+      });
+    }
+
+    it('exits before any prompt when the orchestrator is not running', async () => {
+      const cli = loadCli(['node', 'cli.js', 'reset']);
+      expect(await expectExit(() => cli.resetEngine())).toBe(1);
+      expect(mockCreateInterface).not.toHaveBeenCalled();
+      expect(mockHttpRequest).not.toHaveBeenCalled();
+    });
+
+    it('POSTs /_lss/reset to the engine port with the confirmation header after the prompt', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      mockFs.readFileSync.mockImplementation((p: any) =>
+        String(p).endsWith('.pid') ? '123' : JSON.stringify({ serverPort: 3100, selfEngine: { port: 14700 } }),
+      );
+      const httpSpy = installHttp({ POST: { status: 200, body: JSON.stringify({ status: 'reset', persistence: false }) } });
+      mockReadline('confirmar');
+      const cli = loadCli(['node', 'cli.js', 'reset']);
+      await cli.resetEngine();
+      const opts = httpSpy.mock.calls[0][0];
+      expect(opts).toMatchObject({ port: 14700, path: '/_lss/reset', method: 'POST' });
+      expect(opts.headers['x-lss-confirm-reset']).toBe('true');
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Engine:    http://localhost:14700'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('every emulator is empty. Run'));
+    });
+
+    it('reports the wiped data directory in persistent mode, skipping the prompt with --yes', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({ POST: { status: 200, body: JSON.stringify({ status: 'reset', persistence: true }) } });
+      const cli = loadCli(['node', 'cli.js', 'reset', '--yes']);
+      await cli.resetEngine();
+      expect(mockCreateInterface).not.toHaveBeenCalled();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('skipping the interactive confirmation'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('data directory was wiped'));
+    });
+
+    it('aborts without a request when the prompt is declined', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({ POST: { status: 200, body: '{}' } });
+      mockReadline('no');
+      const cli = loadCli(['node', 'cli.js', 'reset']);
+      await cli.resetEngine();
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Aborted.'));
+      expect(mockHttpRequest).not.toHaveBeenCalled();
+    });
+
+    it('exits non-zero when the engine refuses the reset', async () => {
+      mockFs.existsSync.mockReturnValue(true);
+      installHttp({ POST: { status: 403, body: '{"message":"local only"}' } });
+      const cli = loadCli(['node', 'cli.js', 'reset', '-y']);
+      expect(await expectExit(() => cli.resetEngine())).toBe(1);
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Reset failed'), 'local only');
+    });
+  });
+
   describe('clearSeed', () => {
     function mockReadline(answer: string) {
       const rl: any = {

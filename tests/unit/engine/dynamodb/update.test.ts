@@ -16,7 +16,7 @@ function baseItem(): AttributeMap {
     scores: { NS: ['1', '2.5'] },
     blobs: { BS: [b64('one')] },
     history: { L: [{ S: 'x' }, { N: '2' }, { S: 'z' }] },
-    profile: { M: { name: { S: 'Ana' }, address: { M: { city: { S: 'SP' } } } } },
+    profile: { M: { nick: { S: 'Ana' }, address: { M: { city: { S: 'SP' } } } } },
   };
 }
 
@@ -46,14 +46,14 @@ describe('applyUpdate: SET', () => {
 
   it('sets nested map keys and #name placeholders', () => {
     const result = up('SET profile.#n = :n, profile.address.zip = :z',
-      { ':n': { S: 'Bia' }, ':z': { S: '01310' } }, { '#n': 'name' });
-    expect(result.profile.M!.name).toEqual({ S: 'Bia' });
+      { ':n': { S: 'Bia' }, ':z': { S: '01310' } }, { '#n': 'nick' });
+    expect(result.profile.M!.nick).toEqual({ S: 'Bia' });
     expect(result.profile.M!.address.M!.zip).toEqual({ S: '01310' });
   });
 
   it('copies from another path (reading the original image)', () => {
-    const result = up('SET copy = profile.name', {});
-    expect(result.copy).toEqual({ S: 'Ana' });
+    const result = up('SET dup = profile.nick', {});
+    expect(result.dup).toEqual({ S: 'Ana' });
   });
 
   it('replaces list elements and appends beyond the end', () => {
@@ -63,12 +63,12 @@ describe('applyUpdate: SET', () => {
 
   it('rejects paths through missing maps, then succeeds once the map exists', () => {
     expectValidation(
-      () => up('SET meta.count = :v', { ':v': { N: '1' } }),
+      () => up('SET meta.tally = :v', { ':v': { N: '1' } }),
       'The document path provided in the update expression is invalid for update',
     );
     const withMap = up('SET meta = :m', { ':m': { M: {} } });
-    const result = applyUpdate('SET meta.count = :v', withMap, { values: { ':v': { N: '1' } } });
-    expect(result.meta).toEqual({ M: { count: { N: '1' } } });
+    const result = applyUpdate('SET meta.tally = :v', withMap, { values: { ':v': { N: '1' } } });
+    expect(result.meta).toEqual({ M: { tally: { N: '1' } } });
   });
 
   it('rejects indexing into non-lists and missing lists', () => {
@@ -79,7 +79,7 @@ describe('applyUpdate: SET', () => {
   it('does exact decimal arithmetic', () => {
     expect(up('SET age = age + :one', { ':one': { N: '1' } }).age).toEqual({ N: '31' });
     expect(up('SET age = age - :n', { ':n': { N: '0.5' } }).age).toEqual({ N: '29.5' });
-    expect(up('SET total = balance + :v', { ':v': { N: '0.2' } }).total).toEqual({ N: '0.3' });
+    expect(up('SET amount = balance + :v', { ':v': { N: '0.2' } }).amount).toEqual({ N: '0.3' });
     expect(up('SET big = :a + :b', { ':a': { N: '9007199254740993' }, ':b': { N: '1' } }).big)
       .toEqual({ N: '9007199254740994' });
   });
@@ -93,13 +93,13 @@ describe('applyUpdate: SET', () => {
       () => up('SET age = ghost + :one', { ':one': { N: '1' } }),
       'The provided expression refers to an attribute that does not exist in the item',
     );
-    expectValidation(() => up('SET copy = ghost', {}), /does not exist in the item/);
+    expectValidation(() => up('SET dup = ghost', {}), /does not exist in the item/);
   });
 
   it('applies if_not_exists', () => {
     expect(up('SET age = if_not_exists(age, :d)', { ':d': { N: '0' } }).age).toEqual({ N: '30' });
-    expect(up('SET views = if_not_exists(views, :d)', { ':d': { N: '0' } }).views).toEqual({ N: '0' });
-    expect(up('SET views = if_not_exists(views, :d) + :one', { ':d': { N: '0' }, ':one': { N: '1' } }).views)
+    expect(up('SET visits = if_not_exists(visits, :d)', { ':d': { N: '0' } }).visits).toEqual({ N: '0' });
+    expect(up('SET visits = if_not_exists(visits, :d) + :one', { ':d': { N: '0' }, ':one': { N: '1' } }).visits)
       .toEqual({ N: '1' });
     expect(up('SET x = if_not_exists(ghost, if_not_exists(age, :d))', { ':d': { N: '0' } }).x).toEqual({ N: '30' });
   });
@@ -145,7 +145,7 @@ describe('applyUpdate: ADD', () => {
   it('adds numbers with decimal exactness', () => {
     expect(up('ADD age :n', { ':n': { N: '2.5' } }).age).toEqual({ N: '32.5' });
     expect(up('ADD balance :n', { ':n': { N: '0.2' } }).balance).toEqual({ N: '0.3' });
-    expect(up('ADD counter :n', { ':n': { N: '5' } }).counter).toEqual({ N: '5' }); // missing → value
+    expect(up('ADD hits :n', { ':n': { N: '5' } }).hits).toEqual({ N: '5' }); // missing → value
   });
 
   it('unions sets without duplicates', () => {
@@ -170,7 +170,7 @@ describe('applyUpdate: ADD', () => {
   });
 
   it('rejects ADD into a missing parent map', () => {
-    expectValidation(() => up('ADD ghost.count :n', { ':n': { N: '1' } }), /invalid for update/);
+    expectValidation(() => up('ADD ghost.tally :n', { ':n': { N: '1' } }), /invalid for update/);
   });
 });
 
@@ -217,17 +217,17 @@ describe('applyUpdate: clause structure and overlap', () => {
 
   it('rejects overlapping document paths', () => {
     expectValidation(
-      () => up('SET profile.name = :v REMOVE profile', { ':v': { S: 'x' } }),
-      'Invalid UpdateExpression: Two document paths overlap with each other; must remove or rewrite one of these paths; path one: [profile, name], path two: [profile]',
+      () => up('SET profile.nick = :v REMOVE profile', { ':v': { S: 'x' } }),
+      'Invalid UpdateExpression: Two document paths overlap with each other; must remove or rewrite one of these paths; path one: [profile, nick], path two: [profile]',
     );
     expectValidation(() => up('SET a = :v, a = :w', { ':v': { S: 'x' }, ':w': { S: 'y' } }), /Two document paths overlap/);
     expectValidation(() => up('SET history[0] = :v REMOVE history[0]', { ':v': { S: 'x' } }), /path one: \[history, \[0\]\]/);
   });
 
   it('allows sibling paths that do not overlap', () => {
-    const result = up('SET history[0] = :v, history[1] = :w REMOVE profile.name', { ':v': { S: 'a' }, ':w': { S: 'b' } });
+    const result = up('SET history[0] = :v, history[1] = :w REMOVE profile.nick', { ':v': { S: 'a' }, ':w': { S: 'b' } });
     expect(result.history.L).toEqual([{ S: 'a' }, { S: 'b' }, { S: 'z' }]);
-    expect(result.profile.M!.name).toBeUndefined();
+    expect(result.profile.M!.nick).toBeUndefined();
   });
 
   it('throws syntax errors with the UpdateExpression label', () => {
@@ -248,7 +248,7 @@ describe('applyUpdate: immutability', () => {
   it('never mutates the input item', () => {
     const item = baseItem();
     const snapshot = JSON.stringify(item);
-    up('SET profile.name = :v, history[0] = :w REMOVE age ADD tags :t DELETE scores :s', {
+    up('SET profile.nick = :v, history[0] = :w REMOVE age ADD tags :t DELETE scores :s', {
       ':v': { S: 'Bia' }, ':w': { S: 'first' }, ':t': { SS: ['x'] }, ':s': { NS: ['1'] },
     }, undefined, item);
     expect(JSON.stringify(item)).toBe(snapshot);
@@ -256,9 +256,9 @@ describe('applyUpdate: immutability', () => {
 
   it('returns an item that does not alias the input', () => {
     const item = baseItem();
-    const result = applyUpdate('SET copy = profile', item, { values: {} });
-    result.copy.M!.name.S = 'mutated';
-    expect(item.profile.M!.name.S).toBe('Ana');
+    const result = applyUpdate('SET dup = profile', item, { values: {} });
+    result.dup.M!.nick.S = 'mutated';
+    expect(item.profile.M!.nick.S).toBe('Ana');
     result.history.L![0].S = 'mutated';
     expect(item.history.L![0].S).toBe('x');
   });

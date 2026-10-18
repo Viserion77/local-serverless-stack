@@ -221,3 +221,12 @@ describe('POST /api/apis/authorizer-cache/clear', () => {
     expect(spy).toHaveBeenCalledWith({ service: 'svc-a', authorizer: 'users:auth' });
   });
 });
+
+describe('GET /api/apis/authorizer-cache', () => {
+  it('reports the authorizer cache counters', async () => {
+    jest.spyOn(AuthorizerService.getInstance(), 'getCacheStats').mockReturnValue({ entries: 2, hits: 5, misses: 3 });
+    const res = await request(appWith()).get('/api/apis/authorizer-cache');
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ entries: 2, hits: 5, misses: 3 });
+  });
+});

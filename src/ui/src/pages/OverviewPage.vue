@@ -58,6 +58,11 @@ async function loadAll() {
   }
 }
 
+const emulatorOnly = computed(() => {
+  const r = resources.value;
+  const inUse = [r.tables, r.queues, r.topics, r.buckets, r.collections ?? []].some(list => list.length > 0);
+  return inUse || config.value?.lambdaRuntime?.enabled === false;
+});
 const runningServices = computed(() => services.value.filter(s => s.status === 'running').length);
 const totalServices = computed(() => services.value.length);
 const lambdasOnline = computed(() => lambdas.value.filter(l => l.status === 'online').length);
@@ -161,8 +166,13 @@ const coveredResources = computed<CoveredResource[]>(() => [
 onMounted(async () => {
   await loadAll();
   // A stack with nothing registered and no dismissed flag is a first run —
-  // hand the user to the guided setup instead of an empty dashboard.
-  if (services.value.length === 0 && !isOnboardingDone()) {
+  // hand the user to the guided setup instead of an empty dashboard. Not when
+  // the stack is used as plain emulators: resources already exist without any
+  // registered service (created straight through the SDK / IaC), or the Lambda
+  // runtime is off, so there is nothing for the service wizard to set up. A
+  // deep link naming a region is a request to look at that region, too.
+  const deepLinked = router.currentRoute.value.query.region !== undefined;
+  if (services.value.length === 0 && !isOnboardingDone() && !emulatorOnly.value && !deepLinked) {
     void router.push('/onboarding');
     return;
   }

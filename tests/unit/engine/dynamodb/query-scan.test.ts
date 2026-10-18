@@ -310,8 +310,8 @@ describe('DynamoDB Query/Scan engine', () => {
     it('supports index sort-key ranges', async () => {
       const page = await query({
         IndexName: 'byStatus',
-        KeyConditionExpression: '#s = :open AND total >= :min',
-        ExpressionAttributeNames: { '#s': 'status' },
+        KeyConditionExpression: '#s = :open AND #t >= :min',
+        ExpressionAttributeNames: { '#s': 'status', '#t': 'total' },
         ExpressionAttributeValues: { ':open': { S: 'OPEN' }, ':min': { N: '20' } },
       });
       expect(page.Items!.map((i) => i.total!.N)).toEqual(['30', '40']);

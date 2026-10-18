@@ -5,10 +5,12 @@
 // proxies keep their ports and contracts; only the process answering changes.
 
 import http from 'http';
+import crypto from 'crypto';
 import { getBindHost } from './bind-host.js';
 import { FunctionRegistry, ServiceEntry } from './function-registry.js';
 import { LambdaRuntimeManager } from './lambda-runtime-manager.js';
 import { AuthorizerService } from './authorizer-service.js';
+import { ConfigManager } from './config-manager.js';
 import { LAMBDA_INVOKE_PATH } from './lambda-invoke-uri.js';
 import {
   IncomingRequest,
@@ -18,6 +20,12 @@ import {
   mapV1Response,
   mapV2Response,
   errorResponse,
+  gatewayErrorResponse,
+  requestIdHeader,
+  answersPreflight,
+  apiFlavor,
+  routeFlavor,
+  safeDecode,
   MappedResponse,
 } from './api-gateway-events.js';
 
@@ -211,9 +219,13 @@ export class GatewayManager {
       chunks.push(chunk as Buffer);
     }
     const url = new URL(req.url || '/', 'http://localhost');
+    // Decode the path exactly once: `path` is the decoded form handed to the
+    // integration, `rawPath` the wire form route matching decodes per segment.
+    // Decoding here AND in the matcher turned `%2525` into `%`.
     return {
       method: req.method || 'GET',
-      path: decodeURIComponent(url.pathname),
+      path: safeDecode(url.pathname),
+      rawPath: url.pathname,
       rawQueryString: url.search.replace(/^\?/, ''),
       headers: req.headers,
       body: chunks.length ? Buffer.concat(chunks) : null,
@@ -234,21 +246,33 @@ export class GatewayManager {
   // -------------------------------------------------------------------------
 
   private async handleApiRequest(serviceName: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
+    // One id per request, generated before anything can fail: it is the
+    // authorizer event's and the integration event's requestContext.requestId
+    // and the x-amzn-RequestId (REST) / apigw-requestid (HTTP API) response
+    // header, so a client-quoted id finds the handler's log line.
+    const requestId = crypto.randomUUID();
     const entry = FunctionRegistry.getInstance().getService(serviceName);
     if (!entry) {
-      return this.send(res, errorResponse(404, 'Not Found'));
+      return this.send(res, errorResponse(404, 'Not Found'), { 'apigw-requestid': requestId });
     }
+    // Flavor for answers with no route to key off; a matched route answers
+    // with its own.
+    const listenerFlavor = apiFlavor(entry.routes);
 
     try {
       const request = await this.readRequest(req);
+      const rawPath = request.rawPath ?? request.path;
       const corsHeaders = this.corsHeaders(entry, request);
 
-      // CORS preflight is answered by the gateway itself (as API Gateway does
-      // for configured CORS), so browsers work without handler involvement.
-      if (request.method.toUpperCase() === 'OPTIONS') {
+      // A CORS preflight is answered by the gateway itself — but only when
+      // CORS is configured (HTTP API: API-wide; REST: on that resource), as
+      // API Gateway does. Otherwise OPTIONS is an ordinary method: it reaches
+      // an OPTIONS/ANY route or is a missing route.
+      if (request.method.toUpperCase() === 'OPTIONS' && answersPreflight(entry.routes, rawPath)) {
         res.writeHead(204, {
           ...corsHeaders,
-          'access-control-allow-methods': this.allowedMethods(entry, request.path),
+          ...requestIdHeader(listenerFlavor, requestId),
+          'access-control-allow-methods': this.allowedMethods(entry, rawPath),
           'access-control-allow-headers': String(request.headers['access-control-request-headers'] || 'Content-Type,Authorization,X-Api-Key'),
           'access-control-max-age': '300',
         });
@@ -256,14 +280,21 @@ export class GatewayManager {
         return;
       }
 
-      const match = matchRoute(entry.routes, request.method, request.path);
+      const match = matchRoute(entry.routes, request.method, rawPath);
       if (!match) {
+        // REST: 403 "Missing Authentication Token" (for an unknown path AND an
+        // unknown method on a known path); HTTP API: 404 "Not Found".
         console.log(`↪️  [${serviceName}:${entry.apiPort}] ${request.method} ${request.path} → no route`);
-        return this.send(res, errorResponse(404, 'Not Found'), corsHeaders);
+        return this.send(res, gatewayErrorResponse('MISSING_AUTHENTICATION_TOKEN', listenerFlavor), {
+          ...corsHeaders, ...requestIdHeader(listenerFlavor, requestId),
+        });
       }
 
       const { route, pathParameters } = match;
+      const flavor = routeFlavor(route);
+      const baseHeaders = { ...corsHeaders, ...requestIdHeader(flavor, requestId) };
       const stage = entry.stage || 'dev';
+      const accountId = ConfigManager.getInstance().getSelfEngineConfig().account;
 
       // Lambda authorizer, when the route has one.
       let authorizer;
@@ -271,11 +302,16 @@ export class GatewayManager {
         const config = FunctionRegistry.getInstance().getAuthorizer(serviceName, route.authorizerName);
         if (!config) {
           console.error(`❌ [${serviceName}] route ${route.method} ${route.path}: authorizer "${route.authorizerName}" is not registered (unsupported type?)`);
-          return this.send(res, errorResponse(500, 'Internal Server Error'), corsHeaders);
+          return this.send(res, gatewayErrorResponse('AUTHORIZER_CONFIGURATION_ERROR', flavor), baseHeaders);
         }
-        const decision = await AuthorizerService.getInstance().authorize(serviceName, stage, route, config, request);
-        if (decision.deniedStatus) {
-          return this.send(res, errorResponse(decision.deniedStatus, decision.message || 'Forbidden'), corsHeaders);
+        const decision = await AuthorizerService.getInstance().authorize(serviceName, stage, route, config, request, {
+          region: entry.region || ConfigManager.getInstance().getRegion(),
+          accountId,
+          pathParameters,
+          requestId,
+        });
+        if (decision.denial) {
+          return this.send(res, gatewayErrorResponse(decision.denial, flavor, { explicitDeny: decision.explicitDeny }), baseHeaders);
         }
         authorizer = decision.authorizer;
       }
@@ -294,23 +330,24 @@ export class GatewayManager {
         }
       }
       if (!fn) {
-        return this.send(res, errorResponse(500, 'Internal Server Error'), corsHeaders);
+        return this.send(res, gatewayErrorResponse('DEFAULT_5XX', flavor), baseHeaders);
       }
 
-      const eventOptions = { request, route, pathParameters, stage, authorizer };
+      const eventOptions = { request, route, pathParameters, stage, authorizer, requestId, accountId };
       const event = route.eventType === 'httpApi' ? buildV2Event(eventOptions) : buildV1Event(eventOptions);
 
       const result = await LambdaRuntimeManager.getInstance().invoke(targetService, fn, event);
       if (!result.ok) {
         console.error(`❌ [${serviceName}] ${request.method} ${request.path} → ${fn.name}: ${result.errorType}: ${result.errorMessage}`);
-        return this.send(res, errorResponse(route.eventType === 'httpApi' ? 500 : 502, 'Internal server error'), corsHeaders);
+        // REST: 502 "Internal server error"; HTTP API: 500 "Internal Server Error".
+        return this.send(res, gatewayErrorResponse('INTEGRATION_FAILURE', flavor), baseHeaders);
       }
 
       const mapped = route.eventType === 'httpApi' ? mapV2Response(result.payload) : mapV1Response(result.payload);
-      return this.send(res, mapped, corsHeaders);
+      return this.send(res, mapped, baseHeaders);
     } catch (err) {
       console.error(`❌ Gateway error for "${serviceName}":`, err);
-      return this.send(res, errorResponse(500, 'Internal Server Error'));
+      return this.send(res, gatewayErrorResponse('DEFAULT_5XX', listenerFlavor), requestIdHeader(listenerFlavor, requestId));
     }
   }
 
@@ -343,14 +380,15 @@ export class GatewayManager {
   private async handleInvokeRequest(serviceName: string, req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
     try {
       const request = await this.readRequest(req);
-      const match = LAMBDA_INVOKE_PATH.exec(request.path);
+      // Match on the wire form: the function name segment is decoded once below.
+      const match = LAMBDA_INVOKE_PATH.exec(request.rawPath ?? request.path);
       if (!match || request.method.toUpperCase() !== 'POST') {
         res.writeHead(404, { 'content-type': 'application/json' });
         res.end(JSON.stringify({ Message: `Unsupported path: ${request.path}` }));
         return;
       }
 
-      const functionName = decodeURIComponent(match[1]);
+      const functionName = safeDecode(match[1]);
       // Scope to this port's service first; fall back to the global registry so
       // any registered function is reachable from any invoke port.
       const resolved = FunctionRegistry.getInstance().resolve(functionName, serviceName);

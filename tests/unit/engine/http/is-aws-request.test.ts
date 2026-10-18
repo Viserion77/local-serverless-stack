@@ -4,6 +4,7 @@
 // `GET /assets/app.js` into a bucket read, and a false negative makes an SDK
 // call render the SPA.
 import { isAwsRequest, type AwsRequestProbe } from '../../../../src/server/engine/http/is-aws-request';
+import { isLoopbackAddress } from '../../../../src/server/engine/http/reset';
 
 function probe(overrides: Partial<AwsRequestProbe> = {}): AwsRequestProbe {
   return {
@@ -26,6 +27,22 @@ describe('routes to the engine', () => {
     expect(isAwsRequest(probe({
       query: new URLSearchParams({ 'X-Amz-Credential': 'test/20260731/us-east-1/s3/aws4_request' }),
     }))).toBe(true);
+  });
+
+  // An unsigned Query call with its parameters in the query string used to be
+  // served the dashboard HTML.
+  it('a Query-protocol call carried in the query string (GET /?Action=…)', () => {
+    expect(isAwsRequest(probe({ query: new URLSearchParams({ Action: 'ListTopics', Version: '2010-03-31' }) })))
+      .toBe(true);
+  });
+
+  it('but not an Action value no AWS operation could have', () => {
+    expect(isAwsRequest(probe({ query: new URLSearchParams({ Action: 'open' }) }))).toBe(false);
+    expect(isAwsRequest(probe({ query: new URLSearchParams({ action: 'ListTopics' }) }))).toBe(false);
+  });
+
+  it('the engine reset endpoint', () => {
+    expect(isAwsRequest(probe({ method: 'POST', path: '/_lss/reset' }))).toBe(true);
   });
 
   it('a JSON-protocol call named by X-Amz-Target', () => {
@@ -117,5 +134,13 @@ describe('routes to the orchestrator', () => {
 
   it('a missing header value', () => {
     expect(isAwsRequest(probe({ headers: { authorization: undefined, 'content-type': undefined } }))).toBe(false);
+  });
+});
+
+describe('isLoopbackAddress (the reset endpoint fence)', () => {
+  it('accepts every loopback shape Node reports and nothing else', () => {
+    expect(['127.0.0.1', '127.5.5.5', '::1', '::ffff:127.0.0.1'].map(isLoopbackAddress)).toEqual([true, true, true, true]);
+    expect(['10.0.0.1', '::ffff:10.0.0.1', 'fe80::1', '', undefined].map(isLoopbackAddress))
+      .toEqual([false, false, false, false, false]);
   });
 });

@@ -9,7 +9,7 @@ function baseItem(): AttributeMap {
     id: { S: 'user-1' },
     age: { N: '30' },
     history: { L: [{ S: 'x' }, { N: '2' }, { M: { deep: { S: 'y' }, other: { S: 'o' } } }] },
-    profile: { M: { name: { S: 'Ana' }, address: { M: { city: { S: 'SP' }, zip: { S: '01310' } } } } },
+    profile: { M: { nick: { S: 'Ana' }, address: { M: { city: { S: 'SP' }, zip: { S: '01310' } } } } },
   };
 }
 
@@ -23,10 +23,10 @@ describe('applyProjection', () => {
   });
 
   it('projects nested map paths preserving structure', () => {
-    expect(project('profile.name')).toEqual({ profile: { M: { name: { S: 'Ana' } } } });
+    expect(project('profile.nick')).toEqual({ profile: { M: { nick: { S: 'Ana' } } } });
     expect(project('profile.address.city')).toEqual({ profile: { M: { address: { M: { city: { S: 'SP' } } } } } });
-    expect(project('profile.name, profile.address.zip')).toEqual({
-      profile: { M: { name: { S: 'Ana' }, address: { M: { zip: { S: '01310' } } } } },
+    expect(project('profile.nick, profile.address.zip')).toEqual({
+      profile: { M: { nick: { S: 'Ana' }, address: { M: { zip: { S: '01310' } } } } },
     });
   });
 
@@ -49,20 +49,20 @@ describe('applyProjection', () => {
 
   it('handles overlapping paths in either order', () => {
     const whole = { profile: baseItem().profile };
-    expect(project('profile, profile.name')).toEqual(whole);
-    expect(project('profile.name, profile')).toEqual(whole);
+    expect(project('profile, profile.nick')).toEqual(whole);
+    expect(project('profile.nick, profile')).toEqual(whole);
     expect(project('id, id')).toEqual({ id: { S: 'user-1' } });
   });
 
   it('resolves #name placeholders', () => {
-    expect(project('#p.#n', { '#p': 'profile', '#n': 'name' })).toEqual({ profile: { M: { name: { S: 'Ana' } } } });
+    expect(project('#p.#n', { '#p': 'profile', '#n': 'nick' })).toEqual({ profile: { M: { nick: { S: 'Ana' } } } });
   });
 
   it('does not alias or mutate the source item', () => {
     const item = baseItem();
     const snapshot = JSON.stringify(item);
-    const result = applyProjection('profile.name, history[0]', item, {});
-    result.profile.M!.name.S = 'mutated';
+    const result = applyProjection('profile.nick, history[0]', item, {});
+    result.profile.M!.nick.S = 'mutated';
     result.history.L![0].S = 'mutated';
     expect(JSON.stringify(item)).toBe(snapshot);
   });
