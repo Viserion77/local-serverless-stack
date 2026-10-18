@@ -7,7 +7,113 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-10-18
+
+**Templates that run on AWS now run on LSS without an adapter.** A real serverless stack names its
+resources with `!Sub '${AWS::StackName}-orders'`, hands them to functions as `!Ref OrdersTable`,
+points its authorizer at `!GetAtt AuthorizerLambdaFunction.Arn` and leans on S3, SQS and API
+Gateway behaving exactly as AWS does. Each of those used to need a workaround outside LSS; this
+release closes them in the engine, the template pipeline, the Lambda runtime and the gateway.
+
+### Added
+
+- **SSM Parameter Store** in the self engine (AWS JSON 1.1, `AmazonSSM.*`): `PutParameter`
+  (`String`/`StringList`/`SecureString`, `Overwrite` versioning, `AllowedPattern`, tiers, `DataType`,
+  AWS name and hierarchy rules), `GetParameter(s)` with `name:version` / `name:label` selectors,
+  `GetParametersByPath` (`Recursive`, filters, paging), `DescribeParameters`, `GetParameterHistory`,
+  `LabelParameterVersion`, `DeleteParameter(s)` and tagging. `AWS::SSM::Parameter` is provisioned at
+  registration. `SecureString` is not encrypted: without `WithDecryption` an opaque deterministic
+  token stands in for the ciphertext.
+- **CloudFormation intrinsics.** A static pass resolves `Parameters` (defaults), pseudo parameters,
+  `Mappings`, `Conditions` and `Fn::Sub` / `Join` / `Select` / `Split` / `If` / `FindInMap` /
+  `GetAZs` / `Base64` / `ImportValue` before any resource is read; a resource whose `Condition` is
+  false is not created. After provisioning, `Ref`/`GetAtt` in function environments become physical
+  values — table name, queue URL, stream ARN, secret ARN with its suffix, collection endpoint.
+  Authorizers given as `!GetAtt X.Arn`, `Ref`, `!Sub '${X.Arn}'` or `$ref` resolve to the local
+  function.
+- **Registration diagnostics**: one summary warning listing the resource types LSS does not
+  provision (with counts), a warning for an authorizer whose target cannot be found, and one for a
+  packaged stage that differs from the packaging command's `--stage` or the previous registration.
+- **`lss reset`** / `POST /_lss/reset` — empties every emulator in place without restarting or
+  rebinding the port, persistent and in-memory alike. Loopback-only and gated on the
+  `x-lss-confirm-reset: true` header (a CORS preflight the route never answers, so a web page cannot
+  trigger it).
+- **S3 bucket configuration**: Put/Get/DeleteBucketEncryption (none → SSE-S3 `AES256`, as AWS since
+  2023), tagging, Public Access Block and policy (stored, not enforced). Objects keep
+  `Content-Disposition`, `Cache-Control`, `Content-Encoding`, `Content-Language`, `Expires` and their
+  SSE headers across PutObject, presigned POST and CopyObject.
+- **SQS**: `ListDeadLetterSourceQueues`, `ListQueues` `MaxResults`/`NextToken` paging, and
+  `MaximumMessageSize` enforced on body plus attributes.
+- **DynamoDB TTL sweep**: expired items are deleted by a 30 s background pass (not only on read),
+  emitting the stream `REMOVE` with the TTL service identity, so TTL-triggered Lambdas fire on
+  their own.
+- **Per-service / per-function runtime overrides**: `serviceRuntime.<svc>.env`, `.execArgv` and
+  `.functions.<fn>.env`. `env` is re-read per invocation, so an edit applies without a restart.
+- **`selfEngine.fallbackEndpoints`** (per service, by SigV4 signing name) and the
+  `LSS_FALLBACK_ENDPOINT` env var for the catch-all.
+- **API Gateway authorizer cache stats** on `GET /api/apis/authorizer-cache`; dashboard `?region=`
+  deep links.
+
+### Changed
+
+- **Lambda authorizer policies are evaluated** against the request's `methodArn` (`*`/`?`
+  wildcards, explicit `Deny` wins). Any `Allow` used to authorize every route. The *policy* is
+  cached — one cache per authorizer per API — and re-evaluated per request.
+- **Authorizer errors map like AWS**: a REST authorizer throwing exactly `Unauthorized` is 401;
+  any other failure, or a response without `policyDocument.Statement`, is 500. HTTP API authorizer
+  failures are 500.
+- **A missing REST route is 403 `Missing Authentication Token`** (HTTP API keeps 404), and `OPTIONS`
+  is answered automatically only when CORS is configured.
+- **SQS dead-lettering happens on the receive** that would push `ApproximateReceiveCount` past
+  `maxReceiveCount`, not the instant the visibility lapses — the message is still in its source
+  queue (and still deletable) in between, as on AWS.
+- **DynamoDB rejects bare reserved words** in expressions (`… reserved keyword: status`), rejects
+  `ConsistentRead` on a GSI, caps Query/Scan pages at 1 MB, and evaluates `a <> :v` as true when
+  `a` is absent.
+- **`selfEngine.port` defaults to `serverPort`**: setting only `serverPort` / `LSS_DASHBOARD_PORT`
+  moves the whole stack instead of also opening 14566.
+- **An explicit `--config` / `LSS_CONFIG` that is missing or unparseable is a hard error** for every
+  command, instead of falling back to the default search (which let `lss stop --config ./wrong.json`
+  stop another instance).
+- **Lambda workers point at the engine**: `AWS_ENDPOINT_URL`, `test` credentials and the service
+  region are set; inherited session tokens, profiles and role credentials are removed. Docs now say
+  `AWS_ENDPOINT_URL`, the variable the SDKs actually read.
+- **Unsupported-service errors come back in the caller's protocol** (AWS JSON, Query XML, S3 XML or
+  rest-json), name `service.Operation` and link to the coverage table on GitHub.
+- `GET /api/config` exposes runtime `env` maps as key names only (`envKeys`).
+- Dependencies refreshed: `source-map-js`, `handlebars`, `proxy-addr`, `shell-quote` /
+  `concurrently`, `brace-expansion`, `adm-zip`, `js-yaml`, `@humanfs/node`,
+  `postcss-selector-parser`, and `undici` / `fast-uri` / `js-yaml` in the examples and fixtures.
+- **The repository is English-only.** English was already the language of the source, but not of
+  everything around it. Translated: the two PRDs (`docs/PRD_SELF_ENGINE.md`,
+  `docs/PRD_API_LAMBDA_EMULATION.md`), the dashboard's UI/UX contract (`src/ui/ui-ux.md`), the
+  archived design proposal, the 2026-07-29 handoff — renamed `REVISAO-2026-07-29.md` →
+  `REVIEW-2026-07-29.md` — plus the `.vscode/tasks.json` labels/details, the last Portuguese line of
+  `TODO.md` and two CHANGELOG entries that quoted CLI output verbatim. What stays non-English is
+  what has to: the `pt-BR`/`es` translation catalogues, the language endonyms
+  (`Português (BR)`, `Español`), the `sa-east-1 — São Paulo` region label, the `confirmar` token
+  `seed:clear` asks the operator to type, and the tests that assert on translated CLI output.
+
 ### Fixed
+
+- **S3 subresources no longer fall through**: `PUT /bucket?encryption` was a 409
+  `BucketAlreadyOwnedByYou`, `DELETE /bucket?tagging` deleted the bucket and `PUT /key?tagging`
+  overwrote the object. Unsupported subresources now answer `NotImplemented` (501).
+- **SQS receipt handles**: deleting with the latest handle after the visibility lapsed answered
+  200 and left the message to redeliver; `VisibilityTimeout: 0` left the message invisible until
+  the queue timer fired, so an immediate peek missed it roughly half the time.
+- **Artifact mode loads ESM bundles with external packages** — ESM ignores `NODE_PATH`, so LSS now
+  links `node_modules` next to the extraction.
+- **Event wiring without an invoke port**: SQS/stream mappings, EventBridge targets and S3
+  notifications failed to wire when a service declared no `invokePort`; they are delivered
+  in-process.
+- **Function env no longer leaks** between functions sharing a worker.
+- **Hot reload ignores LSS's own state**: a `stateDir` / `dataDir` inside a service caused an
+  endless restart loop.
+- **The API Gateway path is decoded once** (`%2525` reached handlers as `%`).
+- **The fallback proxy normalizes a duplicated `Date` header**, which broke the SDK's clock-skew
+  correction from the second call on.
+- **Unsigned `GET /?Action=…`** reached the dashboard instead of the engine.
 
 - **The dashboard's detected language now reaches `<html lang>` at boot.** The locale resolution
   (stored choice → `navigator.languages` → English) already ran on load, but only an explicit switch
@@ -18,18 +124,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the manual switch now share one `applyDocumentLang()`, and `tests/unit/ui/i18n-messages.test.ts`
   pins the whole chain (browser languages, stored override, storage disabled, boot, switch) against
   a stubbed browser.
-
-### Changed
-
-- **The repository is English-only.** English was already the language of the source, but not of
-  everything around it. Translated: the two PRDs (`docs/PRD_SELF_ENGINE.md`,
-  `docs/PRD_API_LAMBDA_EMULATION.md`), the dashboard's UI/UX contract (`src/ui/ui-ux.md`), the
-  archived design proposal, the 2026-07-29 handoff — renamed `REVISAO-2026-07-29.md` →
-  `REVIEW-2026-07-29.md` — plus the `.vscode/tasks.json` labels/details, the last Portuguese line of
-  `TODO.md` and two CHANGELOG entries that quoted CLI output verbatim. What stays non-English is
-  what has to: the `pt-BR`/`es` translation catalogues, the language endonyms
-  (`Português (BR)`, `Español`), the `sa-east-1 — São Paulo` region label, the `confirmar` token
-  `seed:clear` asks the operator to type, and the tests that assert on translated CLI output.
 
 ## [1.0.0] - 2026-07-31
 
@@ -983,6 +1077,8 @@ Not applicable (initial release)
 ---
 
 ## [Unreleased]
+
+## [1.1.0] - 2026-10-18
 
 ### Planned Features
 - S3 bucket provisioning
