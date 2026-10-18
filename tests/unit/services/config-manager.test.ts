@@ -41,6 +41,7 @@ const LSS_ENV_VARS = [
   'LSS_ENGINE',
   'LSS_ENGINE_PORT',
   'LSS_ENGINE_DATA_DIR',
+  'LSS_FALLBACK_ENDPOINT',
   'HOME',
 ];
 
@@ -866,6 +867,49 @@ describe('getRuntimeConfigForService', () => {
   });
 });
 
+describe('getWorkerOverridesForService', () => {
+  function cmWith(config: Record<string, unknown>): CM {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify(config));
+    return freshConfigManager();
+  }
+
+  it('is empty when the service has no override', () => {
+    expect(freshConfigManager().getWorkerOverridesForService('/abs/orders')).toEqual({
+      env: {},
+      execArgv: [],
+      functions: {},
+    });
+  });
+
+  it('returns env, execArgv and per-function env from the matching entry', () => {
+    const cm = cmWith({
+      serviceRuntime: {
+        orders: {
+          env: { LOG_LEVEL: 'debug' },
+          execArgv: ['--enable-source-maps'],
+          functions: { processOrder: { env: { TABLE: 'orders-local' } } },
+        },
+      },
+    });
+    expect(cm.getWorkerOverridesForService('/abs/orders')).toEqual({
+      env: { LOG_LEVEL: 'debug' },
+      execArgv: ['--enable-source-maps'],
+      functions: { processOrder: { env: { TABLE: 'orders-local' } } },
+    });
+  });
+
+  // The fence is on the API, not the read path — but a hand-edited file with
+  // the wrong shape must still not crash a fork or an invocation.
+  it('reads malformed hand-edited values as absent', () => {
+    const cm = cmWith({
+      serviceRuntime: { orders: { env: 'LOG_LEVEL=debug', execArgv: '--inspect', functions: ['processOrder'] } },
+    });
+    expect(cm.getWorkerOverridesForService('/abs/orders')).toEqual({ env: {}, execArgv: [], functions: {} });
+  });
+});
+
 describe('printSummary', () => {
   it('prints a full summary with dynamo proxy + auto package + config file', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
@@ -1020,6 +1064,43 @@ describe('self engine configuration', () => {
     const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
     expect(out).toContain('Self Engine Port:');
     expect(out).not.toContain('Self Engine Fallback');
+  });
+
+  // Forwarding is per service: one emulator for kinesis, another for iam.
+  it('resolves fallbackEndpoints per service next to the default, and prints each', () => {
+    const cm = cmWith({
+      selfEngine: { fallbackEndpoint: 'http://catch-all:4566', fallbackEndpoints: { kinesis: 'http://kinesis:4567' } },
+    });
+    expect(cm.getSelfEngineConfig().fallbackEndpoints).toEqual({ kinesis: 'http://kinesis:4567' });
+    expect(cmWith({}).getSelfEngineConfig().fallbackEndpoints).toEqual({});
+    cm.printSummary();
+    const out = (console.log as jest.Mock).mock.calls.map((c) => c.join(' ')).join('\n');
+    expect(out).toContain('Self Engine Fallback (kinesis): http://kinesis:4567');
+    expect(out).toContain('Self Engine Fallback: http://catch-all:4566');
+  });
+
+  it('LSS_FALLBACK_ENDPOINT sets the default fallback over the file, and is reported as an env override', () => {
+    process.env.LSS_FALLBACK_ENDPOINT = 'http://from-env:4566';
+    const cm = cmWith({ selfEngine: { fallbackEndpoint: 'http://from-file:4566', port: 15000 } });
+    expect(cm.getSelfEngineConfig().fallbackEndpoint).toBe('http://from-env:4566');
+    expect(cm.getSelfEngineConfig().port).toBe(15000);
+    expect(cm.getEnvOverriddenKeys()).toContain('selfEngine');
+  });
+
+  // Moving only the dashboard port used to leave the engine on 14566: a second
+  // listener nobody asked for, colliding with the instance next door.
+  it('the engine port follows serverPort / LSS_DASHBOARD_PORT unless set explicitly', () => {
+    process.env.LSS_DASHBOARD_PORT = '3100';
+    const fromEnv = cmWith({});
+    expect(fromEnv.getSelfEngineConfig().port).toBe(3100);
+    expect(fromEnv.getEngineEndpoint()).toBe('http://localhost:3100');
+    expect(fromEnv.isSingleListener()).toBe(true);
+    delete process.env.LSS_DASHBOARD_PORT;
+
+    expect(cmWith({ serverPort: 3200 }).getSelfEngineConfig().port).toBe(3200);
+    const split = cmWith({ serverPort: 3200, selfEngine: { port: 14566 } });
+    expect(split.getSelfEngineConfig().port).toBe(14566);
+    expect(split.isSingleListener()).toBe(false);
   });
 
 });
@@ -2010,6 +2091,47 @@ describe('updateConfig', () => {
   // map on write — what every other non-object key does — would therefore make
   // `{"A":"v"}` delete B and C, secrets the editor was never shown. These pin
   // the per-variable patch that makes write-only editing possible at all.
+  describe('serviceRuntime worker overrides', () => {
+    it('accepts env, execArgv and per-function env and merges env per variable', () => {
+      const cm = setupFile({ serviceRuntime: { orders: { apiPort: 3001, env: { A: '1', B: '2' } } } });
+      cm.updateConfig({
+        serviceRuntime: {
+          orders: {
+            env: { B: null, C: '3' },
+            execArgv: ['--inspect=127.0.0.1:9230'],
+            functions: { processOrder: { env: { TABLE: 'orders-local' } } },
+          },
+        },
+      });
+      expect(written().serviceRuntime).toEqual({
+        orders: {
+          apiPort: 3001,
+          env: { A: '1', C: '3' },
+          execArgv: ['--inspect=127.0.0.1:9230'],
+          functions: { processOrder: { env: { TABLE: 'orders-local' } } },
+        },
+      });
+    });
+
+    it('fences the worker env and execArgv like the packaging ones', () => {
+      const cm = setupFile({});
+      expect(updateErr(cm, { serviceRuntime: { orders: { env: { NODE_OPTIONS: '--require /tmp/x.js' } } } }).details).toEqual([
+        '"serviceRuntime.orders.env.NODE_OPTIONS" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(updateErr(cm, {
+        serviceRuntime: { orders: { functions: { processOrder: { env: { LD_PRELOAD: '/tmp/x.so' } } } } },
+      }).details).toEqual([
+        '"serviceRuntime.orders.functions.processOrder.env.LD_PRELOAD" cannot be set — it injects code into the packaging process',
+      ]);
+      expect(updateErr(cm, { serviceRuntime: { orders: { execArgv: ['--import=data:text/javascript,0'] } } }).details[0])
+        .toContain('"serviceRuntime.orders.execArgv[0]": "--import=data:text/javascript,0" is not an allowed worker flag');
+      expect(updateErr(cm, { serviceRuntime: { orders: { functions: { processOrder: { timeout: 30 } } } } }).details).toEqual([
+        'unknown config key "serviceRuntime.orders.functions.processOrder.timeout"',
+      ]);
+      expect(fs.writeFileSync).not.toHaveBeenCalled();
+    });
+  });
+
   describe('packageEnv per-variable patch', () => {
     it('sets one variable and leaves the siblings it was never shown', () => {
       const cm = setupFile({ packageEnv: { A: '1', B: '2', C: '3' } });

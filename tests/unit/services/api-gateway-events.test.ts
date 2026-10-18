@@ -10,6 +10,12 @@ import {
   mapV1Response,
   mapV2Response,
   errorResponse,
+  gatewayErrorResponse,
+  requestIdHeader,
+  answersPreflight,
+  apiFlavor,
+  routeFlavor,
+  safeDecode,
   IncomingRequest,
 } from '../../../src/server/services/api-gateway-events';
 import type { HttpRoute } from '../../../src/server/services/serverless-state-parser';
@@ -87,6 +93,24 @@ describe('matchRoute', () => {
     expect(match.pathParameters).toEqual({ id: 'a b' });
   });
 
+  it('decodes the raw path exactly once (%2525 → %25, never %)', () => {
+    const match = matchRoute([route('GET', '/files/{name}')], 'GET', '/files/a%2525b')!;
+    expect(match.pathParameters).toEqual({ name: 'a%25b' });
+    const proxy = matchRoute([route('GET', '/files/{path+}')], 'GET', '/files/x%2525/y%20z')!;
+    expect(proxy.pathParameters).toEqual({ path: 'x%25/y z' });
+  });
+
+  it('an encoded slash stays inside its segment, and literal segments compare decoded', () => {
+    const match = matchRoute([route('GET', '/files/{name}')], 'GET', '/files/a%2Fb')!;
+    expect(match.pathParameters).toEqual({ name: 'a/b' });
+    expect(matchRoute([route('GET', '/hello world')], 'GET', '/hello%20world')).not.toBeNull();
+  });
+
+  it('keeps a malformed escape verbatim instead of throwing', () => {
+    const match = matchRoute([route('GET', '/files/{name}')], 'GET', '/files/%E0%A4%A')!;
+    expect(match.pathParameters).toEqual({ name: '%E0%A4%A' });
+  });
+
   it('rejects segment-count mismatches in both directions', () => {
     // Request longer than the route.
     expect(matchRoute([route('GET', '/users/{id}')], 'GET', '/users/1/2')).toBeNull();
@@ -98,6 +122,13 @@ describe('matchRoute', () => {
     const match = matchRoute([route('GET', '/users')], 'get', '/users')!;
     expect(match.route.path).toBe('/users');
     expect(match.pathParameters).toBeNull();
+  });
+});
+
+describe('safeDecode', () => {
+  it('decodes once and tolerates malformed input', () => {
+    expect(safeDecode('%2525')).toBe('%25');
+    expect(safeDecode('%zz')).toBe('%zz');
   });
 });
 
@@ -239,6 +270,25 @@ describe('buildV1Event', () => {
     }) as any;
     expect(event.headers).toEqual({ present: 'yes' });
     expect(event.multiValueHeaders).toEqual({ present: ['yes'] });
+  });
+
+  it('stamps the given requestId and accountId (shared with the response header)', () => {
+    const options = {
+      request: req({ path: '/users/a b', rawPath: '/users/a%20b' }),
+      route: route('GET', '/users/{id}'),
+      pathParameters: { id: 'a b' },
+      stage: 'dev',
+      requestId: 'req-42',
+      accountId: '111122223333',
+    };
+    const v1 = buildV1Event(options) as any;
+    expect(v1.path).toBe('/users/a b');
+    expect(v1.requestContext).toEqual(expect.objectContaining({ requestId: 'req-42', accountId: '111122223333' }));
+    const v2 = buildV2Event({ ...options, route: route('GET', '/users/{id}', { eventType: 'httpApi' }) }) as any;
+    // HTTP API: rawPath as received, requestContext.http.path decoded.
+    expect(v2.rawPath).toBe('/users/a%20b');
+    expect(v2.requestContext.http.path).toBe('/users/a b');
+    expect(v2.requestContext).toEqual(expect.objectContaining({ requestId: 'req-42', accountId: '111122223333' }));
   });
 });
 
@@ -419,5 +469,74 @@ describe('errorResponse', () => {
     expect(resp.headers).toEqual({ 'content-type': 'application/json' });
     expect(resp.cookies).toEqual([]);
     expect(JSON.parse(resp.body.toString())).toEqual({ message: 'upstream timed out' });
+  });
+});
+
+describe('gateway-generated responses', () => {
+  const parse = (r: { body: Buffer }) => JSON.parse(r.body.toString('utf-8'));
+
+  it('flavors: a route by its event type, a listener as REST only when every route is REST', () => {
+    expect(routeFlavor(route('GET', '/x'))).toBe('rest');
+    expect(routeFlavor(route('GET', '/x', { eventType: 'httpApi' }))).toBe('http');
+    expect(apiFlavor([route('GET', '/a'), route('GET', '/b')])).toBe('rest');
+    expect(apiFlavor([route('GET', '/a'), route('GET', '/b', { eventType: 'httpApi' })])).toBe('http');
+    expect(apiFlavor([])).toBe('http');
+  });
+
+  it('REST defaults, with the x-amzn-ErrorType header', () => {
+    const cases: Array<[Parameters<typeof gatewayErrorResponse>[0], number, unknown, string]> = [
+      ['MISSING_AUTHENTICATION_TOKEN', 403, { message: 'Missing Authentication Token' }, 'MissingAuthenticationTokenException'],
+      ['UNAUTHORIZED', 401, { message: 'Unauthorized' }, 'UnauthorizedException'],
+      ['ACCESS_DENIED', 403, { Message: 'User is not authorized to access this resource' }, 'AccessDeniedException'],
+      ['AUTHORIZER_CONFIGURATION_ERROR', 500, { message: null }, 'AuthorizerConfigurationException'],
+      ['INTEGRATION_FAILURE', 502, { message: 'Internal server error' }, 'InternalServerErrorException'],
+      ['DEFAULT_5XX', 500, { message: 'Internal server error' }, 'InternalServerErrorException'],
+    ];
+    for (const [type, status, body, errorType] of cases) {
+      const res = gatewayErrorResponse(type, 'rest');
+      expect(res.statusCode).toBe(status);
+      expect(parse(res)).toEqual(body);
+      expect(res.headers).toEqual({ 'content-type': 'application/json', 'x-amzn-errortype': errorType });
+      expect(res.cookies).toEqual([]);
+    }
+    expect(parse(gatewayErrorResponse('ACCESS_DENIED', 'rest', { explicitDeny: true })))
+      .toEqual({ Message: 'User is not authorized to access this resource with an explicit deny' });
+  });
+
+  it('HTTP API defaults, without an error-type header', () => {
+    const cases: Array<[Parameters<typeof gatewayErrorResponse>[0], number, string]> = [
+      ['MISSING_AUTHENTICATION_TOKEN', 404, 'Not Found'],
+      ['UNAUTHORIZED', 401, 'Unauthorized'],
+      ['ACCESS_DENIED', 403, 'Forbidden'],
+      ['AUTHORIZER_CONFIGURATION_ERROR', 500, 'Internal Server Error'],
+      ['INTEGRATION_FAILURE', 500, 'Internal Server Error'],
+      ['DEFAULT_5XX', 500, 'Internal Server Error'],
+    ];
+    for (const [type, status, message] of cases) {
+      const res = gatewayErrorResponse(type, 'http', { explicitDeny: true });
+      expect(res.statusCode).toBe(status);
+      expect(parse(res)).toEqual({ message });
+      expect(res.headers).toEqual({ 'content-type': 'application/json' });
+    }
+  });
+
+  it('request id header per flavor', () => {
+    expect(requestIdHeader('rest', 'id-1')).toEqual({ 'x-amzn-requestid': 'id-1' });
+    expect(requestIdHeader('http', 'id-1')).toEqual({ 'apigw-requestid': 'id-1' });
+  });
+});
+
+describe('answersPreflight', () => {
+  it('HTTP API CORS is API-wide: any path preflights once one httpApi route has CORS', () => {
+    const routes = [route('GET', '/a', { eventType: 'httpApi', cors: true })];
+    expect(answersPreflight(routes, '/anything')).toBe(true);
+    expect(answersPreflight([route('GET', '/a', { eventType: 'httpApi' })], '/a')).toBe(false);
+  });
+
+  it('REST CORS is per resource: only a cors route on that path preflights', () => {
+    const routes = [route('POST', '/users/{id}', { cors: true }), route('GET', '/plain')];
+    expect(answersPreflight(routes, '/users/7')).toBe(true);
+    expect(answersPreflight(routes, '/plain')).toBe(false);
+    expect(answersPreflight(routes, '/nowhere')).toBe(false);
   });
 });

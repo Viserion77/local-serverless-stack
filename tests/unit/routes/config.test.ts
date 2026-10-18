@@ -38,6 +38,7 @@ function stub(options: StubOptions = {}) {
     memoryBudgetMb: 128,
     fsync: false,
     fallbackEndpoint: null,
+    fallbackEndpoints: {},
     persistence: true,
     region: 'us-east-1',
   });
@@ -94,7 +95,15 @@ describe('GET /api/config', () => {
           billing: {},
         },
         lambdaRuntime: { watch: true },
-        serviceRuntime: { access: { apiPort: 3001 } },
+        serviceRuntime: {
+          access: { apiPort: 3001 },
+          orders: {
+            execArgv: ['--enable-source-maps'],
+            env: { DB_PASSWORD: 'secret-runtime-env' },
+            functions: { create: { env: { API_KEY: 'secret-fn-env' } }, list: {} },
+          },
+          legacy: null,
+        },
       },
     });
     const res = await request(appWith()).get('/api/config');
@@ -124,7 +133,15 @@ describe('GET /api/config', () => {
         invokePortOffset: 10000,
         invokeHost: '127.0.0.1',
       },
-      serviceRuntime: { access: { apiPort: 3001 } },
+      serviceRuntime: {
+        access: { apiPort: 3001 },
+        orders: {
+          execArgv: ['--enable-source-maps'],
+          envKeys: ['DB_PASSWORD'],
+          functions: { create: { envKeys: ['API_KEY'] }, list: { envKeys: [] } },
+        },
+        legacy: null,
+      },
       secretSeedCount: 1,
       envOverrides: ['region'],
       configPath: '/abs/lss.config.json',
@@ -135,6 +152,8 @@ describe('GET /api/config', () => {
     expect(payload).not.toContain('secret-token');
     expect(payload).not.toContain('super-secret-env');
     expect(payload).not.toContain('secret-npm-token');
+    expect(payload).not.toContain('secret-runtime-env');
+    expect(payload).not.toContain('secret-fn-env');
     expect(payload).not.toContain('secret-seed-value');
   });
 

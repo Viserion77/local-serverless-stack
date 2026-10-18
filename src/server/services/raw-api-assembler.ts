@@ -92,8 +92,16 @@ function buildAuthorizer(
   authRes: ApiAuthorizerResource,
   ctx: ArnResolutionContext,
   localFunctions: RegisteredFunction[],
+  warnings: string[],
 ): AuthorizerConfig {
-  const target = resolveTarget(parser.resolveArnLike(authRes.authorizerUri, ctx).value, localFunctions);
+  const uri = parser.resolveArnLike(authRes.authorizerUri, ctx);
+  // An AuthorizerUri that does not reduce to a function ARN registers an
+  // authorizer with nothing to invoke: every route behind it answers 500.
+  // Said here, once, instead of on every request.
+  if (!uri.resolved) {
+    warnings.push(`Raw authorizer "${authRes.name}": AuthorizerUri did not reduce to a Lambda ARN (got "${uri.value}") — routes using it will answer 500.`);
+  }
+  const target = resolveTarget(uri.value, localFunctions);
   const config: AuthorizerConfig = {
     name: authRes.name,
     type: 'request',
@@ -173,7 +181,7 @@ export function assembleRawApiResources(parser: CloudFormationParser, input: Ass
       } else if ((authRes.authorizerType ?? 'REQUEST').toUpperCase() !== 'REQUEST') {
         warnings.push(`Raw route "${rr.routeKey}": authorizer "${authRes.name}" type "${authRes.authorizerType}" is not supported locally (only REQUEST); registering the route unauthorized.`);
       } else {
-        const config = authByName.get(authRes.name) ?? buildAuthorizer(parser, authRes, ctx, localFunctions);
+        const config = authByName.get(authRes.name) ?? buildAuthorizer(parser, authRes, ctx, localFunctions, warnings);
         if (!authByName.has(authRes.name)) {
           authByName.set(authRes.name, config);
           authorizers.push(config);
@@ -214,15 +222,18 @@ export function assembleRawApiResources(parser: CloudFormationParser, input: Ass
 }
 
 // Records a stack's Outputs[].Export.Name → resolved value into a shared map so
-// a later service's Fn::ImportValue reduces to a concrete ARN. Values that are
+// a later service's Fn::ImportValue reduces to a concrete value. Values that are
 // intrinsics resolvable to a same-template Lambda ARN (QualifiedArn exports) are
-// reduced; unresolvable ones are skipped.
+// reduced; `resolveValue`, when given, covers every other resource reference
+// (a table name, a queue URL — cfn-physical-values.ts); unresolvable ones are
+// skipped.
 export function collectStackExports(
   parser: CloudFormationParser,
   resources: Resource[],
   outputs: Record<string, unknown> | undefined,
   region: string,
   target: Map<string, string>,
+  resolveValue?: (value: unknown) => string | undefined,
 ): void {
   if (!outputs) return;
   const lambdas = mapByLogicalId(resources.filter((r): r is LambdaResource => r.type === 'lambda'));
@@ -233,6 +244,7 @@ export function collectStackExports(
     const name = entry.Export?.Name;
     if (typeof name !== 'string') continue;
     const resolved = parser.resolveArnLike(entry.Value, ctx);
-    if (resolved.resolved) target.set(name, resolved.value);
+    const value = resolved.resolved ? resolved.value : resolveValue?.(entry.Value);
+    if (value !== undefined) target.set(name, value);
   }
 }

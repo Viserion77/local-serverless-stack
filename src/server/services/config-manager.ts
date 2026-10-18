@@ -3,6 +3,7 @@ import os from 'os';
 import path from 'path';
 import { projectCacheSegment } from './project-scope.js';
 import type { SecretSeedValue } from './secret-value.js';
+import { execArgvError } from './worker-runtime.js';
 
 // Symlink-stable spelling of a directory (e.g. macOS /tmp -> /private/tmp),
 // so the project identity matches the plugin's symlink-resolved process.cwd().
@@ -16,8 +17,11 @@ function realpathOrSelf(dir: string): string {
 
 
 export interface SelfEngineConfig {
-  // Front door port. Default 14566 — deliberately outside 4566–4599, which a
-  // real LocalStack install intercepts on some hosts (Docker Desktop/WSL2).
+  // Front door port. Defaults to serverPort (14566 when that is unset too) —
+  // deliberately outside 4566–4599, which a real LocalStack install intercepts
+  // on some hosts (Docker Desktop/WSL2). Following serverPort is what keeps
+  // "move the stack to port N" a one-setting change: an explicit, DIFFERENT
+  // value is the only thing that splits the engine onto its own listener.
   port?: number;
   // Engine persistence root. Defaults to <stateDir>/engine when stateDir is
   // set, else a per-project directory under ~/.lss/projects/.
@@ -32,7 +36,12 @@ export interface SelfEngineConfig {
   fsync?: boolean;
   // Reverse-proxy target for AWS operations the engine does not implement.
   // An escape hatch for a niche gap — see docs/SELF_ENGINE.md "Coverage".
+  // Env: LSS_FALLBACK_ENDPOINT.
   fallbackEndpoint?: string | null;
+  // Per-service fallback targets keyed by SigV4 signing name, e.g.
+  // { "kinesis": "http://localhost:4567" }. A match wins over
+  // `fallbackEndpoint`, which stays the default for every other service.
+  fallbackEndpoints?: Record<string, string>;
 }
 
 // SelfEngineConfig with every default applied.
@@ -44,6 +53,7 @@ export interface ResolvedSelfEngineConfig {
   memoryBudgetMb: number;
   fsync: boolean;
   fallbackEndpoint: string | null;
+  fallbackEndpoints: Record<string, string>;
   persistence: boolean;
   region: string;
 }
@@ -131,6 +141,25 @@ export interface ServiceRuntimeConfig {
   invokePort?: number;
   execution?: LambdaExecutionMode;
   watch?: boolean;
+  // Extra env for every function of the service, over the template's
+  // environment. Read per invocation, so an edit applies to the next call
+  // without a restart (it is also applied at fork for module-init code).
+  env?: Record<string, string>;
+  // Node flags the service's worker is forked with (one worker per service,
+  // so this is service-level only). Takes effect on the next fork.
+  execArgv?: string[];
+  // Per-function overrides keyed by the function's short name (the key under
+  // `functions:`) or its full name. `env` here beats the service-level `env`.
+  functions?: Record<string, { env?: Record<string, string> }>;
+}
+
+// The worker-process overrides resolved for one service (see
+// getWorkerOverridesForService). Kept apart from ResolvedRuntimeConfig, which
+// the registrar/port layer consumes and which has nothing to do with them.
+export interface ResolvedWorkerOverrides {
+  env: Record<string, string>;
+  execArgv: string[];
+  functions: Record<string, { env?: Record<string, string> }>;
 }
 
 // The effective runtime settings resolved for a single service.
@@ -302,7 +331,7 @@ interface ConfigKeySpec {
   // and it is spawned, so the shape check and the flag screen travel together.
   kind: 'port' | 'positiveInt' | 'nonNegativeInt' | 'boolean' | 'string'
     | 'stringRecord' | 'envRecord' | 'packageCommand' | 'packageArgs'
-    | 'stringArray' | 'projectRelativePath' | 'object';
+    | 'stringArray' | 'projectRelativePath' | 'execArgv' | 'object';
   enum?: readonly string[];
   // Fixed-shape object blocks: every subkey is validated against its own spec
   // and unknown subkeys are rejected — a garbage nested value would otherwise
@@ -554,6 +583,16 @@ const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
       invokePort: { kind: 'port' },
       execution: { kind: 'string', enum: ['auto', 'artifact', 'source'] },
       watch: { kind: 'boolean' },
+      // Same fence as packageEnv: the map lands in a forked worker's
+      // environment, where NODE_OPTIONS & co. load code of the caller's choosing.
+      env: { kind: 'envRecord' },
+      execArgv: { kind: 'execArgv' },
+      functions: {
+        kind: 'object',
+        entrySubKeys: {
+          env: { kind: 'envRecord' },
+        },
+      },
     },
   },
   selfEngine: {
@@ -566,6 +605,7 @@ const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
       memoryBudgetMb: { kind: 'positiveInt' },
       fsync: { kind: 'boolean' },
       fallbackEndpoint: { kind: 'string' },
+      fallbackEndpoints: { kind: 'stringRecord' },
     },
   },
   branding: {
@@ -608,7 +648,7 @@ const CONFIG_ENV_OVERRIDES: Record<string, string[]> = {
   packageCommand: ['LSS_PACKAGE_COMMAND'],
   packageTimeoutMs: ['LSS_PACKAGE_TIMEOUT_MS'],
   lambdaRuntime: ['LSS_LAMBDA_RUNTIME', 'LSS_LAMBDA_EXECUTION', 'LSS_LAMBDA_WATCH', 'LSS_INVOKE_HOST'],
-  selfEngine: ['LSS_ENGINE_PORT', 'LSS_ENGINE_DATA_DIR'],
+  selfEngine: ['LSS_ENGINE_PORT', 'LSS_ENGINE_DATA_DIR', 'LSS_FALLBACK_ENDPOINT'],
 };
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -774,6 +814,10 @@ function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string
       }
       return null;
     }
+    // Handed to fork() as the worker's execArgv — an allowlist, because a
+    // single `--import`/`--require` is code execution. See execArgvError().
+    case 'execArgv':
+      return execArgvError(key, value);
     case 'stringRecord':
       return isPlainObject(value) && Object.values(value).every(v => typeof v === 'string')
         ? null
@@ -1038,6 +1082,14 @@ export class ConfigManager {
         dataDir: process.env.LSS_ENGINE_DATA_DIR,
       };
     }
+    // Point unsupported services at another emulator per run (a CI job that
+    // starts one next to LSS) without writing it into the shared config file.
+    if (process.env.LSS_FALLBACK_ENDPOINT) {
+      this.config.selfEngine = {
+        ...this.config.selfEngine,
+        fallbackEndpoint: process.env.LSS_FALLBACK_ENDPOINT,
+      };
+    }
   }
 
   getConfig(): LSSConfig {
@@ -1279,19 +1331,35 @@ export class ConfigManager {
     };
   }
 
+  /**
+   * The worker-process overrides for one service: `serviceRuntime.<svc>.env`,
+   * `.execArgv` and `.functions`. Looked up with the same key spellings as the
+   * rest of the entry. Never throws on a malformed hand-edited value — a
+   * non-object env or non-array execArgv reads as absent.
+   */
+  getWorkerOverridesForService(servicePath: string): ResolvedWorkerOverrides {
+    const perService: ServiceRuntimeConfig = this.lookupServiceEntry(this.config.serviceRuntime, servicePath);
+    return {
+      env: isPlainObject(perService.env) ? { ...perService.env } : {},
+      execArgv: Array.isArray(perService.execArgv) ? [...perService.execArgv] : [],
+      functions: isPlainObject(perService.functions) ? { ...perService.functions } : {},
+    };
+  }
+
   getSelfEngineConfig(): ResolvedSelfEngineConfig {
     const selfEngine = this.config.selfEngine ?? {};
     const stateDir = this.getStateDir();
     const rawDataDir = selfEngine.dataDir
       ?? (stateDir ? path.join(stateDir, 'engine') : this.homeStateDir('engine'));
     return {
-      port: selfEngine.port ?? DEFAULT_PORT,
+      port: this.getSelfEnginePort(),
       dataDir: path.isAbsolute(rawDataDir) ? rawDataDir : path.resolve(process.cwd(), rawDataDir),
       account: selfEngine.account ?? '000000000000',
       idleUnloadMs: selfEngine.idleUnloadMs ?? 300000,
       memoryBudgetMb: selfEngine.memoryBudgetMb ?? 128,
       fsync: selfEngine.fsync ?? false,
       fallbackEndpoint: selfEngine.fallbackEndpoint ?? null,
+      fallbackEndpoints: selfEngine.fallbackEndpoints ?? {},
       persistence: this.isPersistence(),
       region: this.getRegion(),
     };
@@ -1310,16 +1378,25 @@ export class ConfigManager {
   // which would also resolve the data dir — needless work for a URL, and it
   // drags the project-root lookup into every caller that only wants an endpoint.
   getEngineEndpoint(): string {
-    return `http://localhost:${this.config.selfEngine?.port ?? DEFAULT_PORT}`;
+    return `http://localhost:${this.getSelfEnginePort()}`;
+  }
+
+  // The engine port follows serverPort unless set explicitly. It used to
+  // default to 14566 on its own, so `LSS_DASHBOARD_PORT=3100` alone (or a
+  // config with only `serverPort`) silently split the stack: the dashboard
+  // moved to 3100 and a second listener still opened 14566 — colliding with
+  // the instance that a second stack was meant to run beside.
+  private getSelfEnginePort(): number {
+    return this.config.selfEngine?.port ?? this.getServerPort();
   }
 
   /**
    * True when the orchestrator and the engine share one listener — the default,
-   * since both ports default to the same value. Give them different values to
-   * go back to two listeners.
+   * since the engine port follows serverPort. Give `selfEngine.port` a
+   * different value to go back to two listeners.
    */
   isSingleListener(): boolean {
-    return this.getServerPort() === (this.config.selfEngine?.port ?? DEFAULT_PORT);
+    return this.getServerPort() === this.getSelfEnginePort();
   }
 
   getConfigPath(): string {
@@ -1418,13 +1495,16 @@ export class ConfigManager {
       // Only the block's OWN settings: region/persistence are tracked under
       // their own keys above, so one change never flags two entries.
       selfEngine: {
-        port: selfEngine.port,
+        // The explicit value, not the resolved one: an unset engine port
+        // follows serverPort, and that change is already tracked there.
+        port: this.config.selfEngine?.port,
         dataDir: selfEngine.dataDir,
         account: selfEngine.account,
         idleUnloadMs: selfEngine.idleUnloadMs,
         memoryBudgetMb: selfEngine.memoryBudgetMb,
         fsync: selfEngine.fsync,
         fallbackEndpoint: selfEngine.fallbackEndpoint,
+        fallbackEndpoints: selfEngine.fallbackEndpoints,
       },
     };
   }
@@ -1603,6 +1683,9 @@ export class ConfigManager {
     const selfEngine = this.getSelfEngineConfig();
     console.log(`  Self Engine Port: ${selfEngine.port} (http://localhost:${selfEngine.port})`);
     console.log(`  Self Engine Data Dir: ${selfEngine.dataDir}`);
+    for (const [service, endpoint] of Object.entries(selfEngine.fallbackEndpoints)) {
+      console.log(`  Self Engine Fallback (${service}): ${endpoint}`);
+    }
     if (selfEngine.fallbackEndpoint) {
       console.log(`  Self Engine Fallback: ${selfEngine.fallbackEndpoint}`);
     }

@@ -1409,7 +1409,7 @@ describe('fixtures (end-to-end)', () => {
     // serverless-state as the registrar would have cached it: nine functions,
     // each carrying the same provider-level environment block.
     const functions = (resources.filter(r => r.type === 'lambda') as LambdaResource[]).map(lambda =>
-      registeredFunction(lambda.name.replace('sample-microservice-dev-', ''), lambda.name, lambda.environment));
+      registeredFunction(lambda.name.replace('sample-microservice-dev-', ''), lambda.name, lambda.environment as Record<string, string>));
 
     const graph = buildServiceGraph({
       serviceName: 'sample-microservice',

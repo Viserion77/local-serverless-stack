@@ -248,6 +248,7 @@ describe('health endpoints', () => {
         events: 'available',
         sts: 'available',
         secretsmanager: 'available',
+        ssm: 'available',
         aoss: 'available',
       },
       edition: 'self',
@@ -745,6 +746,271 @@ describe('fallback proxy', () => {
       expect(String(res.json.message)).toContain('fallbackEndpoint');
     } finally {
       await dead.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Query protocol in the query string
+// ---------------------------------------------------------------------------
+
+describe('query-string Action routing', () => {
+  it('routes an unsigned GET /?Action= to SNS, and GetCallerIdentity to STS', async () => {
+    const sns = await request(engine.port, { method: 'GET', path: '/?Action=ListTopics&Version=2010-03-31' });
+    expect(sns.status).toBe(200);
+    expect(engine.sns.calls[0].action).toBe('ListTopics');
+    expect(engine.sns.calls[0].params).toMatchObject({ Action: 'ListTopics', Version: '2010-03-31' });
+    await request(engine.port, { method: 'GET', path: '/?Action=GetCallerIdentity' });
+    expect(engine.sts.calls[0].action).toBe('GetCallerIdentity');
+  });
+
+  it('leaves non-root paths and non-PascalCase values to S3', async () => {
+    await request(engine.port, { method: 'GET', path: '/acme-bucket/key.txt?Action=Download' });
+    await request(engine.port, { method: 'GET', path: '/?Action=list' });
+    expect(engine.s3.requests.map(r => r.rawPath)).toEqual(['/acme-bucket/key.txt', '/']);
+    expect(engine.sns.calls).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The NotImplemented answer speaks the caller's protocol
+// ---------------------------------------------------------------------------
+
+describe('unsupported services answer in the caller protocol', () => {
+  const COVERAGE_URL = 'https://github.com/viserion77/local-serverless-stack/blob/main/docs/SELF_ENGINE.md#coverage';
+
+  it('AWS JSON (X-Amz-Target): JSON 1.1 framing, named service.Operation, GitHub doc link', async () => {
+    const res = await request(engine.port, {
+      headers: {
+        authorization: auth('kinesis'),
+        'x-amz-target': 'Kinesis_20131202.PutRecord',
+        'content-type': 'application/x-amz-json-1.1',
+      },
+      body: '{}',
+    });
+    expect(res.status).toBe(400);
+    expect(res.headers['content-type']).toBe('application/x-amz-json-1.1');
+    expect(res.json.__type).toBe('NotImplemented');
+    expect(res.json.message).toContain('kinesis.PutRecord is not implemented');
+    expect(res.json.message).toContain(COVERAGE_URL);
+    expect(res.json.message).toContain('selfEngine.fallbackEndpoints.kinesis');
+  });
+
+  it('rest-json (API Gateway): JSON with __type and x-amzn-ErrorType — never XML', async () => {
+    const res = await request(engine.port, {
+      method: 'GET',
+      path: '/restapis',
+      headers: { authorization: auth('apigateway') },
+    });
+    expect(res.status).toBe(400);
+    expect(res.headers['content-type']).toBe('application/json');
+    expect(res.headers['x-amzn-errortype']).toBe('NotImplemented');
+    expect(res.json).toMatchObject({ __type: 'NotImplemented', code: 'NotImplemented' });
+    expect(res.json.message).toContain('apigateway.GET /restapis is not implemented');
+  });
+
+  it('Query (IAM form post): ErrorResponse XML naming the Action', async () => {
+    const res = await request(engine.port, {
+      headers: { authorization: auth('iam'), 'content-type': 'application/x-www-form-urlencoded' },
+      body: 'Action=CreateRole&RoleName=acme',
+    });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain('<ErrorResponse');
+    expect(res.text).toContain('<Code>NotImplemented</Code>');
+    expect(res.text).toContain('iam.CreateRole is not implemented');
+  });
+
+  it('rest-xml (Route 53): the S3-style XML error', async () => {
+    const res = await request(engine.port, {
+      method: 'GET',
+      path: '/2013-04-01/hostedzone',
+      headers: { authorization: auth('route53') },
+    });
+    expect(res.status).toBe(400);
+    expect(res.text).toContain('<Error>');
+    expect(res.text).toContain('route53.GET /2013-04-01/hostedzone');
+  });
+
+  it('an unsigned unknown target names its prefix and keeps the JSON 1.0 default', async () => {
+    const res = await request(engine.port, { headers: { 'x-amz-target': 'AmazonAcme.DoThing' }, body: '{}' });
+    expect(res.headers['content-type']).toBe('application/x-amz-json-1.0');
+    expect(res.json.message).toContain('AmazonAcme.DoThing is not implemented');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Per-service fallbacks and header hygiene
+// ---------------------------------------------------------------------------
+
+describe('per-service fallback endpoints', () => {
+  let stubs: { server: http.Server; url: string; hits: string[] }[];
+
+  async function startStub(name: string, rawHeaders: Record<string, string | string[]> = {}) {
+    const hits: string[] = [];
+    const server = http.createServer((sreq, sres) => {
+      sreq.resume();
+      sreq.on('end', () => {
+        hits.push(String(sreq.url));
+        for (const [key, value] of Object.entries(rawHeaders)) sres.setHeader(key, value);
+        sres.setHeader('x-stub', name);
+        sres.end('{}');
+      });
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    const stub = { server, url: `http://127.0.0.1:${(server.address() as AddressInfo).port}`, hits };
+    stubs.push(stub);
+    return stub;
+  }
+
+  beforeEach(() => {
+    stubs = [];
+  });
+  afterEach(async () => {
+    await Promise.all(stubs.map(s => new Promise<void>(resolve => s.server.close(() => resolve()))));
+  });
+
+  const kinesisCall = { headers: { authorization: auth('kinesis'), 'x-amz-target': 'Kinesis_20131202.PutRecord' }, body: '{}' };
+
+  it('routes a service to its own endpoint, ahead of the default', async () => {
+    const kinesis = await startStub('kinesis');
+    const fallback = await startStub('default');
+    const proxied = await startEngine({ fallbackEndpoint: fallback.url, fallbackEndpoints: { kinesis: kinesis.url } });
+    try {
+      expect((await request(proxied.port, kinesisCall)).headers['x-stub']).toBe('kinesis');
+      const iam = await request(proxied.port, {
+        headers: { authorization: auth('iam'), 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'Action=ListRoles',
+      });
+      expect(iam.headers['x-stub']).toBe('default');
+    } finally {
+      await proxied.close();
+    }
+  });
+
+  it('without a default, only the listed services are forwarded; legacy SQS uses the sqs entry', async () => {
+    const legacy = await startStub('legacy-sqs');
+    const proxied = await startEngine({ fallbackEndpoints: { sqs: legacy.url } });
+    try {
+      expect((await request(proxied.port, kinesisCall)).json.__type).toBe('NotImplemented');
+      const res = await request(proxied.port, {
+        path: '/000000000000/acme-queue',
+        headers: { 'content-type': 'application/x-www-form-urlencoded' },
+        body: 'Action=SendMessage&MessageBody=hi',
+      });
+      expect(res.headers['x-stub']).toBe('legacy-sqs');
+      expect(legacy.hits).toEqual(['/000000000000/acme-queue']);
+    } finally {
+      await proxied.close();
+    }
+  });
+
+  it('collapses a duplicated Date (and other single-valued headers) and dedupes repeats', async () => {
+    const stub = await startStub('dupes', {
+      Date: ['Sat, 17 Oct 2026 10:00:00 GMT', 'Sat, 17 Oct 2026 10:00:01 GMT'],
+      'Content-Type': ['application/x-amz-json-1.1', 'application/x-amz-json-1.1'],
+      'X-Repeated': ['same', 'same'],
+      'Set-Cookie': ['a=1', 'b=2'],
+    });
+    const proxied = await startEngine({ fallbackEndpoint: stub.url });
+    try {
+      const res = await request(proxied.port, kinesisCall);
+      expect(res.headers['date']).toBe('Sat, 17 Oct 2026 10:00:00 GMT');
+      expect(res.headers['content-type']).toBe('application/x-amz-json-1.1');
+      expect(res.headers['x-repeated']).toBe('same');
+      expect(res.headers['set-cookie']).toEqual(['a=1', 'b=2']);
+    } finally {
+      await proxied.close();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// POST /_lss/reset fencing (the reset itself is proven in wire-engine-reset)
+// ---------------------------------------------------------------------------
+
+describe('reset endpoint', () => {
+  async function withResetEngine(
+    onReset: (() => Promise<void>) | undefined,
+    remoteAddress?: string,
+  ): Promise<{ port: number; close(): Promise<void> }> {
+    const handler = createEngineRequestHandler({ ctx: makeCtx(), emulators: [], onReset });
+    const server = http.createServer((req, res) => {
+      if (remoteAddress) Object.defineProperty(req.socket, 'remoteAddress', { value: remoteAddress });
+      handler(req, res);
+    });
+    await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
+    return {
+      port: (server.address() as AddressInfo).port,
+      close: () => new Promise<void>(resolve => server.close(() => resolve())),
+    };
+  }
+  const confirmed = { method: 'POST', path: '/_lss/reset', headers: { 'x-lss-confirm-reset': 'true' } };
+
+  it('runs onReset and reports the persistence mode', async () => {
+    const onReset = jest.fn(async () => undefined);
+    const e = await withResetEngine(onReset);
+    try {
+      const res = await request(e.port, confirmed);
+      expect(res.status).toBe(200);
+      expect(res.json).toEqual({ status: 'reset', engine: 'self', persistence: false });
+      expect(onReset).toHaveBeenCalledTimes(1);
+    } finally {
+      await e.close();
+    }
+  });
+
+  it('answers 404 when the engine exposes no reset, 405 for other methods, 400 without the header', async () => {
+    const none = await withResetEngine(undefined);
+    const onReset = jest.fn(async () => undefined);
+    const e = await withResetEngine(onReset);
+    try {
+      expect((await request(none.port, confirmed)).status).toBe(404);
+      const get = await request(e.port, { ...confirmed, method: 'GET' });
+      expect([get.status, get.json.__type]).toEqual([405, 'MethodNotAllowed']);
+      const preflight = await request(e.port, { ...confirmed, method: 'OPTIONS' });
+      expect(preflight.status).toBe(405);
+      expect(preflight.headers['access-control-allow-origin']).toBeUndefined();
+      const bare = await request(e.port, { method: 'POST', path: '/_lss/reset', body: '{}' });
+      expect([bare.status, bare.json.__type]).toEqual([400, 'MissingConfirmation']);
+      expect(onReset).not.toHaveBeenCalled();
+    } finally {
+      await none.close();
+      await e.close();
+    }
+  });
+
+  it('refuses a non-loopback peer with 403, and accepts IPv4-mapped loopback', async () => {
+    const onReset = jest.fn(async () => undefined);
+    const lan = await withResetEngine(onReset, '192.168.1.20');
+    const mapped = await withResetEngine(onReset, '::ffff:127.0.0.1');
+    try {
+      const res = await request(lan.port, confirmed);
+      expect([res.status, res.json.__type]).toEqual([403, 'AccessDeniedException']);
+      expect(onReset).not.toHaveBeenCalled();
+      expect((await request(mapped.port, confirmed)).status).toBe(200);
+    } finally {
+      await lan.close();
+      await mapped.close();
+    }
+  });
+
+  it('answers 500 InternalFailure when the reset itself fails', async () => {
+    const errSpy = jest.spyOn(console, 'error').mockImplementation(() => undefined);
+    const failing = await withResetEngine(async () => {
+      throw new Error('disk full');
+    });
+    const failingRaw = await withResetEngine(async () => {
+      throw 'raw';
+    });
+    try {
+      const res = await request(failing.port, confirmed);
+      expect([res.status, res.json.__type]).toEqual([500, 'InternalFailure']);
+      expect(res.json.message).toContain('disk full');
+      expect((await request(failingRaw.port, confirmed)).json.message).toContain('raw');
+    } finally {
+      errSpy.mockRestore();
+      await failing.close();
+      await failingRaw.close();
     }
   });
 });

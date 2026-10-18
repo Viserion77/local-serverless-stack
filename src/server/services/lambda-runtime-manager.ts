@@ -16,6 +16,12 @@ import { FunctionRegistry, ServiceEntry } from './function-registry.js';
 import { resolveArtifacts } from './artifact-resolver.js';
 import type { RegisteredFunction } from './serverless-state-parser.js';
 import { InvocationActivity } from './invocation-activity.js';
+import {
+  buildWorkerEnv,
+  linkArtifactNodeModules,
+  resolveInvocationEnv,
+  runtimeMismatchWarning,
+} from './worker-runtime.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -152,6 +158,11 @@ export class LambdaRuntimeManager {
       loaded: new Set(),
     };
     this.runtimes.set(entry.name, runtime);
+
+    // Handlers run on the orchestrator's own Node, whatever `runtime:` the
+    // template declares — say so once per (re-)registration when they differ.
+    const mismatch = runtimeMismatchWarning(entry.name, entry.functions.map(fn => fn.runtime), process.version);
+    if (mismatch) console.warn(mismatch);
 
     // Lazy (default): resolve where the handlers live now — so an unusable
     // artifact still fails loudly at registration — but leave the fork to the
@@ -332,6 +343,10 @@ export class LambdaRuntimeManager {
 
     const invokeId = crypto.randomUUID();
     const timeoutSeconds = fn.timeout || 6;
+    // Read per invocation (not cached at fork) so a `serviceRuntime` env edit
+    // reaches the next call without a worker restart.
+    const overrides = this.configManager.getWorkerOverridesForService(runtime.entry.root);
+    const fnOverride = overrides.functions[fn.name] ?? overrides.functions[fn.fullName];
     const startedAt = Date.now();
 
     const result = await new Promise<InvokeResult>(resolve => {
@@ -355,8 +370,8 @@ export class LambdaRuntimeManager {
         serviceRoot: runtime.entry.root,
         timeoutSeconds,
         memorySize: fn.memorySize,
-        region: runtime.entry.region || 'us-east-1',
-        env: fn.environment,
+        region: this.regionOf(runtime.entry),
+        env: resolveInvocationEnv(fn.environment, overrides.env, fnOverride?.env),
         event: event ?? {},
       });
     });
@@ -414,19 +429,21 @@ export class LambdaRuntimeManager {
     runtime.error = undefined;
 
     const workerPath = path.join(__dirname, '../runtime/runtime-worker.js');
+    const overrides = this.configManager.getWorkerOverridesForService(runtime.entry.root);
     const worker = fork(workerPath, [], {
       cwd: runtime.entry.root,
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-      env: {
-        ...process.env,
-        // Bundled artifacts with externalized deps still resolve against the
-        // service's own node_modules.
-        NODE_PATH: [
-          path.join(runtime.entry.root, 'node_modules'),
-          process.env.NODE_PATH || '',
-        ].filter(Boolean).join(path.delimiter),
-      },
-      execArgv: [],
+      // Pointed at the engine with dummy credentials, never at whatever account
+      // the orchestrator's shell happens to be logged into — see buildWorkerEnv.
+      env: buildWorkerEnv(process.env, {
+        region: this.regionOf(runtime.entry),
+        engineEndpoint: this.configManager.getEngineEndpoint(),
+        serviceRoot: runtime.entry.root,
+        serviceEnv: overrides.env,
+      }),
+      // Not the orchestrator's own execArgv: a `--inspect` there would make
+      // every worker fight for the same debugger port.
+      execArgv: overrides.execArgv,
     });
 
     // Per-invocation output arrives via IPC (the worker captures it at the
@@ -518,7 +535,7 @@ export class LambdaRuntimeManager {
       if (artifacts.length === 0) {
         throw new Error(`execution mode is "artifact" but no packaged zip was found under ${entry.root}/.serverless — run 'serverless package' first`);
       }
-      return { handlerRoot: this.extractArtifacts(entry.name, artifacts), resolvedMode: 'artifact' };
+      return { handlerRoot: this.extractArtifacts(entry, artifacts), resolvedMode: 'artifact' };
     }
     return { handlerRoot: entry.root, resolvedMode: 'source' };
   }
@@ -535,7 +552,8 @@ export class LambdaRuntimeManager {
   // that both own a service called "api" shared one directory — and the
   // stale-extraction rmSync below would delete the code the other instance's
   // worker was running from.
-  private extractArtifacts(serviceName: string, artifacts: string[]): string {
+  private extractArtifacts(entry: ServiceEntry, artifacts: string[]): string {
+    const serviceName = entry.name;
     const stamp = artifacts
       .map(p => {
         const stat = fs.statSync(p);
@@ -557,7 +575,17 @@ export class LambdaRuntimeManager {
         new AdmZip(artifact).extractAllTo(targetDir, true);
       }
     }
+    // Re-checked on every resolution, reused extraction included: the links are
+    // cheap to verify and the service's node_modules may have appeared (or
+    // moved) since the zip was first extracted.
+    linkArtifactNodeModules(targetDir, entry.root);
     return targetDir;
+  }
+
+  // The service's region, else the stack's — never a hardcoded us-east-1 that
+  // would disagree with where the provisioner created the service's resources.
+  private regionOf(entry: ServiceEntry): string {
+    return entry.region || this.configManager.getRegion();
   }
 
   private errorResult(errorType: string, errorMessage: string, durationMs: number): InvokeResult {

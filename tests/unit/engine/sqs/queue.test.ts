@@ -151,6 +151,17 @@ describe('SqsQueue state machine', () => {
       expect(recv(queue, 1)[0].body).toBe('A2');
     });
 
+    test('deleting one of two in-flight messages keeps the group locked', () => {
+      const queue = new SqsQueue('orders.fifo');
+      fifoSend(queue, 'A1', 'A');
+      fifoSend(queue, 'A2', 'A');
+      fifoSend(queue, 'A3', 'A');
+      const [a1] = recv(queue, 2);
+      expect(queue.deleteMessage(a1.receiptHandle as string)).toBe('deleted');
+      // A2 is still in flight, so A3 must wait.
+      expect(queue.hasDeliverable(RETENTION)).toBe(false);
+    });
+
     test('one receive can deliver a whole group batch in order', () => {
       const queue = new SqsQueue('orders.fifo');
       fifoSend(queue, 'A1', 'A');
@@ -249,7 +260,13 @@ describe('SqsQueue state machine', () => {
       expect(second.messageId).toBe(sent.messageId);
       await sleep(140);
 
-      // The third delivery attempt is redirected to the DLQ instead.
+      // Lapsing the visibility alone moves nothing: the message is visible in
+      // its own queue again, exactly like on AWS…
+      expect(queue.counters(RETENTION)).toEqual({ available: 1, inFlight: 0, delayed: 0 });
+      expect(dlq.counters(RETENTION).available).toBe(0);
+
+      // …and the third delivery attempt is redirected to the DLQ instead.
+      expect(recv(queue, 1)).toHaveLength(0);
       expect(queue.counters(RETENTION)).toEqual({ available: 0, inFlight: 0, delayed: 0 });
       expect(dlq.counters(RETENTION).available).toBe(1);
       expect(dlqVisible).toHaveBeenCalled();
@@ -309,12 +326,14 @@ describe('SqsQueue state machine', () => {
 
       await sleep(140);
 
-      // A1 exceeded maxReceiveCount and left for the DLQ — the group is free.
-      expect(dlq.counters(RETENTION).available).toBe(1);
+      // The lapse unlocked group A and woke pollers parked on this queue (the
+      // stall failure mode).
       expect(queue.hasDeliverable(RETENTION)).toBe(true);
-      // The unlock woke pollers parked on this queue (the stall failure mode).
       expect(onVisible).toHaveBeenCalled();
+      // The next receive moves the exhausted A1 to the DLQ and delivers A2 in
+      // the same call — the poison message never stalls its group.
       expect(recv(queue, 1).map(message => message.body)).toEqual(['A2']);
+      expect(dlq.counters(RETENTION).available).toBe(1);
 
       // The DLQ is FIFO too, so it issues its own SequenceNumber and keeps the
       // group id (an operator draining the DLQ sees where it came from).
@@ -339,18 +358,46 @@ describe('SqsQueue state machine', () => {
       queue.send({ body: 'A1', delayMs: 0, messageGroupId: 'A', messageDeduplicationId: 'd1' });
       const [a1] = recv(queue, 1);
       expect(queue.changeVisibility(a1.receiptHandle as string, 0)).toBe('changed');
+      expect(recv(queue, 1)).toHaveLength(0);
       expect(dlq.counters(RETENTION).available).toBe(2);
     });
 
-    test('changeVisibility(0) redrives an exhausted message instead of requeuing it', () => {
+    test('changeVisibility(0) on an exhausted message: requeued, then dead-lettered by the next receive', () => {
       const dlq = new SqsQueue('orders-dlq');
       const queue = withDlq('orders', dlq, 1);
       const sent = queue.send({ body: 'poison', delayMs: 0 });
 
       const [message] = recv(queue, 1);
       expect(queue.changeVisibility(message.receiptHandle as string, 0)).toBe('changed');
+      expect(queue.counters(RETENTION)).toEqual({ available: 1, inFlight: 0, delayed: 0 });
+      expect(recv(queue, 1)).toHaveLength(0);
       expect(queue.counters(RETENTION)).toEqual({ available: 0, inFlight: 0, delayed: 0 });
       expect(recv(dlq, 1)[0].messageId).toBe(sent.messageId);
+    });
+
+    test('a receive skips exhausted messages and still fills the batch from the rest', () => {
+      const dlq = new SqsQueue('orders-dlq');
+      const queue = withDlq('orders', dlq, 1);
+      queue.send({ body: 'poison', delayMs: 0 });
+      queue.send({ body: 'healthy', delayMs: 0 });
+      const [poison] = recv(queue, 1);
+      queue.changeVisibility(poison.receiptHandle as string, 0);
+
+      expect(recv(queue, 1).map(message => message.body)).toEqual(['healthy']);
+      expect(dlq.counters(RETENTION).available).toBe(1);
+    });
+
+    test('the lapsed handle of a dead-lettered message no longer deletes anything', () => {
+      const dlq = new SqsQueue('orders-dlq');
+      const queue = withDlq('orders', dlq, 1);
+      queue.send({ body: 'poison', delayMs: 0 });
+      const [message] = recv(queue, 1);
+      const handle = message.receiptHandle as string;
+      queue.changeVisibility(handle, 0);
+      recv(queue, 1); // moves it
+
+      expect(queue.deleteMessage(handle)).toBe('stale');
+      expect(dlq.counters(RETENTION).available).toBe(1);
     });
 
     test('changeVisibility(0) below the threshold still requeues normally', () => {
@@ -420,14 +467,75 @@ describe('SqsQueue state machine', () => {
     expect(queue.counters(RETENTION)).toEqual({ available: 0, inFlight: 0, delayed: 0 });
   });
 
-  test('deleting with a stale (formerly valid) handle is a silent no-op', async () => {
+  test('the most recent handle still deletes the message after its visibility lapsed', async () => {
     const queue = new SqsQueue('orders');
     queue.send({ body: 'x', delayMs: 0 });
     const [message] = recv(queue, 1, 40);
-    const staleHandle = message.receiptHandle as string;
-    await sleep(100); // handle expires; message requeued
-    expect(queue.deleteMessage(staleHandle)).toBe('stale');
+    const handle = message.receiptHandle as string;
+    await sleep(100); // visibility lapses; the message is visible again
     expect(queue.counters(RETENTION).available).toBe(1);
+
+    // A consumer that finished just after its timeout still deletes it…
+    expect(queue.deleteMessage(handle)).toBe('deleted');
+    expect(queue.counters(RETENTION)).toEqual({ available: 0, inFlight: 0, delayed: 0 });
+    // …and a second delete with the same handle is the idempotent no-op.
+    expect(queue.deleteMessage(handle)).toBe('stale');
+  });
+
+  test('once the message is received again, the previous handle is stale', async () => {
+    const queue = new SqsQueue('orders');
+    queue.send({ body: 'x', delayMs: 0 });
+    // receive() hands back the live record, so capture each handle as issued.
+    const firstHandle = recv(queue, 1, 40)[0].receiptHandle as string;
+    await sleep(100);
+    const [second] = recv(queue, 1);
+
+    expect(queue.deleteMessage(firstHandle)).toBe('stale');
+    expect(queue.counters(RETENTION)).toEqual({ available: 0, inFlight: 1, delayed: 0 });
+    expect(queue.deleteMessage(second.receiptHandle as string)).toBe('deleted');
+  });
+
+  test('VisibilityTimeout 0: the message is visible again immediately and its handle deletes it', () => {
+    const onVisible = jest.fn();
+    const queue = new SqsQueue('orders', { onVisible });
+    queue.send({ body: 'peek', delayMs: 0 });
+    onVisible.mockClear();
+
+    const [peeked] = recv(queue, 1, 0);
+    const peekHandle = peeked.receiptHandle as string;
+    expect(peeked.receiveCount).toBe(1);
+    // No timer round-trip: an immediate receive sees it again.
+    expect(queue.counters(RETENTION)).toEqual({ available: 1, inFlight: 0, delayed: 0 });
+    expect(onVisible).toHaveBeenCalledTimes(1);
+    const [again] = recv(queue, 1, 0);
+    expect(again.messageId).toBe(peeked.messageId);
+    expect(again.receiveCount).toBe(2);
+
+    expect(queue.deleteMessage(peekHandle)).toBe('stale');
+    expect(queue.deleteMessage(again.receiptHandle as string)).toBe('deleted');
+    expect(queue.counters(RETENTION).available).toBe(0);
+  });
+
+  test('VisibilityTimeout 0 on FIFO never locks the group', () => {
+    const queue = new SqsQueue('orders.fifo');
+    queue.send({ body: 'A1', delayMs: 0, messageGroupId: 'A', messageDeduplicationId: 'd1' });
+    queue.send({ body: 'A2', delayMs: 0, messageGroupId: 'A', messageDeduplicationId: 'd2' });
+    expect(recv(queue, 10, 0).map(message => message.body)).toEqual(['A1', 'A2']);
+    expect(queue.hasDeliverable(RETENTION)).toBe(true);
+  });
+
+  test('purge and retention pruning forget lapsed handles', async () => {
+    const queue = new SqsQueue('orders');
+    queue.send({ body: 'x', delayMs: 0 });
+    const [peeked] = recv(queue, 1, 0);
+    queue.purge();
+    expect(queue.deleteMessage(peeked.receiptHandle as string)).toBe('stale');
+
+    queue.send({ body: 'y', delayMs: 0 });
+    const [old] = queue.receive({ max: 1, visibilityMs: 0, retentionMs: RETENTION });
+    await sleep(80);
+    expect(queue.counters(50).available).toBe(0); // pruned by retention
+    expect(queue.deleteMessage(old.receiptHandle as string)).toBe('stale');
   });
 
   test('malformed and foreign receipt handles are invalid', () => {
@@ -452,8 +560,11 @@ describe('SqsQueue state machine', () => {
     expect(queue.changeVisibility(handle, 0)).toBe('changed');
     expect(queue.counters(RETENTION)).toEqual({ available: 1, inFlight: 0, delayed: 0 });
     expect(onVisible).toHaveBeenCalled();
-    // The released handle is no longer in flight.
+    // The released handle is no longer in flight…
     expect(queue.changeVisibility(handle, 1000)).toBe('not-inflight');
+    // …but, as the most recent one, it still deletes the message.
+    expect(queue.deleteMessage(handle)).toBe('deleted');
+    expect(queue.counters(RETENTION).available).toBe(0);
   });
 
   test('changeVisibility extends the deadline', async () => {

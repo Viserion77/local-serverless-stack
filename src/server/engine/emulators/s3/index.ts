@@ -59,15 +59,74 @@ export interface S3CorsRule {
   maxAgeSeconds?: number;
 }
 
+// Server-side encryption, as configured on a bucket (its default rule) or
+// recorded on an object. The engine never encrypts bytes at rest — it is a
+// local dev store — but it reports exactly what AWS would, because SDK code
+// and IaC drift checks read these values back.
+type S3SseAlgorithm = 'AES256' | 'aws:kms' | 'aws:kms:dsse';
+const SSE_ALGORITHMS: readonly string[] = ['AES256', 'aws:kms', 'aws:kms:dsse'];
+
+interface S3EncryptionSettings {
+  sseAlgorithm: S3SseAlgorithm;
+  kmsKeyId?: string;
+  bucketKeyEnabled?: boolean;
+}
+
+// Since January 2023 AWS applies SSE-S3 (AES256) to every bucket that has no
+// explicit default-encryption rule, and GetBucketEncryption reports that rule
+// instead of the old ServerSideEncryptionConfigurationNotFoundError — so a
+// bucket without a stored configuration (and every bucket persisted before
+// this field existed) answers with this default.
+const DEFAULT_BUCKET_ENCRYPTION: S3EncryptionSettings = { sseAlgorithm: 'AES256', bucketKeyEnabled: false };
+
+interface S3PublicAccessBlock {
+  blockPublicAcls: boolean;
+  ignorePublicAcls: boolean;
+  blockPublicPolicy: boolean;
+  restrictPublicBuckets: boolean;
+}
+
+// Since April 2023 every new AWS bucket is created with all four Block Public
+// Access settings on, and GetPublicAccessBlock reports them. Only an explicit
+// DeletePublicAccessBlock makes the call answer
+// NoSuchPublicAccessBlockConfiguration.
+const DEFAULT_PUBLIC_ACCESS_BLOCK: S3PublicAccessBlock = {
+  blockPublicAcls: true,
+  ignorePublicAcls: true,
+  blockPublicPolicy: true,
+  restrictPublicBuckets: true,
+};
+
+interface S3Tag {
+  key: string;
+  value: string;
+}
+
 interface S3BucketRecord {
   region: string;
   creationDate: string; // ISO 8601
   versioningStatus?: 'Enabled' | 'Suspended';
   notifications?: S3NotificationConfiguration;
   cors?: S3CorsRule[];
+  // Absent → the AWS default (SSE-S3); see DEFAULT_BUCKET_ENCRYPTION.
+  encryption?: S3EncryptionSettings;
+  tags?: S3Tag[];
+  // Absent → the AWS default (all on); null → explicitly deleted.
+  publicAccessBlock?: S3PublicAccessBlock | null;
+  policy?: string; // the bucket policy JSON document, verbatim
 }
 
-interface S3ObjectRecord {
+// System metadata S3 stores with an object and replays on GET/HEAD. Every
+// field is optional so records persisted before they existed still load.
+interface S3ObjectSystemMetadata {
+  contentDisposition?: string;
+  cacheControl?: string;
+  contentEncoding?: string;
+  contentLanguage?: string;
+  expires?: string; // kept verbatim, replayed as sent
+}
+
+interface S3ObjectRecord extends S3ObjectSystemMetadata {
   size: number;
   eTag: string; // unquoted md5 hex — quoted at every HTTP surface
   lastModified: string; // ISO 8601
@@ -75,7 +134,74 @@ interface S3ObjectRecord {
   contentType: string;
   metadata: Record<string, string>; // x-amz-meta-* values keyed by suffix
   storageClass: 'STANDARD';
+  // Absent on records persisted before SSE was tracked → reported as AES256,
+  // which is what AWS says of every object written since 2023.
+  sse?: S3EncryptionSettings;
 }
+
+// Request header (PutObject / CopyObject REPLACE) ↔ record field for the
+// stored system metadata. The same names are accepted as presigned-POST form
+// fields, and objectHeaders() emits them under these canonical spellings.
+const SYSTEM_METADATA_HEADERS: ReadonlyArray<[keyof S3ObjectSystemMetadata, string]> = [
+  ['contentDisposition', 'Content-Disposition'],
+  ['cacheControl', 'Cache-Control'],
+  ['contentEncoding', 'Content-Encoding'],
+  ['contentLanguage', 'Content-Language'],
+  ['expires', 'Expires'],
+];
+
+const SSE_HEADER = 'x-amz-server-side-encryption';
+const SSE_KMS_KEY_HEADER = 'x-amz-server-side-encryption-aws-kms-key-id';
+const SSE_BUCKET_KEY_HEADER = 'x-amz-server-side-encryption-bucket-key-enabled';
+
+// Query keys that turn a bucket request into a subresource operation, mapped
+// to the stem of the AWS operation name (Put/Get/Delete + stem). A request
+// carrying one of these must NEVER fall through to CreateBucket/DeleteBucket:
+// a PutBucketTagging answered as CreateBucket is a 409, and a
+// DeleteBucketTagging answered as DeleteBucket destroys the (empty) bucket.
+// Keys the engine does not serve answer NotImplemented (501, as AWS does for
+// an operation it does not support) — see handleBucketSubresource().
+const BUCKET_SUBRESOURCES: Record<string, string> = {
+  accelerate: 'BucketAccelerateConfiguration',
+  acl: 'BucketAcl',
+  analytics: 'BucketAnalyticsConfiguration',
+  cors: 'BucketCors',
+  delete: 'Objects',
+  encryption: 'BucketEncryption',
+  'intelligent-tiering': 'BucketIntelligentTieringConfiguration',
+  inventory: 'BucketInventoryConfiguration',
+  lifecycle: 'BucketLifecycleConfiguration',
+  location: 'BucketLocation',
+  logging: 'BucketLogging',
+  metadataTable: 'BucketMetadataTableConfiguration',
+  metrics: 'BucketMetricsConfiguration',
+  notification: 'BucketNotificationConfiguration',
+  'object-lock': 'ObjectLockConfiguration',
+  ownershipControls: 'BucketOwnershipControls',
+  policy: 'BucketPolicy',
+  policyStatus: 'BucketPolicyStatus',
+  publicAccessBlock: 'PublicAccessBlock',
+  replication: 'BucketReplication',
+  requestPayment: 'BucketRequestPayment',
+  tagging: 'BucketTagging',
+  versioning: 'BucketVersioning',
+  versions: 'ObjectVersions',
+  website: 'BucketWebsite',
+};
+
+// Same guard for objects: PUT /bucket/key?tagging must not overwrite the
+// object with the tagging XML, DELETE ...?tagging must not delete it, and
+// GET ...?acl must not return the body. None of these is served yet.
+const OBJECT_SUBRESOURCES: Record<string, string> = {
+  acl: 'ObjectAcl',
+  attributes: 'ObjectAttributes',
+  'legal-hold': 'ObjectLegalHold',
+  restore: 'Object',
+  retention: 'ObjectRetention',
+  select: 'ObjectContent',
+  tagging: 'ObjectTagging',
+  torrent: 'ObjectTorrent',
+};
 
 export class S3Emulator implements RestEmulator {
   readonly service = 's3' as const;
@@ -184,17 +310,12 @@ export class S3Emulator implements RestEmulator {
   // -------------------------------------------------------------------------
 
   private async handleBucket(req: AwsRequest, bucket: string): Promise<AwsResponse> {
-    if (req.method === 'PUT') {
-      if ('versioning' in req.query) return this.putBucketVersioning(bucket, req);
-      if ('notification' in req.query) return this.putBucketNotification(bucket, req);
-      if ('cors' in req.query) return this.putBucketCors(bucket, req);
-      return this.createBucket(bucket, req);
-    }
+    const subresource = findSubresource(req.query, BUCKET_SUBRESOURCES);
+    if (subresource !== undefined) return this.handleBucketSubresource(req, bucket, subresource);
+    // From here on the request carries no subresource: a bare PUT is
+    // CreateBucket and a bare DELETE is DeleteBucket.
+    if (req.method === 'PUT') return this.createBucket(bucket, req);
     if (req.method === 'GET') {
-      if ('location' in req.query) return this.getBucketLocation(bucket);
-      if ('versioning' in req.query) return this.getBucketVersioning(bucket);
-      if ('notification' in req.query) return this.getBucketNotification(bucket);
-      if ('cors' in req.query) return this.getBucketCors(bucket);
       if (req.query['list-type'] === '2') return this.listObjectsV2(bucket, req.query);
       throw notImplementedOperation('s3', 'ListObjects (v1) — request with list-type=2');
     }
@@ -202,16 +323,74 @@ export class S3Emulator implements RestEmulator {
       this.requireBucket(bucket);
       return { status: 200 };
     }
-    if (req.method === 'DELETE') {
-      if ('cors' in req.query) return this.deleteBucketCors(bucket);
-      return this.deleteBucket(bucket);
-    }
-    if (req.method === 'POST' && 'delete' in req.query) return this.deleteObjects(bucket, req);
+    if (req.method === 'DELETE') return this.deleteBucket(bucket);
     // Browser form upload (presigned POST): multipart/form-data to the bucket.
     if (req.method === 'POST' && multipartBoundary(req.headers['content-type'])) {
       return this.postObject(bucket, req);
     }
     throw notImplementedOperation('s3', `${req.method} /<bucket>`);
+  }
+
+  private async handleBucketSubresource(req: AwsRequest, bucket: string, subresource: string): Promise<AwsResponse> {
+    switch (`${req.method} ${subresource}`) {
+      case 'GET location':
+        return this.getBucketLocation(bucket);
+      case 'PUT versioning':
+        return this.putBucketVersioning(bucket, req);
+      case 'GET versioning':
+        return this.getBucketVersioning(bucket);
+      case 'PUT notification':
+        return this.putBucketNotification(bucket, req);
+      case 'GET notification':
+        return this.getBucketNotification(bucket);
+      case 'PUT cors':
+        return this.putBucketCors(bucket, req);
+      case 'GET cors':
+        return this.getBucketCors(bucket);
+      case 'DELETE cors':
+        return this.deleteBucketCors(bucket);
+      case 'POST delete':
+        return this.deleteObjects(bucket, req);
+      case 'PUT encryption':
+        return this.putBucketEncryption(bucket, req);
+      case 'GET encryption':
+        return this.getBucketEncryption(bucket);
+      case 'DELETE encryption':
+        return this.updateBucket(bucket, { encryption: undefined });
+      case 'PUT tagging':
+        return this.putBucketTagging(bucket, req);
+      case 'GET tagging':
+        return this.getBucketTagging(bucket);
+      case 'DELETE tagging':
+        return this.updateBucket(bucket, { tags: undefined });
+      case 'PUT publicAccessBlock':
+        return this.putPublicAccessBlock(bucket, req);
+      case 'GET publicAccessBlock':
+        return this.getPublicAccessBlock(bucket);
+      case 'DELETE publicAccessBlock':
+        return this.updateBucket(bucket, { publicAccessBlock: null });
+      case 'PUT policy':
+        return this.putBucketPolicy(bucket, req);
+      case 'GET policy':
+        return this.getBucketPolicy(bucket);
+      case 'DELETE policy':
+        return this.updateBucket(bucket, { policy: undefined });
+      default:
+        throw subresourceNotImplemented(req.method, subresource, BUCKET_SUBRESOURCES);
+    }
+  }
+
+  // Shared tail of the Delete* configuration calls: AWS answers 204 even when
+  // nothing was configured. Fields set to undefined are dropped from the
+  // persisted record; DeleteBucketEncryption therefore reverts the bucket to
+  // the SSE-S3 default, exactly like AWS.
+  private updateBucket(bucket: string, changes: Partial<S3BucketRecord>): AwsResponse {
+    const record: S3BucketRecord = { ...this.requireBucket(bucket), ...changes };
+    for (const field of Object.keys(changes) as Array<keyof S3BucketRecord>) {
+      if (record[field] === undefined) delete record[field];
+    }
+    this.buckets.set(bucket, record);
+    return { status: 204 };
   }
 
   private createBucket(bucket: string, req: AwsRequest): AwsResponse {
@@ -316,6 +495,95 @@ export class S3Emulator implements RestEmulator {
     void cors;
     this.buckets.set(bucket, rest);
     return { status: 204 };
+  }
+
+  private putBucketEncryption(bucket: string, req: AwsRequest): AwsResponse {
+    const record = this.requireBucket(bucket);
+    this.buckets.set(bucket, { ...record, encryption: parseEncryptionConfiguration(req.body) });
+    return { status: 200 };
+  }
+
+  private getBucketEncryption(bucket: string): AwsResponse {
+    const { encryption = DEFAULT_BUCKET_ENCRYPTION } = this.requireBucket(bucket);
+    const byDefault =
+      tag('SSEAlgorithm', encryption.sseAlgorithm) +
+      (encryption.kmsKeyId !== undefined ? tag('KMSMasterKeyID', encryption.kmsKeyId) : '');
+    const rule = tag(
+      'Rule',
+      tag('ApplyServerSideEncryptionByDefault', byDefault, { escape: false }) +
+        tag('BucketKeyEnabled', encryption.bucketKeyEnabled ? 'true' : 'false'),
+      { escape: false },
+    );
+    return xmlResponse(200, tag('ServerSideEncryptionConfiguration', rule, { attrs: { xmlns: S3_XMLNS }, escape: false }));
+  }
+
+  private putBucketTagging(bucket: string, req: AwsRequest): AwsResponse {
+    const record = this.requireBucket(bucket);
+    const tags = parseTagging(req.body);
+    const { tags: previous, ...untagged } = record;
+    void previous;
+    // An empty TagSet leaves the bucket untagged — Get then answers NoSuchTagSet.
+    this.buckets.set(bucket, tags.length > 0 ? { ...untagged, tags } : untagged);
+    return { status: 204 };
+  }
+
+  private getBucketTagging(bucket: string): AwsResponse {
+    const { tags } = this.requireBucket(bucket);
+    if (!tags) throw s3Error('NoSuchTagSet', 'The TagSet does not exist', 404);
+    const tagXml = tags.map(t => tag('Tag', tag('Key', t.key) + tag('Value', t.value), { escape: false })).join('');
+    return xmlResponse(200, tag('Tagging', tag('TagSet', tagXml, { escape: false }), { attrs: { xmlns: S3_XMLNS }, escape: false }));
+  }
+
+  private putPublicAccessBlock(bucket: string, req: AwsRequest): AwsResponse {
+    const record = this.requireBucket(bucket);
+    const root = parseBodyXml(req.body);
+    // Omitted flags are false, as in AWS (the SDK only serializes set members).
+    const flag = (name: string): boolean => (childText(root, name) ?? '').toLowerCase() === 'true';
+    this.buckets.set(bucket, {
+      ...record,
+      publicAccessBlock: {
+        blockPublicAcls: flag('BlockPublicAcls'),
+        ignorePublicAcls: flag('IgnorePublicAcls'),
+        blockPublicPolicy: flag('BlockPublicPolicy'),
+        restrictPublicBuckets: flag('RestrictPublicBuckets'),
+      },
+    });
+    return { status: 200 };
+  }
+
+  private getPublicAccessBlock(bucket: string): AwsResponse {
+    const { publicAccessBlock = DEFAULT_PUBLIC_ACCESS_BLOCK } = this.requireBucket(bucket);
+    if (publicAccessBlock === null) {
+      throw s3Error('NoSuchPublicAccessBlockConfiguration', 'The public access block configuration was not found', 404);
+    }
+    const content =
+      tag('BlockPublicAcls', String(publicAccessBlock.blockPublicAcls)) +
+      tag('IgnorePublicAcls', String(publicAccessBlock.ignorePublicAcls)) +
+      tag('BlockPublicPolicy', String(publicAccessBlock.blockPublicPolicy)) +
+      tag('RestrictPublicBuckets', String(publicAccessBlock.restrictPublicBuckets));
+    return xmlResponse(200, tag('PublicAccessBlockConfiguration', content, { attrs: { xmlns: S3_XMLNS }, escape: false }));
+  }
+
+  // The policy is stored verbatim (AWS re-serializes it, but SDKs and IaC
+  // compare it as parsed JSON). It is never evaluated: the engine does not
+  // authorize requests.
+  private putBucketPolicy(bucket: string, req: AwsRequest): AwsResponse {
+    const record = this.requireBucket(bucket);
+    const policy = req.body.toString('utf8');
+    try {
+      const parsed: unknown = JSON.parse(policy);
+      if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) throw new Error('not an object');
+    } catch {
+      throw s3Error('MalformedPolicy', 'Policies must be valid JSON and the first byte must be \'{\'', 400);
+    }
+    this.buckets.set(bucket, { ...record, policy });
+    return { status: 204 };
+  }
+
+  private getBucketPolicy(bucket: string): AwsResponse {
+    const { policy } = this.requireBucket(bucket);
+    if (policy === undefined) throw s3Error('NoSuchBucketPolicy', 'The bucket policy does not exist', 404);
+    return { status: 200, headers: { 'Content-Type': 'application/json' }, body: policy };
   }
 
   private async listObjectsV2(bucket: string, query: Record<string, string>): Promise<AwsResponse> {
@@ -424,6 +692,8 @@ export class S3Emulator implements RestEmulator {
   // -------------------------------------------------------------------------
 
   private async handleObject(req: AwsRequest, bucket: string, key: string): Promise<AwsResponse> {
+    const subresource = findSubresource(req.query, OBJECT_SUBRESOURCES);
+    if (subresource !== undefined) throw subresourceNotImplemented(req.method, subresource, OBJECT_SUBRESOURCES);
     if (req.method === 'PUT') {
       if (req.headers['x-amz-copy-source']) return this.copyObject(bucket, key, req);
       return this.putObject(bucket, key, req);
@@ -448,14 +718,16 @@ export class S3Emulator implements RestEmulator {
       blobPath,
       contentType: req.headers['content-type'] ?? DEFAULT_CONTENT_TYPE,
       metadata: metadataFromHeaders(req.headers),
+      ...systemMetadataFromHeaders(req.headers),
       storageClass: 'STANDARD',
+      sse: resolveSse(name => req.headers[name], bucketRecord),
     };
     index.put(key, record);
     if (previous && previous.blobPath !== blobPath) {
       await this.deleteBlobIfUnreferenced(index, previous.blobPath);
     }
     this.queueObjectEvent(bucketRecord.region, bucket, 's3:ObjectCreated:Put', key, record.size, eTag);
-    return { status: 200, headers: { ETag: `"${eTag}"` } };
+    return { status: 200, headers: { ETag: `"${eTag}"`, ...sseHeaders(record) } };
   }
 
   // Presigned POST (browser form upload): the object key and options travel as
@@ -481,6 +753,8 @@ export class S3Emulator implements RestEmulator {
     const key = keyTemplate.replace(/\$\{filename\}/g, () => uploadName);
     if (!key) throw s3Error('InvalidArgument', 'The specified key is not valid.', 400);
 
+    // Validate the SSE fields before any byte is written.
+    const sse = resolveSse(lookup, bucketRecord);
     const index = await this.index(bucket);
     const eTag = md5Hex(file.data);
     const blobPath = await this.ctx.store.writeBlob(`s3/${bucket}/blobs`, file.data);
@@ -492,14 +766,19 @@ export class S3Emulator implements RestEmulator {
       blobPath,
       contentType: lookup('content-type') ?? file.contentType ?? DEFAULT_CONTENT_TYPE,
       metadata: metadataFromFields(fields),
+      // Same names as the PutObject headers, as form fields (case-insensitive).
+      ...systemMetadataFrom((_field, header) => lookup(header)),
       storageClass: 'STANDARD',
+      sse,
     };
     index.put(key, record);
     if (previous && previous.blobPath !== blobPath) {
       await this.deleteBlobIfUnreferenced(index, previous.blobPath);
     }
     this.queueObjectEvent(bucketRecord.region, bucket, 's3:ObjectCreated:Post', key, record.size, eTag);
-    return this.postResponse(bucket, key, eTag, fields);
+    const response = this.postResponse(bucket, key, eTag, fields);
+    response.headers = { ...response.headers, ...sseHeaders(record) };
+    return response;
   }
 
   private postResponse(bucket: string, key: string, eTag: string, fields: MultipartField[]): AwsResponse {
@@ -549,6 +828,10 @@ export class S3Emulator implements RestEmulator {
     const sourceRecord = sourceIndex.get(sourceKey) as S3ObjectRecord | undefined;
     if (!sourceRecord) throw s3Error('NoSuchKey', 'The specified key does not exist.', 404);
 
+    // Encryption is not metadata: whatever the directive, the copy is
+    // encrypted per the request's SSE headers or, absent those, the
+    // DESTINATION bucket's default — never inherited from the source (AWS).
+    const sse = resolveSse(name => req.headers[name], bucketRecord);
     const data = await this.ctx.store.readBlob(sourceRecord.blobPath);
     const index = await this.index(bucket);
     const blobPath = await this.ctx.store.writeBlob(`s3/${bucket}/blobs`, data);
@@ -562,7 +845,11 @@ export class S3Emulator implements RestEmulator {
       blobPath,
       contentType: replaceMetadata ? req.headers['content-type'] ?? DEFAULT_CONTENT_TYPE : sourceRecord.contentType,
       metadata: replaceMetadata ? metadataFromHeaders(req.headers) : { ...sourceRecord.metadata },
+      // System metadata follows the directive like user metadata does: COPY
+      // keeps the source's, REPLACE takes only what the request carries.
+      ...(replaceMetadata ? systemMetadataFromHeaders(req.headers) : systemMetadataFrom(field => sourceRecord[field])),
       storageClass: 'STANDARD',
+      sse,
     };
     index.put(key, record);
     if (previous && previous.blobPath !== blobPath) {
@@ -573,7 +860,9 @@ export class S3Emulator implements RestEmulator {
       attrs: { xmlns: S3_XMLNS },
       escape: false,
     });
-    return xmlResponse(200, result);
+    const response = xmlResponse(200, result);
+    response.headers = { ...response.headers, ...sseHeaders(record) };
+    return response;
   }
 
   private async getObject(bucket: string, key: string, req: AwsRequest): Promise<AwsResponse> {
@@ -744,17 +1033,157 @@ function metadataFromFields(fields: MultipartField[]): Record<string, string> {
   return metadata;
 }
 
+// Collect the stored system metadata (Content-Disposition, Cache-Control, …)
+// through a lookup keyed by record field and canonical header name; empty
+// values are dropped, as S3 does not store an empty header.
+function systemMetadataFrom(
+  lookup: (field: keyof S3ObjectSystemMetadata, header: string) => string | undefined,
+): S3ObjectSystemMetadata {
+  const metadata: S3ObjectSystemMetadata = {};
+  for (const [field, header] of SYSTEM_METADATA_HEADERS) {
+    const value = lookup(field, header);
+    if (value) metadata[field] = value;
+  }
+  return metadata;
+}
+
+function systemMetadataFromHeaders(headers: Record<string, string>): S3ObjectSystemMetadata {
+  return systemMetadataFrom((_field, header) => headers[header.toLowerCase()]);
+}
+
+// Encryption for a new object (PutObject, presigned POST, CopyObject). The
+// lookup is keyed by the lowercase x-amz-* name (a request header, or a POST
+// form field of the same name). With no SSE header the bucket's default
+// encryption applies — SSE-S3 unless PutBucketEncryption set another rule —
+// which is what AWS reports for every object since 2023.
+function resolveSse(lookup: (name: string) => string | undefined, bucket: S3BucketRecord): S3EncryptionSettings {
+  const algorithm = lookup(SSE_HEADER);
+  const kmsKeyId = lookup(SSE_KMS_KEY_HEADER);
+  const bucketKey = lookup(SSE_BUCKET_KEY_HEADER);
+  if (algorithm && !SSE_ALGORITHMS.includes(algorithm)) {
+    throw s3Error('InvalidArgument', 'The encryption method specified is not supported', 400);
+  }
+  if (kmsKeyId && (!algorithm || algorithm === 'AES256')) {
+    throw s3Error(
+      'InvalidArgument',
+      `Server Side Encryption with AWS KMS managed key requires HTTP header ${SSE_HEADER} : aws:kms`,
+      400,
+    );
+  }
+  if (!algorithm) {
+    const { sseAlgorithm, kmsKeyId: defaultKey, bucketKeyEnabled } = bucket.encryption ?? DEFAULT_BUCKET_ENCRYPTION;
+    if (sseAlgorithm === 'AES256') return { sseAlgorithm };
+    return { sseAlgorithm, ...(defaultKey !== undefined ? { kmsKeyId: defaultKey } : {}), bucketKeyEnabled: bucketKeyEnabled === true };
+  }
+  const sseAlgorithm = algorithm as S3SseAlgorithm;
+  if (sseAlgorithm === 'AES256') return { sseAlgorithm };
+  // An explicit aws:kms without a key id means the AWS managed key (aws/s3)
+  // — not the bucket default's key — so no key id is recorded. S3 Bucket
+  // Keys fall back to the bucket-level setting when the header is omitted.
+  return {
+    sseAlgorithm,
+    ...(kmsKeyId ? { kmsKeyId } : {}),
+    bucketKeyEnabled:
+      bucketKey !== undefined ? bucketKey.toLowerCase() === 'true' : bucket.encryption?.bucketKeyEnabled === true,
+  };
+}
+
+function sseHeaders(record: S3ObjectRecord): Record<string, string> {
+  const sse = record.sse ?? DEFAULT_BUCKET_ENCRYPTION;
+  const headers: Record<string, string> = { [SSE_HEADER]: sse.sseAlgorithm };
+  if (sse.kmsKeyId !== undefined) headers[SSE_KMS_KEY_HEADER] = sse.kmsKeyId;
+  if (sse.bucketKeyEnabled) headers[SSE_BUCKET_KEY_HEADER] = 'true';
+  return headers;
+}
+
 function objectHeaders(record: S3ObjectRecord): Record<string, string> {
   const headers: Record<string, string> = {
     'Content-Type': record.contentType,
     ETag: `"${record.eTag}"`,
     'Last-Modified': new Date(record.lastModified).toUTCString(),
     'Accept-Ranges': 'bytes',
+    ...sseHeaders(record),
   };
+  for (const [field, header] of SYSTEM_METADATA_HEADERS) {
+    const value = record[field];
+    if (value !== undefined) headers[header] = value;
+  }
   for (const [name, value] of Object.entries(record.metadata)) {
     headers[`${METADATA_HEADER_PREFIX}${name}`] = value;
   }
   return headers;
+}
+
+// First query key naming a known subresource (own keys only, so a query
+// param such as `constructor` never matches an Object.prototype member).
+function findSubresource(query: Record<string, string>, known: Record<string, string>): string | undefined {
+  return Object.keys(query).find(key => Object.prototype.hasOwnProperty.call(known, key));
+}
+
+// Operations whose AWS name is not Verb + stem.
+const IRREGULAR_OPERATION_NAMES: Record<string, string> = {
+  'GET versions': 'ListObjectVersions',
+  'POST restore': 'RestoreObject',
+  'POST select': 'SelectObjectContent',
+};
+
+function subresourceNotImplemented(method: string, subresource: string, known: Record<string, string>): Error {
+  const verb = method.charAt(0) + method.slice(1).toLowerCase();
+  const operation = IRREGULAR_OPERATION_NAMES[`${method} ${subresource}`] ?? `${verb}${known[subresource]}`;
+  return s3Error(
+    'NotImplemented',
+    `s3.${operation} (${method} ?${subresource}) is not implemented by the LSS self engine — see docs/SELF_ENGINE.md#coverage`,
+    501,
+  );
+}
+
+// PutBucketEncryption body. AWS accepts exactly one Rule; the engine keeps
+// the first and rejects a rule without a supported SSEAlgorithm the way AWS
+// does (MalformedXML).
+function parseEncryptionConfiguration(body: Buffer): S3EncryptionSettings {
+  const root = parseBodyXml(body);
+  const rule = childrenNamed(root, 'Rule')[0];
+  const byDefault = rule && childrenNamed(rule, 'ApplyServerSideEncryptionByDefault')[0];
+  const algorithm = byDefault && childText(byDefault, 'SSEAlgorithm');
+  if (!algorithm || !SSE_ALGORITHMS.includes(algorithm)) {
+    throw s3Error(
+      'MalformedXML',
+      'The XML you provided was not well-formed or did not validate against our published schema',
+      400,
+    );
+  }
+  const kmsKeyId = childText(byDefault, 'KMSMasterKeyID');
+  if (kmsKeyId && algorithm === 'AES256') {
+    throw s3Error(
+      'InvalidArgument',
+      'a KMSMasterKeyID is not applicable if the default sse algorithm is not aws:kms or aws:kms:dsse',
+      400,
+    );
+  }
+  return {
+    sseAlgorithm: algorithm as S3SseAlgorithm,
+    ...(kmsKeyId ? { kmsKeyId } : {}),
+    bucketKeyEnabled: (childText(rule, 'BucketKeyEnabled') ?? '').toLowerCase() === 'true',
+  };
+}
+
+// PutBucketTagging body: <Tagging><TagSet><Tag><Key/><Value/></Tag>…</TagSet>.
+function parseTagging(body: Buffer): S3Tag[] {
+  const root = parseBodyXml(body);
+  const tagSet = childrenNamed(root, 'TagSet')[0];
+  if (!tagSet) {
+    throw s3Error('MalformedXML', 'The XML you provided was not well-formed or did not validate against our published schema', 400);
+  }
+  const tags: S3Tag[] = [];
+  const seen = new Set<string>();
+  for (const node of childrenNamed(tagSet, 'Tag')) {
+    const key = childText(node, 'Key');
+    if (!key) throw s3Error('InvalidTag', 'The TagKey you have provided is invalid', 400);
+    if (seen.has(key)) throw s3Error('InvalidTag', 'Cannot provide multiple Tags with the same key', 400);
+    seen.add(key);
+    tags.push({ key, value: childText(node, 'Value') ?? '' });
+  }
+  return tags;
 }
 
 // GET/HEAD response-header overrides carried as `response-*` query params (the

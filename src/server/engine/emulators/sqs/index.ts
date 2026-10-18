@@ -121,6 +121,17 @@ function receiptHandleInvalidError(receiptHandle: string): AwsError {
   );
 }
 
+function messageAttributesSize(attributes: Record<string, SqsMessageAttributeValue> | undefined): number {
+  let total = 0;
+  for (const [name, value] of Object.entries(attributes ?? {})) {
+    total += Buffer.byteLength(name, 'utf8') + Buffer.byteLength(value.DataType ?? '', 'utf8');
+    if (value.StringValue !== undefined) total += Buffer.byteLength(value.StringValue, 'utf8');
+    // BinaryValue travels base64-encoded; the limit counts the decoded bytes.
+    if (value.BinaryValue !== undefined) total += Buffer.from(value.BinaryValue, 'base64').length;
+  }
+  return total;
+}
+
 function integerParam(value: unknown): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) ? Math.trunc(value) : undefined;
 }
@@ -167,8 +178,8 @@ export class SqsEmulator implements TargetEmulator {
   // Live message state by `${region}/${queueName}`.
   private readonly runtimes = new Map<string, SqsQueue>();
   // Source queues already warned about an unresolvable RedrivePolicy target —
-  // the check runs on every redelivery, and a poison message would otherwise
-  // reprint the same warning every visibility timeout.
+  // the check runs on every receive, and a busy consumer would otherwise
+  // reprint the same warning on every poll.
   private readonly redriveWarned = new Set<string>();
 
   constructor(ctx: EngineContext) {
@@ -189,6 +200,8 @@ export class SqsEmulator implements TargetEmulator {
         return this.setQueueAttributes(catalog, input);
       case 'ListQueues':
         return this.listQueues(catalog, input);
+      case 'ListDeadLetterSourceQueues':
+        return this.listDeadLetterSourceQueues(catalog, input);
       case 'DeleteQueue':
         return this.deleteQueue(region, catalog, input);
       case 'SendMessage':
@@ -423,12 +436,58 @@ export class SqsEmulator implements TargetEmulator {
 
   private listQueues(catalog: CatalogStore<QueueRecord>, input: Record<string, unknown>): object {
     const prefix = typeof input.QueueNamePrefix === 'string' ? input.QueueNamePrefix : '';
-    const urls = catalog
+    const names = catalog
       .keys()
       .filter(name => name.startsWith(prefix))
-      .sort()
-      .map(name => this.queueUrl(name));
-    return urls.length > 0 ? { QueueUrls: urls } : {};
+      .sort();
+    return this.pageOfQueueUrls(names, input);
+  }
+
+  // The queues whose RedrivePolicy targets the given queue (the DLQ side of
+  // the relationship — what the console's "Dead-letter queue" tab lists).
+  private listDeadLetterSourceQueues(catalog: CatalogStore<QueueRecord>, input: Record<string, unknown>): object {
+    const dlq = this.requireQueue(catalog, input);
+    const names = catalog
+      .keys()
+      .filter(name => {
+        const policy = parseRedrivePolicy(catalog.get(name)?.attributes.RedrivePolicy);
+        return policy !== undefined && queueNameFromArn(policy.deadLetterTargetArn) === dlq.name;
+      })
+      .sort();
+    const page = this.pageOfQueueUrls(names, input);
+    // Unlike ListQueues, this operation always returns the (possibly empty) list.
+    return { ...page, QueueUrls: page.QueueUrls ?? [] };
+  }
+
+  // Shared ListQueues/ListDeadLetterSourceQueues paging. Without MaxResults AWS
+  // returns up to 1000 URLs and no token; with it (1–1000) results page through
+  // an opaque NextToken — here base64 of the last name returned.
+  private pageOfQueueUrls(
+    sortedNames: string[],
+    input: Record<string, unknown>,
+  ): { QueueUrls?: string[]; NextToken?: string } {
+    const maxResults = integerParam(input.MaxResults);
+    if (maxResults !== undefined && (maxResults < 1 || maxResults > 1000)) {
+      throw invalidParameterError(
+        `Value ${maxResults} for parameter MaxResults is invalid. Reason: MaxResults must be an integer between 1 and 1000.`,
+      );
+    }
+    let names = sortedNames;
+    if (typeof input.NextToken === 'string' && input.NextToken.length > 0) {
+      if (maxResults === undefined) {
+        throw invalidParameterError('MaxResults is a mandatory parameter when you provide a value for NextToken.');
+      }
+      const after = Buffer.from(input.NextToken, 'base64').toString('utf8');
+      names = names.filter(name => name > after);
+    }
+    const limit = maxResults ?? 1000;
+    const page = names.slice(0, limit);
+    const result: { QueueUrls?: string[]; NextToken?: string } = {};
+    if (page.length > 0) result.QueueUrls = page.map(name => this.queueUrl(name));
+    if (maxResults !== undefined && names.length > limit) {
+      result.NextToken = Buffer.from(page[page.length - 1], 'utf8').toString('base64');
+    }
+    return result;
   }
 
   private deleteQueue(region: string, catalog: CatalogStore<QueueRecord>, input: Record<string, unknown>): object {
@@ -473,6 +532,17 @@ export class SqsEmulator implements TargetEmulator {
   private sendOne(record: QueueRecord, runtime: SqsQueue, input: SendMessageWireInput): Record<string, unknown> {
     if (typeof input.MessageBody !== 'string' || input.MessageBody.length === 0) {
       throw missingParameterError('MessageBody');
+    }
+    // MaximumMessageSize (default and ceiling 256 KiB) bounds the body PLUS its
+    // message attributes (names, data types and values), in UTF-8 bytes. A
+    // local engine that accepted anything would let an oversized payload work
+    // in dev and fail on its first deploy.
+    const maxBytes = this.attrInt(record, 'MaximumMessageSize');
+    const size = Buffer.byteLength(input.MessageBody, 'utf8') + messageAttributesSize(input.MessageAttributes);
+    if (size > maxBytes) {
+      throw invalidParameterError(
+        `One or more parameters are invalid. Reason: Message must be shorter than ${maxBytes} bytes.`,
+      );
     }
     const delaySeconds = integerParam(input.DelaySeconds);
     if (delaySeconds !== undefined && record.fifo) {
@@ -671,7 +741,7 @@ export class SqsEmulator implements TargetEmulator {
   }
 
   // Queue-level redrive: resolve `queueName`'s RedrivePolicy into a live
-  // dead-letter queue. Re-resolved on every redelivery (see RedriveResolver) —
+  // dead-letter queue. Re-resolved on every receive (see RedriveResolver) —
   // the DLQ is often provisioned AFTER the queue pointing at it, and
   // SetQueueAttributes can change the policy at any time.
   //

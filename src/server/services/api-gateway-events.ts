@@ -8,8 +8,16 @@ import type { HttpRoute } from './serverless-state-parser.js';
 
 export interface IncomingRequest {
   method: string;
-  // Path only, no query string.
+  // Path only, no query string, percent-decoded exactly ONCE. This is what
+  // API Gateway hands the integration as `path` (REST) and what goes into the
+  // authorizer's methodArn.
   path: string;
+  // The path as it arrived on the wire, still percent-encoded. Route matching
+  // runs on this (decoding each segment once), so an encoded `/` (`%2F`) never
+  // splits a segment and `%2525` reaches the handler as `%25`, not `%`. Absent
+  // in hand-built requests (tests, callers that only know a decoded path), in
+  // which case `path` stands in for it.
+  rawPath?: string;
   rawQueryString: string;
   headers: Record<string, string | string[] | undefined>;
   body: Buffer | null;
@@ -27,6 +35,11 @@ export interface RouteMatch {
 
 // Literal segments beat {param} segments, which beat {proxy+}; the httpApi
 // $default route is the catch-all of last resort. An exact method beats ANY.
+//
+// `requestPath` is the RAW (still percent-encoded) path: every segment is
+// decoded exactly once here. Matching on an already-decoded path decoded the
+// parameters a second time (`%2525` → `%25` → `%`) and let an encoded slash
+// (`%2F`) split one segment into two.
 export function matchRoute(routes: HttpRoute[], method: string, requestPath: string): RouteMatch | null {
   const upperMethod = method.toUpperCase();
   const requestSegments = splitPath(requestPath);
@@ -77,7 +90,7 @@ function matchSegments(
     if (greedy) {
       const rest = requestSegments.slice(i);
       if (rest.length === 0) return null;
-      params[greedy[1]] = rest.join('/');
+      params[greedy[1]] = safeDecode(rest.join('/'));
       return { score: score + 1, params };
     }
 
@@ -86,9 +99,9 @@ function matchSegments(
 
     const param = /^\{(.+)\}$/.exec(routeSeg);
     if (param) {
-      params[param[1]] = decodeURIComponent(reqSeg);
+      params[param[1]] = safeDecode(reqSeg);
       score += 10;
-    } else if (routeSeg === reqSeg) {
+    } else if (routeSeg === safeDecode(reqSeg)) {
       score += 100;
     } else {
       return null;
@@ -97,6 +110,17 @@ function matchSegments(
 
   if (requestSegments.length !== routeSegments.length) return null;
   return { score, params };
+}
+
+// Percent-decode once, tolerating malformed escapes (`%E0%A4%A`): the raw text
+// is kept rather than throwing, so a bad escape is a route miss or a literal
+// parameter value instead of a gateway 500.
+export function safeDecode(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -163,6 +187,10 @@ function parseQuery(rawQueryString: string): {
 // Event builders
 // ---------------------------------------------------------------------------
 
+export const DEFAULT_ACCOUNT_ID = '000000000000';
+// The synthetic API id every local API answers as (methodArn, requestContext).
+export const LOCAL_API_ID = 'lss-local';
+
 export interface AuthorizerOutput {
   principalId?: string;
   context?: Record<string, unknown>;
@@ -174,13 +202,20 @@ export interface EventOptions {
   pathParameters: Record<string, string> | null;
   stage: string;
   authorizer?: AuthorizerOutput;
+  // The gateway's per-request id. The gateway generates one per request and
+  // reuses it for the authorizer event, this event's requestContext.requestId
+  // and the x-amzn-RequestId / apigw-requestid response header — the id a
+  // client quotes is the id the handler logged. Generated here when absent.
   requestId?: string;
+  // Account id stamped into requestContext (the self engine's account).
+  accountId?: string;
 }
 
 // REST API (Lambda proxy integration, payload format 1.0).
 export function buildV1Event(options: EventOptions): Record<string, unknown> {
   const { request, route, pathParameters, stage, authorizer } = options;
   const requestId = options.requestId || crypto.randomUUID();
+  const accountId = options.accountId || DEFAULT_ACCOUNT_ID;
   const { single, multi } = parseQuery(request.rawQueryString);
   const { body, isBase64Encoded } = encodeBody(request.body, headerValue(request.headers, 'content-type'));
 
@@ -195,8 +230,8 @@ export function buildV1Event(options: EventOptions): Record<string, unknown> {
     pathParameters,
     stageVariables: null,
     requestContext: {
-      accountId: '000000000000',
-      apiId: 'lss-local',
+      accountId,
+      apiId: LOCAL_API_ID,
       protocol: 'HTTP/1.1',
       httpMethod: request.method.toUpperCase(),
       path: request.path,
@@ -230,6 +265,7 @@ export function buildV1Event(options: EventOptions): Record<string, unknown> {
 export function buildV2Event(options: EventOptions): Record<string, unknown> {
   const { request, route, pathParameters, stage, authorizer } = options;
   const requestId = options.requestId || crypto.randomUUID();
+  const accountId = options.accountId || DEFAULT_ACCOUNT_ID;
   const { single } = parseQuery(request.rawQueryString);
   const { body, isBase64Encoded } = encodeBody(request.body, headerValue(request.headers, 'content-type'));
 
@@ -242,7 +278,9 @@ export function buildV2Event(options: EventOptions): Record<string, unknown> {
   return {
     version: '2.0',
     routeKey,
-    rawPath: request.path,
+    // HTTP API hands the path over as received (still percent-encoded);
+    // requestContext.http.path carries the decoded form.
+    rawPath: request.rawPath ?? request.path,
     rawQueryString: request.rawQueryString,
     ...(cookies && cookies.length ? { cookies } : {}),
     headers,
@@ -250,8 +288,8 @@ export function buildV2Event(options: EventOptions): Record<string, unknown> {
     pathParameters: pathParameters ?? undefined,
     stageVariables: undefined,
     requestContext: {
-      accountId: '000000000000',
-      apiId: 'lss-local',
+      accountId,
+      apiId: LOCAL_API_ID,
       domainName: headerValue(request.headers, 'host') || 'localhost',
       domainPrefix: 'lss',
       http: {
@@ -362,6 +400,122 @@ export function errorResponse(statusCode: number, message: string): MappedRespon
     cookies: [],
     body: Buffer.from(JSON.stringify({ message }), 'utf-8'),
   };
+}
+
+// ---------------------------------------------------------------------------
+// Gateway-generated responses
+// ---------------------------------------------------------------------------
+
+// REST APIs (v1, `http` events) and HTTP APIs (v2, `httpApi` events) answer
+// the same failure with different status codes and bodies, so every response
+// the gateway produces on its own is keyed by flavor.
+export type ApiFlavor = 'rest' | 'http';
+
+export function routeFlavor(route: Pick<HttpRoute, 'eventType'>): ApiFlavor {
+  return route.eventType === 'http' ? 'rest' : 'http';
+}
+
+// Flavor of a whole listener, for answers that have no route to key off (a
+// miss). AWS keeps the two kinds of API on separate hosts; LSS serves both of
+// a service's APIs on one port, so a listener answers as a REST API only when
+// every route on it is REST — a port carrying any HTTP API route keeps the
+// HTTP API answers.
+export function apiFlavor(routes: Array<Pick<HttpRoute, 'eventType'>>): ApiFlavor {
+  return routes.length > 0 && routes.every(r => r.eventType === 'http') ? 'rest' : 'http';
+}
+
+// The API Gateway response types the local gateway can raise itself. Named
+// after the REST API GatewayResponse types so a template's overrides can be
+// keyed by them.
+export type GatewayResponseType =
+  | 'MISSING_AUTHENTICATION_TOKEN'
+  | 'UNAUTHORIZED'
+  | 'ACCESS_DENIED'
+  | 'AUTHORIZER_CONFIGURATION_ERROR'
+  | 'INTEGRATION_FAILURE'
+  | 'DEFAULT_5XX';
+
+interface GatewayResponseDefault {
+  status: number;
+  body: Record<string, unknown>;
+  // REST only: the x-amzn-ErrorType header API Gateway sets on its own errors.
+  errorType?: string;
+}
+
+// AWS defaults, verbatim. REST quirks worth knowing:
+// - an unmatched path OR method is a 403 "Missing Authentication Token", not a
+//   404 — API Gateway cannot tell a missing resource from an unsigned call;
+// - an authorizer that fails or returns garbage is a 500 whose body is the
+//   literal `{"message":null}` (AuthorizerConfigurationException);
+// - the two policy denials use a capital-M `Message` key.
+// HTTP APIs answer with plain, lowercase-key messages.
+function gatewayDefault(type: GatewayResponseType, flavor: ApiFlavor, explicitDeny: boolean): GatewayResponseDefault {
+  if (flavor === 'http') {
+    switch (type) {
+      case 'MISSING_AUTHENTICATION_TOKEN': return { status: 404, body: { message: 'Not Found' } };
+      case 'UNAUTHORIZED': return { status: 401, body: { message: 'Unauthorized' } };
+      case 'ACCESS_DENIED': return { status: 403, body: { message: 'Forbidden' } };
+      default: return { status: 500, body: { message: 'Internal Server Error' } };
+    }
+  }
+  switch (type) {
+    case 'MISSING_AUTHENTICATION_TOKEN':
+      return { status: 403, body: { message: 'Missing Authentication Token' }, errorType: 'MissingAuthenticationTokenException' };
+    case 'UNAUTHORIZED':
+      return { status: 401, body: { message: 'Unauthorized' }, errorType: 'UnauthorizedException' };
+    case 'ACCESS_DENIED':
+      return {
+        status: 403,
+        body: {
+          Message: explicitDeny
+            ? 'User is not authorized to access this resource with an explicit deny'
+            : 'User is not authorized to access this resource',
+        },
+        errorType: 'AccessDeniedException',
+      };
+    case 'AUTHORIZER_CONFIGURATION_ERROR':
+      return { status: 500, body: { message: null }, errorType: 'AuthorizerConfigurationException' };
+    case 'INTEGRATION_FAILURE':
+      // A Lambda proxy integration that crashed or answered a malformed shape.
+      return { status: 502, body: { message: 'Internal server error' }, errorType: 'InternalServerErrorException' };
+    default:
+      return { status: 500, body: { message: 'Internal server error' }, errorType: 'InternalServerErrorException' };
+  }
+}
+
+export function gatewayErrorResponse(
+  type: GatewayResponseType,
+  flavor: ApiFlavor,
+  options: { explicitDeny?: boolean } = {},
+): MappedResponse {
+  const def = gatewayDefault(type, flavor, options.explicitDeny === true);
+  const headers: Record<string, string> = { 'content-type': 'application/json' };
+  if (def.errorType) headers['x-amzn-errortype'] = def.errorType;
+  return {
+    statusCode: def.status,
+    headers,
+    cookies: [],
+    body: Buffer.from(JSON.stringify(def.body), 'utf-8'),
+  };
+}
+
+// The response header carrying the gateway's request id: REST APIs send
+// x-amzn-RequestId, HTTP APIs apigw-requestid. Same value as the event's
+// requestContext.requestId.
+export function requestIdHeader(flavor: ApiFlavor, requestId: string): Record<string, string> {
+  return flavor === 'rest' ? { 'x-amzn-requestid': requestId } : { 'apigw-requestid': requestId };
+}
+
+// Whether an OPTIONS request is a preflight the gateway answers by itself.
+// API Gateway only does that when CORS is configured: an HTTP API's CORS is
+// API-wide (and, once configured, answers preflights even over an ANY or
+// OPTIONS route), a REST API's is per resource (the framework's `cors: true`
+// mock OPTIONS method). Without it, OPTIONS is an ordinary method — it reaches
+// an OPTIONS/ANY route's handler or is a missing route.
+export function answersPreflight(routes: HttpRoute[], rawPath: string): boolean {
+  if (routes.some(r => r.eventType === 'httpApi' && r.cors)) return true;
+  return routes.some(r =>
+    r.eventType === 'http' && r.cors && matchRoute([{ ...r, method: 'ANY' }], 'OPTIONS', rawPath) !== null);
 }
 
 function malformed(): MappedResponse {

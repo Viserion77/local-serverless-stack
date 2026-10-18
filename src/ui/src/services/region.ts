@@ -11,9 +11,32 @@ function readStored(): string {
   }
 }
 
+// AWS region shape (us-east-1, eu-central-2, us-gov-west-1, ap-southeast-4…).
+// Checked before a `?region=` value is trusted: it ends up in every API query.
+const REGION_PATTERN = /^[a-z]{2}(-[a-z]+)+-\d+$/;
+
+export function isRegionLike(value: unknown): value is string {
+  return typeof value === 'string' && REGION_PATTERN.test(value);
+}
+
+function readUrlRegion(): string | null {
+  try {
+    const value = new URLSearchParams(window.location.search).get('region');
+    return isRegionLike(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
+// Set once a `?region=` link chose the region. A shared link to
+// `/dynamo?region=eu-west-1` must open on eu-west-1 — the configured region
+// arriving a moment later would otherwise switch it back.
+let pinnedByUrl = readUrlRegion() !== null;
+
 // Stored value is only a first-paint cache; the server-configured region
-// takes over once /api/config resolves on app mount (applyConfiguredRegion).
-export const currentRegion = ref<string>(readStored());
+// takes over once /api/config resolves on app mount (applyConfiguredRegion) —
+// unless the URL named one (`?region=`), which wins over both.
+export const currentRegion = ref<string>(readUrlRegion() ?? readStored());
 
 watch(currentRegion, (v) => {
   try { localStorage.setItem(STORAGE_KEY, v); } catch { /* ignore */ }
@@ -29,7 +52,16 @@ const configuredRegion = ref<string>('');
 export function applyConfiguredRegion(region: string, userPicked = false): void {
   if (!region) return;
   configuredRegion.value = region;
-  if (!userPicked) currentRegion.value = region;
+  if (!userPicked && !pinnedByUrl) currentRegion.value = region;
+}
+
+// Called on every navigation (router.afterEach): an in-app or pasted link
+// carrying `?region=` selects that region. Ignored when absent or malformed,
+// so ordinary navigation keeps whatever region the user is on.
+export function applyRegionFromQuery(value: unknown): void {
+  if (!isRegionLike(value)) return;
+  pinnedByUrl = true;
+  currentRegion.value = value;
 }
 
 export const AWS_REGIONS: { value: string; label: string }[] = [

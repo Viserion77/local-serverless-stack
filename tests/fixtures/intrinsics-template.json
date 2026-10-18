@@ -1,0 +1,85 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "acme orders service — names and env written with intrinsics, the way hand-written resources: blocks are",
+  "Parameters": {
+    "Stage": { "Type": "String", "Default": "dev" },
+    "RetentionDays": { "Type": "Number", "Default": 4 }
+  },
+  "Mappings": {
+    "StageConfig": {
+      "dev": { "VisibilityTimeout": 30, "BucketSuffix": "sandbox" },
+      "prod": { "VisibilityTimeout": 120, "BucketSuffix": "live" }
+    }
+  },
+  "Conditions": {
+    "IsProd": { "Fn::Equals": [{ "Ref": "Stage" }, "prod"] },
+    "IsNotProd": { "Fn::Not": [{ "Condition": "IsProd" }] }
+  },
+  "Resources": {
+    "ServerlessDeploymentBucket": { "Type": "AWS::S3::Bucket" },
+    "OrdersTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": { "Fn::Sub": "${AWS::StackName}-orders" },
+        "BillingMode": "PAY_PER_REQUEST",
+        "KeySchema": [{ "AttributeName": "pk", "KeyType": "HASH" }],
+        "AttributeDefinitions": [{ "AttributeName": "pk", "AttributeType": "S" }],
+        "StreamSpecification": { "StreamViewType": "NEW_IMAGE" }
+      }
+    },
+    "JobsQueue": {
+      "Type": "AWS::SQS::Queue",
+      "Properties": {
+        "QueueName": { "Fn::Join": ["-", ["acme-orders", { "Ref": "Stage" }, "jobs"]] },
+        "VisibilityTimeout": { "Fn::FindInMap": ["StageConfig", { "Ref": "Stage" }, "VisibilityTimeout"] }
+      }
+    },
+    "UploadsBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {
+        "BucketName": {
+          "Fn::Join": ["-", [
+            "acme-uploads",
+            { "Fn::FindInMap": ["StageConfig", { "Ref": "Stage" }, "BucketSuffix"] },
+            { "Fn::Select": [0, { "Fn::Split": ["-", { "Ref": "AWS::Region" }] }] }
+          ]]
+        }
+      }
+    },
+    "AuditTopic": {
+      "Type": "AWS::SNS::Topic",
+      "Condition": "IsProd",
+      "Properties": { "TopicName": { "Fn::Sub": "${AWS::StackName}-audit" } }
+    },
+    "WorkerLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": { "Fn::Sub": "${AWS::StackName}-worker" },
+        "Handler": "src/worker.handler",
+        "Runtime": "nodejs20.x",
+        "Environment": {
+          "Variables": {
+            "STAGE": { "Ref": "Stage" },
+            "TABLE_NAME": { "Ref": "OrdersTable" },
+            "STREAM_ARN": { "Fn::GetAtt": ["OrdersTable", "StreamArn"] },
+            "QUEUE_URL": { "Ref": "JobsQueue" },
+            "QUEUE_ARN": { "Fn::GetAtt": ["JobsQueue", "Arn"] },
+            "BUCKET": { "Ref": "UploadsBucket" },
+            "AUDIT": { "Fn::If": ["IsProd", { "Ref": "AuditTopic" }, "disabled"] },
+            "DEBUG": { "Fn::If": ["IsNotProd", "true", { "Ref": "AWS::NoValue" }] },
+            "RETENTION": { "Ref": "RetentionDays" }
+          }
+        }
+      }
+    },
+    "WorkerRole": { "Type": "AWS::IAM::Role", "Properties": {} },
+    "WorkerLogGroup": { "Type": "AWS::Logs::LogGroup", "Properties": {} },
+    "ApiLogGroup": { "Type": "AWS::Logs::LogGroup", "Properties": {} }
+  },
+  "Outputs": {
+    "OrdersTableName": {
+      "Value": { "Ref": "OrdersTable" },
+      "Export": { "Name": { "Fn::Sub": "${AWS::StackName}-OrdersTableName" } }
+    }
+  }
+}

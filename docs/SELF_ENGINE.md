@@ -2,7 +2,7 @@
 
 The self engine is the in-process AWS emulator LSS runs on. It replaces a container-based emulator for the
 typical serverless dev loop: DynamoDB, SQS, S3, EventBridge, OpenSearch
-Serverless, Secrets Manager, SNS (minimal), Lambda control plane and STS served
+Serverless, Secrets Manager, SSM Parameter Store, SNS (minimal), Lambda control plane and STS served
 from a single `node:http` listener inside the orchestrator — no Docker, no
 container, no auth token. Design rationale and phased roadmap:
 [PRD_SELF_ENGINE.md](PRD_SELF_ENGINE.md) (PT-BR).
@@ -20,7 +20,8 @@ container, no auth token. Design rationale and phased roadmap:
     "idleUnloadMs": 300000,          // dehydrate idle data stores after 5 min
     "memoryBudgetMb": 128,           // LRU budget for hydrated data
     "fsync": false,                  // true = fsync every WAL flush (paranoid)
-    "fallbackEndpoint": null         // reverse-proxy unimplemented operations here
+    "fallbackEndpoint": null,        // reverse-proxy unemulated services here (catch-all)
+    "fallbackEndpoints": {}          // per-service overrides: { "<signing name>": url }
   }
 }
 ```
@@ -32,14 +33,26 @@ the REST API and the AWS wire are one URL. A request is routed by shape — SigV
 API/SPA (`src/server/engine/http/is-aws-request.ts`). Give the two keys different
 values to go back to two listeners.
 
-Env overrides: `LSS_ENGINE_PORT`, `LSS_ENGINE_DATA_DIR` — with `LSS_DASHBOARD_PORT`
-they are everything a second instance needs.
+Env overrides: `LSS_ENGINE_PORT`, `LSS_ENGINE_DATA_DIR`, `LSS_FALLBACK_ENDPOINT` —
+with `LSS_DASHBOARD_PORT` they are everything a second instance needs. Setting
+only `LSS_DASHBOARD_PORT` (or `serverPort`) moves the whole stack: the engine port
+follows it unless `selfEngine.port` is set explicitly to something else.
 
-Point your application at the engine like any AWS endpoint:
+Point your application at the engine like any AWS endpoint — `AWS_ENDPOINT_URL`
+is the variable the AWS SDK v3, the AWS CLI and boto3 read natively:
 
 ```
-AWS_ENDPOINT=http://localhost:14566
+AWS_ENDPOINT_URL=http://localhost:14566
 ```
+
+The LSS Lambda runtime sets it for you: every worker starts with
+`AWS_ENDPOINT_URL` pointing at the engine, `AWS_ACCESS_KEY_ID` /
+`AWS_SECRET_ACCESS_KEY` = `test` and `AWS_REGION` / `AWS_DEFAULT_REGION` = the
+service's region. Session tokens, profiles, role / web-identity / container
+credential variables and any `AWS_ENDPOINT_URL_<SERVICE>` inherited from the
+orchestrator's shell are removed, so a handler can never reach a real account
+with the developer's credentials. A template, `serviceRuntime.env` or function
+env that sets one of these explicitly still wins.
 
 \* And outside 4566–4599: a real LocalStack install (if your machine has one) intercepts that range on some hosts (Docker
 Desktop/WSL2), silently hijacking traffic. If you need the engine on 4566 for
@@ -62,27 +75,45 @@ LSS Lambda runtime — proxy Lambdas are absorbed as metadata
 (their `INVOKE_URL` doubles as an HTTP fallback for services still running
 serverless-offline).
 
+Provisioning reads back from the engine what a template can only reference:
+after a service's resources are created, function environments are filled with
+the physical values — queue URLs (`GetQueueUrl`), DynamoDB stream ARNs
+(`DescribeTable` `LatestStreamArn`), secret ARNs with their random suffix
+(`DescribeSecret`) and OpenSearch Serverless collection id/ARN/endpoint
+(`BatchGetCollection`) — so a handler reading `!Ref OrdersQueue` gets the URL
+the engine actually serves.
+
 ## Coverage
 
-Anything not listed answers with an explicit AWS-shaped error naming this file
-— or is forwarded verbatim to `fallbackEndpoint` when configured. Unknown
-operations never silently succeed. One known divergence is the exception: S3
-object ACL/policy sub-resources (treated as plain object operations) — see
-[Known divergences from AWS](#known-divergences-from-aws).
+Anything not listed answers with an explicit `NotImplemented` error naming
+`service.Operation` and linking to this table — or, for a service the engine
+does not emulate at all, is forwarded verbatim to a fallback endpoint when one is
+configured (see [Fallback endpoints](#fallback-endpoints)). The error comes back
+in the caller's own protocol — AWS JSON (an `X-Amz-Target` call), Query XML (an
+`Action=` call), S3-style XML (rest-xml services) or rest-json (`__type` plus
+`x-amzn-ErrorType`) — so every SDK surfaces it as a readable error rather than a
+parse failure. Unknown operations never silently succeed.
 
 | Service | Implemented (v1) | Explicit error until the hardening phase |
 |---|---|---|
-| DynamoDB | CreateTable, DescribeTable, DeleteTable, ListTables, Update/DescribeTimeToLive, Put/Get/Delete/UpdateItem, Query, Scan, BatchGetItem, BatchWriteItem, TransactWriteItems/TransactGetItems (all-or-nothing, `CancellationReasons` with `ReturnValuesOnConditionCheckFailure`, `ClientRequestToken` idempotency, stream records for committed writes) — full expression language (KeyCondition, Condition, Filter, Update, Projection), GSI/LSI with projection + sparse semantics, streams (in-process), lazy TTL, decimal-exact `N` arithmetic | UpdateTable, PartiQL, legacy parameters (`KeyConditions`, `Expected`, …), Streams wire API |
-| SQS | CreateQueue (idempotent), GetQueueUrl, Get/SetQueueAttributes (live counters), ListQueues, DeleteQueue, SendMessage(+Batch), ReceiveMessage (event-driven long poll), DeleteMessage(+Batch), PurgeQueue, ChangeMessageVisibility — FIFO groups/dedup, visibility redelivery, `x-amzn-query-error` compat header, MD5 digests, **queue-level redrive**: a `RedrivePolicy` (`{deadLetterTargetArn, maxReceiveCount}`) moves a message to its DLQ once `ApproximateReceiveCount` exceeds `maxReceiveCount`, preserving `MessageId`/body/`MessageAttributes`/MD5s and releasing the FIFO `MessageGroupId` | Legacy Query protocol (aws-sdk v2 / old boto3 — loud error suggests `fallbackEndpoint`), `RedriveAllowPolicy`, the manual redrive API (`StartMessageMoveTask`/`ListMessageMoveTasks`/`CancelMessageMoveTask`), tags |
-| S3 | Create/Head/Delete bucket, ListBuckets, GetBucketLocation, versioning flag, notification configuration (incl. legacy `CloudFunctionConfiguration` XML), ListObjectsV2 (prefix/delimiter/pagination/encoding-type), PutObject (aws-chunked decoded), **presigned POST (browser form upload: multipart/form-data, `${filename}` substitution, `success_action_status`/`success_action_redirect`, `x-amz-meta-*` fields)**, **CORS (`Put`/`Get`/`DeleteBucketCors`, preflight `OPTIONS`, `Access-Control-Allow-Origin` on responses — honors a matching bucket rule, else a dev-permissive default so browser uploads work out of the box; a bucket's CloudFormation `CorsConfiguration.CorsRules[]` is applied with `PutBucketCors` at create time, so the declared rules are live on the first boot instead of needing a bootstrap call)**, GetObject (Range, **`response-*` header overrides on presigned GET/HEAD — content-disposition/type/encoding/language/cache-control/expires**), HeadObject, DeleteObject(s), CopyObject — bodies streamed to disk blobs, never held in memory | Multipart uploads, version stacks. Object ACL/policy sub-resources (`?acl`, `?policy`) are **not** recognized — requests dispatch on HTTP method alone and behave as plain object operations (PutObjectAcl overwrites the object body): a known divergence, not an explicit error |
+| DynamoDB | CreateTable, DescribeTable, DeleteTable, ListTables, Update/DescribeTimeToLive, Put/Get/Delete/UpdateItem, Query, Scan, BatchGetItem, BatchWriteItem, TransactWriteItems/TransactGetItems (all-or-nothing, `CancellationReasons` with `ReturnValuesOnConditionCheckFailure`, `ClientRequestToken` idempotency, stream records for committed writes) — full expression language (KeyCondition, Condition, Filter, Update, Projection), GSI/LSI with projection + sparse semantics, streams (in-process), TTL (expired items hidden on read **and** deleted by a 30 s background sweep that emits the stream `REMOVE` with the TTL service identity), decimal-exact `N` arithmetic, **AWS read limits**: Query/Scan pages stop at 1 MB of examined data (before `FilterExpression`) and return `LastEvaluatedKey`, `ConsistentRead` on a GSI is a `ValidationException`, bare **reserved words** (the full 573-word list) as attribute names are rejected, and `a <> :v` is true when `a` is absent (every other comparator false) | UpdateTable, PartiQL, legacy parameters (`KeyConditions`, `Expected`, …), Streams wire API |
+| SQS | CreateQueue (idempotent), GetQueueUrl, Get/SetQueueAttributes (live counters), ListQueues (`MaxResults`/`NextToken` paging), ListDeadLetterSourceQueues, DeleteQueue, SendMessage(+Batch) (`MaximumMessageSize` enforced on body + attributes), ReceiveMessage (event-driven long poll), DeleteMessage(+Batch), PurgeQueue, ChangeMessageVisibility — FIFO groups/dedup, visibility redelivery, **AWS receipt-handle semantics** (the most recent handle still deletes the message after its visibility lapsed, until the next receive; `VisibilityTimeout: 0` makes the message visible again at once), `x-amzn-query-error` compat header, MD5 digests, **queue-level redrive**: a `RedrivePolicy` (`{deadLetterTargetArn, maxReceiveCount}`) moves a message to its DLQ on the receive that would push `ApproximateReceiveCount` past `maxReceiveCount` (not the instant its visibility lapses), preserving `MessageId`/body/`MessageAttributes`/MD5s and releasing the FIFO `MessageGroupId` | Legacy Query protocol (aws-sdk v2 / old boto3 — loud error suggests `fallbackEndpoint`), `RedriveAllowPolicy`, the manual redrive API (`StartMessageMoveTask`/`ListMessageMoveTasks`/`CancelMessageMoveTask`), tags |
+| S3 | Create/Head/Delete bucket, ListBuckets, GetBucketLocation, versioning flag, notification configuration (incl. legacy `CloudFunctionConfiguration` XML), ListObjectsV2 (prefix/delimiter/pagination/encoding-type), PutObject (aws-chunked decoded), **presigned POST (browser form upload: multipart/form-data, `${filename}` substitution, `success_action_status`/`success_action_redirect`, `x-amz-meta-*` fields)**, **CORS (`Put`/`Get`/`DeleteBucketCors`, preflight `OPTIONS`, `Access-Control-Allow-Origin` on responses — honors a matching bucket rule, else a dev-permissive default so browser uploads work out of the box; a bucket's CloudFormation `CorsConfiguration.CorsRules[]` is applied with `PutBucketCors` at create time, so the declared rules are live on the first boot instead of needing a bootstrap call)**, GetObject (Range, **`response-*` header overrides on presigned GET/HEAD — content-disposition/type/encoding/language/cache-control/expires**), HeadObject, DeleteObject(s), CopyObject — bodies streamed to disk blobs, never held in memory. **Bucket configuration**: Put/Get/DeleteBucketEncryption (one default-encryption rule; a bucket with none reports SSE-S3 `AES256`, as AWS does since 2023), Put/Get/DeleteBucketTagging (`NoSuchTagSet`, `InvalidTag`), Put/Get/DeletePublicAccessBlock (new buckets report all four flags on), Put/Get/DeleteBucketPolicy (stored verbatim, never evaluated). **Object system metadata**: `Content-Disposition`, `Cache-Control`, `Content-Encoding`, `Content-Language`, `Expires` and the SSE headers (`x-amz-server-side-encryption`, KMS key id, bucket key) are stored by PutObject, presigned POST and CopyObject (COPY keeps the source's content headers, REPLACE takes the request's; SSE falls back to the **destination** bucket's default) and returned by Get/Head | Multipart uploads, version stacks. Every other bucket subresource (lifecycle, ownershipControls, acl, website, logging, replication, versions, …) and object subresource (tagging, acl, retention, legal-hold, attributes, restore, select, torrent) answers `NotImplemented` (501) — it never falls through to CreateBucket, DeleteBucket or PutObject |
 | EventBridge | Create/Delete/DescribeEventBus, ListEventBuses, PutRule (pattern validation), DeleteRule, Enable/DisableRule, Put/RemoveTargets, ListRules, ListTargetsByRule, PutEvents (per-entry results, pattern matching: exact, array-OR, `prefix`, `exists`, nested) | `anything-but`, `numeric`, `suffix`, `wildcard`, `cidr` pattern operators (rejected at PutRule), Archives |
 | Lambda (control plane) | CreateFunction (metadata absorption), GetFunction, ListFunctions, UpdateFunctionConfiguration, DeleteFunction, Add/RemovePermission, Create/Get/List/Update/DeleteEventSourceMapping (Enabled toggle = QueueInspector hold/release), Invoke (in-process via the LSS runtime; `X-Amz-Invocation-Type` honored) | Versions/aliases, concurrency APIs |
 | OpenSearch Serverless | Control plane (`aoss`): CreateCollection (deterministic ids, ACTIVE immediately), BatchGetCollection (hands out the local `collectionEndpoint`), ListCollections, DeleteCollection (id or name). Data plane under `<engine>/_aoss/<collection>`: index create/get/delete/HEAD, `_mapping` get/merge, `_doc`/`_create`/`_update` (deep merge, `doc_as_upsert`/`upsert`) with versioning, auto-create on first write, `_bulk` NDJSON with per-item results, `_search`/`_count` (`match`, `match_phrase`, `multi_match`, `term`, `terms`, `range`, `prefix`, `wildcard`, `exists`, `ids`, `bool` + `minimum_should_match`; `sort`, `from`/`size`, `_source` filtering, `?q=`), aggregations (`terms`, `avg`, `sum`, `min`, `max`, `value_count`), `_refresh`, `_cat/indices` | Security/access/lifecycle policy APIs, VPC endpoints, scripted updates, `_mget`, scroll/PIT, sub-aggregations, relevance scoring (`_score` is a constant 1), analyzers/k-NN — all rejected with an explicit OpenSearch-shaped error |
+| SSM Parameter Store | PutParameter, GetParameter, GetParameters, GetParametersByPath, DescribeParameters, GetParameterHistory, LabelParameterVersion, DeleteParameter, DeleteParameters, AddTagsToResource, RemoveTagsFromResource, ListTagsForResource — `String`/`StringList`/`SecureString`, `Overwrite` versioning (100 versions kept), `name:version` / `name:label` selectors, `AllowedPattern`, tiers (4 KB / 8 KB, no downgrade), `DataType`, hierarchy rules (15 levels, `aws`/`ssm` reserved), `Recursive` by-path reads with filters and `NextToken` paging, per-region scoping. ARNs are `arn:aws:ssm:<region>:<account>:parameter/<name>`. Values persist in a catalog. CloudFormation `AWS::SSM::Parameter` is provisioned at registration (idempotent: an existing parameter is never overwritten) | KMS (`KeyId` accepted and echoed, default `alias/aws/ssm`), parameter policies (`Policies` always `[]`), UnlabelParameterVersion, public `/aws/service/…` parameters, every non-Parameter-Store SSM API (Run Command, Session Manager, documents, inventory…) |
 | SNS | CreateTopic, ListTopics, DeleteTopic, GetTopicAttributes, Publish (logged + counted, no fan-out) | Subscriptions and delivery |
 | STS | GetCallerIdentity | Everything else |
 | Secrets Manager | CreateSecret, GetSecretValue, PutSecretValue, UpdateSecret, DescribeSecret, DeleteSecret (recovery window + `ForceDeleteWithoutRecovery`), RestoreSecret, ListSecrets, TagResource/UntagResource, GetRandomPassword — real `AWSCURRENT`/`AWSPREVIOUS` version staging, `SecretString`/`SecretBinary`, `ClientRequestToken` idempotency, per-region scoping. Values persist in a catalog (not encrypted locally). Browsable in the dashboard's **Secrets** tab (list, version stages, reveal value). Secrets are populated before the first read by two boot paths — CloudFormation `AWS::SecretsManager::Secret` provisioned at registration, and **boot seeds** (see below) | Rotation scheduling/Lambda, replication, KMS encryption (`KmsKeyId` accepted and ignored), resource policies |
 
 ### Eventing (delivered in-process to the LSS Lambda runtime)
+
+Every wiring below works **without an invoke port**: when a service declares no
+`invokePort`, the function is still recorded in the Lambda control plane (with
+no `INVOKE_URL`) and the dispatcher delivers through the in-process function
+registry. The `INVOKE_URL` HTTP hop is only a fallback for functions LSS does
+not run itself.
 
 - **SQS → Lambda**: batch size + batching window honored, failure → visibility
   redelivery (AWS semantics, no custom retry machinery), FIFO per-group
@@ -154,6 +185,34 @@ Both paths share one value resolver, are idempotent (an existing active secret
 is skipped, never clobbered; one scheduled for deletion is warned and skipped)
 and non-fatal (a failure warns and boot continues).
 
+## Fallback endpoints
+
+Requests for a service the engine does not emulate can be forwarded verbatim to
+another AWS-compatible endpoint. `selfEngine.fallbackEndpoints` maps a SigV4
+signing name to a URL (`{ "kinesis": "http://localhost:4567", "iam":
+"http://localhost:4568" }`) and wins over `selfEngine.fallbackEndpoint`, the
+catch-all, which `LSS_FALLBACK_ENDPOINT` can also set. Unsigned calls carry no
+signing name, so only the catch-all applies to them; legacy SQS Query calls use
+the `sqs` entry. Proxied responses are cleaned up on the way back: single-valued
+headers such as `Date` keep only their first value — an upstream that sends
+`Date` twice would otherwise reach the SDK as one joined header and break its
+clock-skew correction from the second call on. Operation-level gaps inside an
+emulated service are never forwarded.
+
+## Resetting the engine
+
+`lss reset` (or `POST /_lss/reset` with the header `x-lss-confirm-reset: true`)
+empties every emulator in place — tables and items, queues and messages, buckets
+and objects, topics, buses and rules, secrets, parameters, OpenSearch
+collections, Lambda metadata and event source mappings — without restarting the
+process or rebinding the port. It works in persistent mode (the contents of the
+engine data dir are deleted; a directory that looks like a project or home dir
+is refused) and in memory. The route only answers loopback clients, and the
+custom header forces a CORS preflight it never answers, so a web page in the
+developer's browser cannot trigger it. Requests that arrive during a reset wait
+for it to finish. Registered services stay registered: `lss register` puts their
+resources back.
+
 ## Health endpoints
 
 - `GET /_lss/health` — native: `{ "status": "ok", "engine": "self" }`.
@@ -197,8 +256,10 @@ run `lss seed`. Worst case, delete `dataDir` and start clean.
 
 - No SigV4 verification, IAM, quotas or throttling; single account/region
   namespace per request scope.
-- DynamoDB: 1 MB page-size cap not enforced (Limit is); index queries answer
-  from the base table (correct semantics, dev-scale performance).
+- DynamoDB: index queries answer from the base table (correct semantics,
+  dev-scale performance). The TTL sweep deletes expired items within about 30 s
+  (AWS takes up to a few days); a dehydrated table without a stream is not
+  rehydrated just to delete — its expired items stay hidden from reads.
 - SQS legacy Query protocol (pre-JSON SDKs) is not served natively — use
   `fallbackEndpoint`.
 - SQS: queue-level redrive is enforced, but the DLQ must live in the same
@@ -206,9 +267,13 @@ run `lss seed`. Worst case, delete `dataDir` and start clean.
   `RedriveAllowPolicy` is stored and returned, never enforced, and the manual
   redrive API (`StartMessageMoveTask` and friends) is not implemented — drain a
   DLQ with ReceiveMessage/SendMessage instead.
-- S3: object ACL/policy sub-resources (`?acl`, `?policy`) are not recognized —
-  requests dispatch on HTTP method alone and behave as plain object operations
-  (a PutObjectAcl overwrites the object body).
+- S3: encryption is reported, not performed — bytes are stored unencrypted on
+  disk, but every object reports its encryption (`AES256` by default, or the
+  bucket's default rule) exactly as AWS does. KMS key ids are echoed as given.
+  Bucket policies and Public Access Block flags are stored, never enforced.
+- SSM: `SecureString` is not encrypted. `WithDecryption: true` returns the
+  value; without it the engine answers a deterministic opaque token (stable per
+  name/version/value, never the plaintext) in place of the ciphertext.
 - OpenSearch Serverless: the collection endpoint is path-based
   (`<engine>/_aoss/<collection>` instead of a per-collection host), collections
   are ACTIVE immediately (no CREATING phase), text matching is

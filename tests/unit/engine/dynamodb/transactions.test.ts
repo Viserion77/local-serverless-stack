@@ -180,7 +180,8 @@ describe('DynamoDbEmulator transactions', () => {
           Update: {
             TableName: 'users',
             Key: key('u#2', 'profile'),
-            UpdateExpression: 'SET plan = :plan',
+            UpdateExpression: 'SET #plan = :plan',
+            ExpressionAttributeNames: { '#plan': 'plan' },
             ExpressionAttributeValues: { ':plan': { S: 'pro' } },
           },
         },

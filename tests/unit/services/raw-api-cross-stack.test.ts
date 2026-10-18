@@ -223,7 +223,7 @@ describe('cross-stack authorizer enforcement (AuthorizerService, real resolution
 
   it('401s without invoking the authorizer when the identity source header is absent', async () => {
     const decision = await authorize(req({ headers: {} }));
-    expect(decision.deniedStatus).toBe(401);
+    expect(decision.denial).toBe('UNAUTHORIZED');
     // AWS never calls the authorizer when an identity source is missing.
     expect(invokeMock).not.toHaveBeenCalled();
   });
@@ -231,14 +231,14 @@ describe('cross-stack authorizer enforcement (AuthorizerService, real resolution
   it('403s when the cross-stack authorizer denies (simple response isAuthorized:false)', async () => {
     invokeMock.mockResolvedValue({ ok: true, payload: { isAuthorized: false }, logs: [] });
     const decision = await authorize(req({ headers: { authorization: 'Bearer wrong' } }));
-    expect(decision.deniedStatus).toBe(403);
+    expect(decision.denial).toBe('ACCESS_DENIED');
   });
 
   it('allows with context, invoking the OWNING service\'s authorizer Lambda by ARN', async () => {
     invokeMock.mockResolvedValue({ ok: true, payload: { isAuthorized: true, context: { user: 'ts-user' } }, logs: [] });
     const decision = await authorize(req({ headers: { authorization: 'Bearer lss-secret' } }));
 
-    expect(decision.deniedStatus).toBeUndefined();
+    expect(decision.denial).toBeUndefined();
     expect(decision.authorizer).toEqual({ context: { user: 'ts-user' } });
 
     // The invoke crossed the service boundary: users-service ran it, not gateway-stack.
@@ -254,6 +254,6 @@ describe('cross-stack authorizer enforcement (AuthorizerService, real resolution
     registerGatewayStack(routes, authorizers); // users-service deliberately absent
     const config = FunctionRegistry.getInstance().getAuthorizer('gateway-stack', routes[0].authorizerName!)!;
     const decision = await authService.authorize('gateway-stack', 'dev', routes[0], config, req({ headers: { authorization: 'Bearer lss-secret' } }));
-    expect(decision.deniedStatus).toBe(500);
+    expect(decision.denial).toBe('AUTHORIZER_CONFIGURATION_ERROR');
   });
 });

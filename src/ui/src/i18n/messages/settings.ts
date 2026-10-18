@@ -48,7 +48,7 @@ export const settings: AreaMessages = {
 
     engineCard: 'Engine',
     engineBadge: 'self — in-process',
-    enginePortHint: 'Default 14566',
+    enginePortHint: 'Defaults to the server port (one listener)',
     selfEnginePort: 'Self engine port',
     accountId: 'Account id',
     accountIdHint: 'Used in every ARN',
@@ -180,7 +180,7 @@ export const settings: AreaMessages = {
 
     engineCard: 'Engine',
     engineBadge: 'self — em processo',
-    enginePortHint: 'Padrão 14566',
+    enginePortHint: 'Padrão: a porta do servidor (um listener só)',
     selfEnginePort: 'Porta do self engine',
     accountId: 'Account id',
     accountIdHint: 'Usado em todo ARN',
@@ -309,7 +309,7 @@ export const settings: AreaMessages = {
 
     engineCard: 'Engine',
     engineBadge: 'self — en proceso',
-    enginePortHint: 'Por defecto 14566',
+    enginePortHint: 'Por defecto, el puerto del servidor (un solo listener)',
     selfEnginePort: 'Puerto del self engine',
     accountId: 'Account id',
     accountIdHint: 'Se usa en cada ARN',

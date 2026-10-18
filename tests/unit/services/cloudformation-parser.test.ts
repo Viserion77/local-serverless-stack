@@ -983,7 +983,7 @@ describe('parseEventRule', () => {
             EventPattern: { source: ['x'] },
             Targets: [
               { Arn: 'arn:aws:lambda:us-east-1:000000000000:function:svc-dev-handler' },
-              { Arn: { 'Fn::Sub': 'not-resolvable' }, Id: 'ignored' },
+              { Arn: { 'Fn::ImportValue': 'not-resolvable' }, Id: 'ignored' },
             ],
           },
         },
@@ -1007,12 +1007,13 @@ describe('AWS::Events::Archive', () => {
       },
     } as never, warnings);
     expect(resources).toEqual([]);
+    // Its own explanation only — it is not counted again in the summary.
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('BusArchive');
     expect(warnings[0]).toContain('Archive');
   });
 
-  it('does not touch the warnings sink for supported or unknown types', () => {
+  it('adds nothing for supported types and only the one summary line for unknown ones', () => {
     const warnings: string[] = [];
     parser.parse({
       Resources: {
@@ -1020,7 +1021,10 @@ describe('AWS::Events::Archive', () => {
         Role: { Type: 'AWS::IAM::Role', Properties: {} },
       },
     } as never, warnings);
-    expect(warnings).toEqual([]);
+    expect(warnings).toEqual([
+      'Skipped 1 of 2 resource(s) whose type LSS does not provision: AWS::IAM::Role ×1. ' +
+      '(HTTP routes and authorizers declared as function events are served from serverless-state.json regardless.)',
+    ]);
   });
 });
 
@@ -1093,6 +1097,7 @@ describe('parseOpenSearchCollection', () => {
       },
     } as never, warnings);
     expect(resources).toEqual([]);
+    // Each policy is reported once, by name — not again in the skipped summary.
     expect(warnings).toHaveLength(3);
     expect(warnings[0]).toContain('AWS::OpenSearchServerless::SecurityPolicy "Encryption"');
     expect(warnings[1]).toContain('AWS::OpenSearchServerless::AccessPolicy "DataAccess"');
@@ -1248,11 +1253,16 @@ describe('parseApiRoute (AWS::ApiGatewayV2::Route)', () => {
 
     expect(parseTarget('not-an-integration')).toBeUndefined();
     expect(parseTarget({ 'Fn::Sub': 'nope' })).toBeUndefined();
+    // An intrinsic the static pass leaves in place, as the Sub's only argument.
+    expect(parseTarget({ 'Fn::Sub': [{ 'Fn::ImportValue': 'x' }] })).toBeUndefined();
     expect(parseTarget({ 'Fn::Join': ['/', 'not-an-array'] })).toBeUndefined();
-    // Fn::Join whose last part is a literal string id.
+    // Fn::Join whose last part is a literal string id. (An all-literal Join is
+    // folded to a plain string by the static pass first — the first part is
+    // left unresolvable so the Join itself reaches parseIntegrationRef.)
     expect(parseTarget({ 'Fn::Join': ['/', ['integrations', 'LiteralInt']] })).toBe('LiteralInt');
+    expect(parseTarget({ 'Fn::Join': ['/', [{ 'Fn::ImportValue': 'prefix' }, 'LiteralInt']] })).toBe('LiteralInt');
     // Fn::Join whose last part is neither a string nor a {Ref}.
-    expect(parseTarget({ 'Fn::Join': ['/', ['integrations', { 'Fn::Sub': 'x' }]] })).toBeUndefined();
+    expect(parseTarget({ 'Fn::Join': ['/', ['integrations', { 'Fn::ImportValue': 'x' }]] })).toBeUndefined();
   });
 
   // The idiom a hand-written `resources:` block emits, and the one the
@@ -1369,7 +1379,9 @@ describe('parseLambdaPermission (AWS::Lambda::Permission)', () => {
       action: 'lambda:InvokeFunction',
       functionRef: { 'Fn::GetAtt': ['FnLambdaFunction', 'Arn'] },
       principal: 'apigateway.amazonaws.com',
-      sourceArn: { 'Fn::Sub': 'arn:${AWS::Partition}:execute-api:${AWS::Region}:${AWS::AccountId}:abc/*' },
+      // The static pass substitutes what it knows; with no region given,
+      // ${AWS::Region} is left for resolveArnLike at assembly time.
+      sourceArn: { 'Fn::Sub': 'arn:aws:execute-api:${AWS::Region}:000000000000:abc/*' },
     });
   });
 
@@ -1592,5 +1604,84 @@ describe('fixtures (end-to-end)', () => {
       (r) => r.type === 'event-source' && (r as EventSourceMapping).eventSourceArn.includes('StreamArn'),
     ) as EventSourceMapping;
     expect(streamMapping.functionName).toBe('OnOrderStreamLambdaFunction');
+  });
+});
+
+// The static intrinsic pass runs before any property is read, so names written
+// as intrinsics reach the provisioner as strings, and conditioned-out
+// resources never reach it at all.
+describe('static intrinsic pass (parseTemplate)', () => {
+  const INTRINSICS = path.resolve(__dirname, '../../fixtures/intrinsics-template.json');
+  const load = () => JSON.parse(fs.readFileSync(INTRINSICS, 'utf8'));
+
+  it('resolves Parameters, Mappings, Conditions and pseudo parameters in names', () => {
+    const warnings: string[] = [];
+    const { resources, template } = parser.parseTemplate(load(), warnings, { region: 'sa-east-1', stackName: 'acme-orders-dev' });
+
+    const table = resources.find(r => r.type === 'dynamodb') as DynamoDBResource;
+    expect(table.name).toBe('acme-orders-dev-orders');
+    const queue = resources.find(r => r.type === 'sqs') as SQSResource;
+    expect(queue.name).toBe('acme-orders-dev-jobs');
+    expect(queue.visibilityTimeout).toBe(30);
+    const bucket = resources.find(r => r.type === 's3') as S3Resource;
+    expect(bucket.name).toBe('acme-uploads-sandbox-sa');
+    // IsProd is false for the Default stage: the topic is gone.
+    expect(resources.some(r => r.type === 'sns')).toBe(false);
+
+    const worker = resources.find(r => r.type === 'lambda') as LambdaResource;
+    expect(worker.name).toBe('acme-orders-dev-worker');
+    // Statically known values are resolved; resource references wait for the
+    // physical pass (cfn-physical-values.ts). IsNotProd holds, so DEBUG stays.
+    expect(worker.environment).toEqual({
+      STAGE: 'dev',
+      TABLE_NAME: { Ref: 'OrdersTable' },
+      STREAM_ARN: { 'Fn::GetAtt': ['OrdersTable', 'StreamArn'] },
+      QUEUE_URL: { Ref: 'JobsQueue' },
+      QUEUE_ARN: { 'Fn::GetAtt': ['JobsQueue', 'Arn'] },
+      BUCKET: { Ref: 'UploadsBucket' },
+      AUDIT: 'disabled',
+      DEBUG: 'true',
+      RETENTION: 4,
+    });
+
+    // The resolved template comes back too (Outputs for the export map).
+    expect((template.Outputs as any).OrdersTableName.Export.Name).toBe('acme-orders-dev-OrdersTableName');
+
+    expect(warnings).toEqual([
+      'Dropped 1 resource(s) whose Condition is false: AuditTopic.',
+      // Sorted by count, then name; the framework's deployment bucket is not a gap.
+      'Skipped 3 of 8 resource(s) whose type LSS does not provision: AWS::Logs::LogGroup ×2, AWS::IAM::Role ×1. ' +
+      '(HTTP routes and authorizers declared as function events are served from serverless-state.json regardless.)',
+    ]);
+  });
+
+  it('applies parameter overrides and keeps a conditioned resource whose condition holds', () => {
+    const { resources } = parser.parseTemplate(load(), [], {
+      region: 'us-east-1',
+      stackName: 'acme-orders-prod',
+      parameterOverrides: { Stage: 'prod' },
+    });
+    expect((resources.find(r => r.type === 'sqs') as SQSResource).visibilityTimeout).toBe(120);
+    expect((resources.find(r => r.type === 'sns') as SNSResource).name).toBe('acme-orders-prod-audit');
+    const worker = resources.find(r => r.type === 'lambda') as LambdaResource;
+    expect(worker.environment.AUDIT).toEqual({ Ref: 'AuditTopic' });
+    expect(worker.environment).not.toHaveProperty('DEBUG');
+  });
+
+  it('works without a context and without a warnings sink', () => {
+    const resources = parser.parse(load());
+    // No stack name given: the token is left alone rather than invented.
+    expect((resources.find(r => r.type === 'dynamodb') as DynamoDBResource).name).toEqual({ 'Fn::Sub': '${AWS::StackName}-orders' });
+  });
+
+  it('counts a resource with no Type under "(no Type)"', () => {
+    const warnings: string[] = [];
+    parser.parse({ Resources: { Odd: {} } } as never, warnings);
+    expect(warnings[0]).toContain('(no Type) ×1');
+  });
+
+  it('returns the input template untouched when it has no Resources', () => {
+    const input = { Outputs: {} } as never;
+    expect(parser.parseTemplate(input)).toEqual({ resources: [], template: input });
   });
 });

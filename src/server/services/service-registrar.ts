@@ -12,8 +12,12 @@ import {
   ServerlessStateParser,
   RegisteredFunction,
   sanitizeEnvironmentValues,
+  readStateIdentity,
+  stageFromPackageArgs,
+  stageMismatchWarnings,
   type ParsedServerlessState,
 } from './serverless-state-parser.js';
+import { EnvironmentResolver } from './cfn-physical-values.js';
 import { CacheManager, ServiceMetadata, ServicePortHints } from './cache-manager.js';
 import { ResourceProvisioner } from './resource-provisioner.js';
 import { ConfigManager, ResolvedRuntimeConfig } from './config-manager.js';
@@ -110,13 +114,21 @@ export class ServiceRegistrar {
       warnings,
       input.repackage ?? false,
     ) as Parameters<CloudFormationParser['parse']>[0];
-    const resources = cfnParser.parse(template, warnings);
-    const templateHash = cfnParser.calculateHash(template);
 
     // serverless-state.json is the declarative source for routes/authorizers.
     // Missing state (older setups) degrades gracefully: functions still come
-    // from the CFN template, HTTP routes are just unavailable.
+    // from the CFN template, HTTP routes are just unavailable. Read FIRST: its
+    // stack name, stage and region feed the template's pseudo parameters.
     const state = await this.readState(resolvedPath);
+    const identity = readStateIdentity(state);
+    const effectiveRegion = input.region
+      || identity.region
+      || configManager.getConfig().region
+      || 'us-east-1';
+    const templateContext = { region: effectiveRegion, stackName: identity.stackName };
+    const { resources, template: resolvedTemplate } = cfnParser.parseTemplate(template, warnings, templateContext);
+    const templateHash = cfnParser.calculateHash(template);
+
     let functions: RegisteredFunction[] = [];
     let routes: ServiceMetadata['routes'] = [];
     let authorizers: ServiceMetadata['authorizers'] = [];
@@ -136,21 +148,35 @@ export class ServiceRegistrar {
     // An explicit request value still wins as a deliberate override.
     let parsed: ParsedServerlessState | null = null;
     if (state) {
-      parsed = stateParser.parse(state);
+      // The template's Lambdas let an authorizer declared as
+      // `arn: !GetAtt AuthLambdaFunction.Arn` resolve to its function.
+      parsed = stateParser.parse(state, { lambdaNames: new Map(cfnLambdas.map(l => [l.logicalId, l.name])) });
     }
-    const effectiveRegion = input.region
-      || parsed?.region
-      || configManager.getConfig().region
-      || 'us-east-1';
 
     if (parsed) {
       if (parsed.serviceName) serviceName = parsed.serviceName;
       warnings.push(...parsed.warnings);
+      // Whatever stage the last package run used is what gets registered —
+      // say so when something on record expected another one.
+      const pkgConfig = configManager.getPackageConfigForService(resolvedPath);
+      const previous = await cache.getMetadata(serviceName);
+      warnings.push(...stageMismatchWarnings(parsed.stage, [
+        {
+          stage: stageFromPackageArgs(pkgConfig.args),
+          source: `the packaging command (${[pkgConfig.command, ...pkgConfig.args].join(' ')})`,
+        },
+        {
+          stage: previous && previous.root === resolvedPath ? previous.stage : undefined,
+          source: 'the previous registration of this service',
+        },
+      ]));
       stage = parsed.stage;
       routes = parsed.routes;
       authorizers = parsed.authorizers;
       // The CFN template carries the fully resolved function env (state may
-      // still hold unresolved refs) — prefer it when the names line up.
+      // still hold unresolved refs) — prefer it when the names line up. This is
+      // the provisional form; resource references become physical values once
+      // provisioning has run (EnvironmentResolver below).
       functions = parsed.functions.map(fn => {
         const cfn = cfnLambdas.find(l => l.name === fn.fullName);
         return cfn
@@ -188,8 +214,6 @@ export class ServiceRegistrar {
       routes = [...(routes ?? []), ...assembled.routes];
       authorizers = [...(authorizers ?? []), ...assembled.authorizers];
     }
-    // Record this stack's exports so a later service's Fn::ImportValue resolves.
-    collectStackExports(cfnParser, resources, template.Outputs as Record<string, unknown> | undefined, effectiveRegion, this.exportMap);
 
     // Port resolution: lss.config.json serviceRuntime > request payload >
     // custom.lss hints from the packaged state > invokePortOffset rule
@@ -245,7 +269,12 @@ export class ServiceRegistrar {
       routes,
       authorizers,
     };
-    await cache.saveTemplate(serviceName, template, metadata);
+    // The RESOLVED template is what gets cached: every later reader (the
+    // resource listing, the service graph, cleanup on delete) re-parses it
+    // without this registration's region/stack name, and must see the same
+    // names that were provisioned — not `${AWS::StackName}-orders`, and not a
+    // resource whose Condition was false. The hash stays the source's.
+    await cache.saveTemplate(serviceName, resolvedTemplate, metadata);
 
     // Provisioning is non-fatal by policy — but what it could not do travels
     // back with the result now, instead of living only in the daemon log.
@@ -254,6 +283,37 @@ export class ServiceRegistrar {
       region: effectiveRegion,
     });
     warnings.push(...provisioned.warnings);
+
+    // Function environment, final form: every Ref/GetAtt to a resource becomes
+    // the value AWS would inject (table name, queue URL, stream ARN, …). Done
+    // after provisioning because some of those only exist now. The template's
+    // env wins over serverless-state's for the same key, as before.
+    const envResolver = new EnvironmentResolver({
+      template,
+      ...templateContext,
+      resources,
+      runtime: await ResourceProvisioner.getInstance().lookupRuntimeAttributes(resources),
+      exports: this.exportMap,
+      warnings,
+    });
+    functions = functions.map(fn => {
+      const cfn = cfnLambdas.find(l => l.name === fn.fullName);
+      const raw = { ...(parsed?.rawEnvironment[fn.name] ?? fn.environment), ...(cfn?.environment ?? {}) };
+      return { ...fn, environment: envResolver.resolve(raw) };
+    });
+    metadata.functions = functions;
+    await cache.updateMetadata(serviceName, { functions });
+
+    // Record this stack's exports so a later service's Fn::ImportValue resolves
+    // — to a Lambda ARN, and now to any physical value (table name, queue URL).
+    collectStackExports(
+      cfnParser,
+      resources,
+      resolvedTemplate.Outputs as Record<string, unknown> | undefined,
+      effectiveRegion,
+      this.exportMap,
+      value => envResolver.resolveValue(value),
+    );
 
     await this.activate({ name: serviceName, ...metadata });
 

@@ -2,9 +2,12 @@
 // recovery: a port conflict must flag 'port-conflict' (never fail), keep
 // retrying on a short interval, flip to 'online' once the port frees up, and
 // stop retrying the moment the service stops. Real localhost listeners on
-// ephemeral ports keep this hermetic; the request-handling paths (coverage-
-// excluded, integration-tested) are not driven here. The runtime manager is
-// jest.mocked — the real module forks workers and uses import.meta.
+// ephemeral ports keep this hermetic. The request-handling paths (the file is
+// coverage-excluded: it binds real listeners) are driven at the end over real
+// HTTP, for the AWS answers the gateway produces itself — REST vs HTTP API
+// misses, preflights, the request id header, single path decoding and
+// authorizer denials. The runtime manager is jest.mocked — the real module
+// forks workers and uses import.meta.
 import http from 'http';
 import type { AddressInfo } from 'net';
 
@@ -15,7 +18,10 @@ jest.mock('../../../src/server/services/lambda-runtime-manager', () => {
 
 import { GatewayManager } from '../../../src/server/services/gateway-manager';
 import { getBindHost } from '../../../src/server/services/bind-host';
-import type { ServiceEntry } from '../../../src/server/services/function-registry';
+import { FunctionRegistry, type ServiceEntry } from '../../../src/server/services/function-registry';
+import { AuthorizerService } from '../../../src/server/services/authorizer-service';
+import { LambdaRuntimeManager } from '../../../src/server/services/lambda-runtime-manager';
+import type { HttpRoute, AuthorizerConfig, RegisteredFunction } from '../../../src/server/services/serverless-state-parser';
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -198,4 +204,131 @@ it('re-syncing a conflicted service replaces its retry timers with the new bind'
   await closeServer(blocker);
   await waitFor(() => gm.getInfo('svc-resync').api.status === 'online');
   expect(await portIsFree(port)).toBe(false);
+});
+
+describe('API request handling', () => {
+  const invokeMock = LambdaRuntimeManager.getInstance().invoke as jest.Mock;
+  const fnDef = (name: string): RegisteredFunction => ({
+    name, fullName: `svc-http-dev-${name}`, handler: 'h.handler', runtime: 'nodejs20.x', memorySize: 128, timeout: 6, environment: {}, triggers: [],
+  });
+  let port: number;
+
+  // Register a service in the real registry and bind its API listener.
+  async function serve(routes: HttpRoute[], authorizers: AuthorizerConfig[] = []): Promise<void> {
+    const placeholder = await occupy();
+    port = portOf(placeholder);
+    await closeServer(placeholder);
+    (FunctionRegistry as any).instance = undefined;
+    const entry = FunctionRegistry.getInstance().registerService({
+      name: 'svc-http', root: '/proj/svc-http', templateHash: 'h', lastUpdated: 1, status: 'registered',
+      stage: 'dev', region: 'sa-east-1', apiPort: port,
+      functions: [fnDef('fn'), fnDef('authFn')], routes, authorizers,
+    });
+    await gm.syncService(entry, true);
+  }
+
+  const call = (method: string, path: string, headers: Record<string, string> = {}) =>
+    fetch(`http://127.0.0.1:${port}${path}`, { method, headers });
+
+  const restRoute = (method: string, path: string, overrides: Partial<HttpRoute> = {}): HttpRoute =>
+    ({ functionName: 'fn', method, path, eventType: 'http', cors: false, ...overrides });
+
+  beforeEach(() => {
+    (AuthorizerService as any).instance = undefined;
+    invokeMock.mockReset();
+    invokeMock.mockResolvedValue({ ok: true, payload: { statusCode: 200, body: 'ok' }, logs: [], durationMs: 1 });
+  });
+
+  afterAll(() => {
+    (FunctionRegistry as any).instance = undefined;
+  });
+
+  it('REST miss: 403 Missing Authentication Token with the REST error/request-id headers', async () => {
+    await serve([restRoute('GET', '/users')]);
+    for (const [method, path] of [['GET', '/nowhere'], ['POST', '/users']]) {
+      const res = await call(method, path);
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ message: 'Missing Authentication Token' });
+      expect(res.headers.get('x-amzn-errortype')).toBe('MissingAuthenticationTokenException');
+      expect(res.headers.get('x-amzn-requestid')).toMatch(/^[0-9a-f-]{36}$/);
+    }
+  });
+
+  it('HTTP API miss: 404 Not Found with apigw-requestid', async () => {
+    await serve([restRoute('GET', '/users', { eventType: 'httpApi' })]);
+    const res = await call('GET', '/nowhere');
+    expect(res.status).toBe(404);
+    expect(await res.json()).toEqual({ message: 'Not Found' });
+    expect(res.headers.get('apigw-requestid')).toMatch(/^[0-9a-f-]{36}$/);
+  });
+
+  it('OPTIONS is only a gateway preflight when CORS is configured', async () => {
+    await serve([restRoute('GET', '/open', { cors: true }), restRoute('GET', '/closed')]);
+    const preflight = await call('OPTIONS', '/open', { origin: 'http://app.local' });
+    expect(preflight.status).toBe(204);
+    expect(preflight.headers.get('access-control-allow-origin')).toBe('http://app.local');
+    expect(preflight.headers.get('access-control-allow-methods')).toBe('OPTIONS,GET');
+    const plain = await call('OPTIONS', '/closed');
+    expect(plain.status).toBe(403);
+    expect(invokeMock).not.toHaveBeenCalled();
+  });
+
+  it('without CORS an ANY route receives OPTIONS like any other method', async () => {
+    await serve([restRoute('ANY', '/any')]);
+    const res = await call('OPTIONS', '/any');
+    expect(res.status).toBe(200);
+    expect(invokeMock.mock.calls[0][2].httpMethod).toBe('OPTIONS');
+  });
+
+  it('decodes the path once and shares one request id between the event and the response header', async () => {
+    await serve([restRoute('GET', '/files/{name}')]);
+    const res = await call('GET', '/files/a%2525b');
+    expect(res.status).toBe(200);
+    const event = invokeMock.mock.calls[0][2];
+    expect(event.pathParameters).toEqual({ name: 'a%25b' });
+    expect(event.path).toBe('/files/a%25b');
+    expect(event.requestContext.requestId).toBe(res.headers.get('x-amzn-requestid'));
+  });
+
+  it('integration failures: REST 502, HTTP API 500', async () => {
+    invokeMock.mockResolvedValue({ ok: false, errorType: 'Error', errorMessage: 'boom', logs: [], durationMs: 1 });
+    await serve([restRoute('GET', '/rest'), restRoute('GET', '/v2', { eventType: 'httpApi' })]);
+    const rest = await call('GET', '/rest');
+    expect(rest.status).toBe(502);
+    expect(await rest.json()).toEqual({ message: 'Internal server error' });
+    const v2 = await call('GET', '/v2');
+    expect(v2.status).toBe(500);
+    expect(await v2.json()).toEqual({ message: 'Internal Server Error' });
+  });
+
+  it('REST authorizer: policy checked against the methodArn (service region), throw "Unauthorized" → 401', async () => {
+    const auth: AuthorizerConfig = {
+      name: 'fn:auth', type: 'token', eventType: 'http', payloadVersion: '1.0', enableSimpleResponses: false,
+      identitySource: ['method.request.header.Authorization'], resultTtlInSeconds: 0, functionName: 'authFn',
+    };
+    await serve([restRoute('GET', '/secure/{id}', { authorizerName: 'fn:auth' })], [auth]);
+
+    invokeMock.mockImplementation(async (_svc: string, fn: RegisteredFunction, event: any) => {
+      if (fn.name !== 'authFn') return { ok: true, payload: { statusCode: 200, body: 'in' }, logs: [], durationMs: 1 };
+      if (event.authorizationToken === 'throw') return { ok: false, errorType: 'Error', errorMessage: 'Unauthorized', logs: [], durationMs: 1 };
+      return {
+        ok: true,
+        payload: { principalId: 'u', policyDocument: { Statement: [{ Effect: 'Allow', Action: 'execute-api:Invoke', Resource: '*/GET/secure/1' }] } },
+        logs: [], durationMs: 1,
+      };
+    });
+
+    const allowed = await call('GET', '/secure/1', { authorization: 'ok' });
+    expect(allowed.status).toBe(200);
+    const authEvent = invokeMock.mock.calls.find(c => c[1].name === 'authFn')![2];
+    expect(authEvent.methodArn).toBe('arn:aws:execute-api:sa-east-1:000000000000:lss-local/dev/GET/secure/1');
+
+    const denied = await call('GET', '/secure/2', { authorization: 'ok' });
+    expect(denied.status).toBe(403);
+    expect(await denied.json()).toEqual({ Message: 'User is not authorized to access this resource' });
+
+    const thrown = await call('GET', '/secure/1', { authorization: 'throw' });
+    expect(thrown.status).toBe(401);
+    expect(await thrown.json()).toEqual({ message: 'Unauthorized' });
+  });
 });

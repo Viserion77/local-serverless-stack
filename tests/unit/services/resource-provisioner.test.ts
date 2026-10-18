@@ -40,6 +40,7 @@ import {
 import {
   SecretsManagerClient,
   CreateSecretCommand,
+  DescribeSecretCommand,
   GetRandomPasswordCommand,
 } from '@aws-sdk/client-secrets-manager';
 import {
@@ -1193,17 +1194,24 @@ describe('ensureLambdaProxyExists', () => {
     );
   });
 
-  it('throws when no invoke URL is configured (no invokePort/invokeUrl in metadata)', async () => {
+  // No invoke port is the normal self-engine case: the dispatcher delivers
+  // through the in-process registry, so the target record and the mapping are
+  // created anyway — just without an INVOKE_URL to fall back on.
+  it('still wires the mapping when no invoke URL is configured (no invokePort/invokeUrl in metadata)', async () => {
     lambdaMock.on(GetFunctionCommand).rejects(namedError('ResourceNotFoundException'));
+    lambdaMock.on(CreateFunctionCommand).resolves({});
+    lambdaMock.on(ListEventSourceMappingsCommand).resolves({ EventSourceMappings: [] });
+    lambdaMock.on(CreateEventSourceMappingCommand).resolves({});
     await provisioner.provisionResources(
       'svc',
       [eventSource({ eventSourceArn: 'arn:aws:sqs:us-east-1:000:q' })],
       // no metadata → invokeUrl undefined
     );
-    expect(console.error).toHaveBeenCalledWith(
-      'Failed to provision event-source for ProcessOrderLambdaFunction:',
-      expect.stringContaining('no invoke URL configured'),
-    );
+    expect(console.error).not.toHaveBeenCalled();
+    const input = lambdaMock.commandCalls(CreateFunctionCommand)[0].args[0].input as any;
+    expect(input.Environment.Variables).toEqual({ FUNCTION_NAME: 'svc-api-processOrder' });
+    expect(lambdaMock.commandCalls(CreateEventSourceMappingCommand)).toHaveLength(1);
+    expect(console.log).toHaveBeenCalledWith(expect.stringContaining('delivered in-process by the LSS runtime'));
   });
 });
 
@@ -2248,5 +2256,71 @@ describe('event rules deferred until their bus exists', () => {
     eventBridgeMock.on(PutRuleCommand).rejects(new Error('Event bus domain-events does not exist.'));
     const outcome = await provisioner.provisionResources('consumer', [consumerRule()]);
     expect(outcome.warnings[0]).toContain('is waiting for event bus');
+  });
+});
+
+// The post-provisioning lookup feeding the function-environment pass: only the
+// attributes the engine mints at creation, best-effort per resource.
+describe('lookupRuntimeAttributes', () => {
+  const secret = { type: 'secret', logicalId: 'Db', name: 'orders/db', tags: [] } as SecretsManagerResource;
+
+  it('collects queue URLs, stream ARNs, secret ARNs and collection details', async () => {
+    sqsMock.on(GetQueueUrlCommand).resolves({ QueueUrl: 'http://localhost:14566/000000000000/order-queue' });
+    dynamoMock.on(DescribeTableCommand).resolves({ Table: { LatestStreamArn: 'arn:aws:dynamodb:us-east-1:000000000000:table/orders-table/stream/x' } });
+    secretsMock.on(DescribeSecretCommand).resolves({ ARN: 'arn:aws:secretsmanager:us-east-1:000000000000:secret:orders/db-AbCdEf' });
+    openSearchMock.on(BatchGetCollectionCommand).resolves({
+      collectionDetails: [
+        { name: 'products', id: 'c1', arn: 'arn:aws:aoss:us-east-1:000000000000:collection/c1', collectionEndpoint: 'http://e' },
+        { id: 'nameless' },
+      ],
+    });
+
+    const attrs = await provisioner.lookupRuntimeAttributes([
+      sqsResource(),
+      dynamoResource({ streamEnabled: true }),
+      dynamoResource({ name: 'no-stream', streamEnabled: false }),
+      secret,
+      opensearchResource({ name: 'products' }),
+      snsResource(),
+    ]);
+
+    expect(Object.fromEntries(attrs.queueUrls)).toEqual({ 'order-queue': 'http://localhost:14566/000000000000/order-queue' });
+    expect(Object.fromEntries(attrs.streamArns)).toEqual({ 'orders-table': 'arn:aws:dynamodb:us-east-1:000000000000:table/orders-table/stream/x' });
+    expect(Object.fromEntries(attrs.secretArns)).toEqual({ 'orders/db': 'arn:aws:secretsmanager:us-east-1:000000000000:secret:orders/db-AbCdEf' });
+    expect(Object.fromEntries(attrs.collections)).toEqual({
+      products: { id: 'c1', arn: 'arn:aws:aoss:us-east-1:000000000000:collection/c1', endpoint: 'http://e' },
+    });
+    // Only the streamed table is described.
+    expect(dynamoMock.commandCalls(DescribeTableCommand)).toHaveLength(1);
+    expect(openSearchMock.commandCalls(BatchGetCollectionCommand)[0].args[0].input).toEqual({ names: ['products'] });
+  });
+
+  it('leaves out what the engine did not report', async () => {
+    sqsMock.on(GetQueueUrlCommand).resolves({});
+    dynamoMock.on(DescribeTableCommand).resolves({ Table: {} });
+    secretsMock.on(DescribeSecretCommand).resolves({});
+    openSearchMock.on(BatchGetCollectionCommand).resolves({});
+    const attrs = await provisioner.lookupRuntimeAttributes([
+      sqsResource(), dynamoResource({ streamEnabled: true }), secret, opensearchResource(),
+    ]);
+    expect(attrs.queueUrls.size + attrs.streamArns.size + attrs.secretArns.size + attrs.collections.size).toBe(0);
+  });
+
+  it('is best-effort: a failed lookup is logged and skipped', async () => {
+    const warn = jest.spyOn(console, 'warn').mockImplementation(() => {});
+    sqsMock.on(GetQueueUrlCommand).rejects(new Error('AWS.SimpleQueueService.NonExistentQueue'));
+    dynamoMock.on(DescribeTableCommand).rejects(new Error('gone'));
+    secretsMock.on(DescribeSecretCommand).rejects(new Error('nope'));
+    openSearchMock.on(BatchGetCollectionCommand).rejects(new Error('down'));
+    const attrs = await provisioner.lookupRuntimeAttributes([
+      sqsResource(), dynamoResource({ streamEnabled: true }), secret, opensearchResource({ name: 'products' }),
+    ]);
+    expect(attrs.queueUrls.size).toBe(0);
+    expect(warn.mock.calls.map(c => c[0])).toEqual([
+      '  ⚠ Could not look up the URL of queue "order-queue": AWS.SimpleQueueService.NonExistentQueue',
+      '  ⚠ Could not look up the stream ARN of table "orders-table": gone',
+      '  ⚠ Could not look up the ARN of secret "orders/db": nope',
+      '  ⚠ Could not look up OpenSearch collection(s) products: down',
+    ]);
   });
 });

@@ -1,6 +1,6 @@
 // DynamoDB emulator core: control plane (tables, TTL), item CRUD with
-// condition expressions, Query/Scan (query.ts), batch ops, lazy TTL
-// expiration and change streams (streams.ts). All AWS-shaped failures are
+// condition expressions, Query/Scan (query.ts), batch ops, TTL expiration
+// (lazy on read plus a background sweep) and change streams (streams.ts). All AWS-shaped failures are
 // thrown as AwsError with the exact error names the provisioner's idempotency
 // and the SDK's error mapping depend on (PRD RF2.4/RF3).
 
@@ -32,6 +32,10 @@ const TTL_USER_IDENTITY = { type: 'Service', principalId: 'dynamodb.amazonaws.co
 const DEFAULT_LIST_TABLES_LIMIT = 100;
 const MAX_BATCH_WRITE_ITEMS = 25;
 const MAX_BATCH_GET_KEYS = 100;
+// How often the background TTL deleter runs. AWS deletes expired items
+// "typically within a few days"; a dev loop wants to see the TTL-driven
+// stream REMOVE (and the Lambda behind it) within seconds, not days.
+export const DEFAULT_TTL_SWEEP_INTERVAL_MS = 30_000;
 
 interface BatchGetTableSpec {
   Keys?: AttributeMap[];
@@ -53,6 +57,14 @@ export class DynamoDbEmulator implements TargetEmulator {
   private readonly streams: DynamoStreams;
   private readonly catalogs = new Map<string, CatalogStore<TableRecord>>();
   private readonly transactTokens = new TransactTokenCache();
+  private ttlTimer: NodeJS.Timeout | null = null;
+  private ttlSweep: Promise<number> | null = null;
+  // Per table (region + name): the earliest TTL instant (ms) among its live
+  // items as of the last sweep — Infinity when none carries one. Until that
+  // instant passes the sweep skips the table without touching it, so an idle
+  // table still dehydrates on schedule. Any write that could add an earlier
+  // expiry (or a TTL/table change) drops the mark and forces a rescan.
+  private readonly ttlMarks = new Map<string, number>();
 
   constructor(private readonly ctx: EngineContext) {
     this.streams = new DynamoStreams(ctx);
@@ -176,15 +188,93 @@ export class DynamoDbEmulator implements TargetEmulator {
     }
   }
 
-  // -- TTL laziness ----------------------------------------------------------
+  // -- TTL -------------------------------------------------------------------
+
+  // The TTL attribute is epoch SECONDS in an N; anything else (missing, S,
+  // non-numeric) never expires — exactly the AWS rule.
+  private expiresAtMs(record: TableRecord, item: AttributeMap): number | undefined {
+    const ttl = record.ttl;
+    if (!ttl?.enabled) return undefined;
+    const raw = item[ttl.attributeName]?.N;
+    if (raw === undefined) return undefined;
+    const epoch = Number(raw);
+    return Number.isFinite(epoch) ? epoch * 1000 : undefined;
+  }
 
   private isExpired(record: TableRecord, item: AttributeMap): boolean {
-    const ttl = record.ttl;
-    if (!ttl?.enabled) return false;
-    const raw = item[ttl.attributeName]?.N;
-    if (raw === undefined) return false;
-    const epoch = Number(raw);
-    return Number.isFinite(epoch) && epoch < Date.now() / 1000;
+    const at = this.expiresAtMs(record, item);
+    return at !== undefined && at < Date.now();
+  }
+
+  private ttlMarkKey(region: string, tableName: string): string {
+    return JSON.stringify([region, tableName]);
+  }
+
+  // Called on every item write (the written item may expire before the
+  // recorded next expiry), on UpdateTimeToLive and on DeleteTable.
+  private invalidateTtlMark(region: string, tableName: string): void {
+    this.ttlMarks.delete(this.ttlMarkKey(region, tableName));
+  }
+
+  // Background TTL deleter (unref'd, so it never holds the process open).
+  // Idempotent; the interval is injectable for tests.
+  startTtlSweeper(intervalMs = DEFAULT_TTL_SWEEP_INTERVAL_MS): void {
+    if (this.ttlTimer) return;
+    this.ttlTimer = setInterval(() => {
+      void this.sweepExpired().catch((err) => {
+        console.warn('[dynamodb] TTL sweep failed:', err);
+      });
+    }, intervalMs);
+    this.ttlTimer.unref();
+  }
+
+  stopTtlSweeper(): void {
+    if (this.ttlTimer) {
+      clearInterval(this.ttlTimer);
+      this.ttlTimer = null;
+    }
+  }
+
+  // One pass over every TTL-enabled table of every loaded region: expired
+  // items are deleted and — when the table has a stream — emit the REMOVE
+  // record with the TTL service principal as userIdentity, which is how a
+  // stream consumer tells a TTL deletion from a user DeleteItem on AWS.
+  // Concurrent callers share the in-flight pass. Returns the items removed.
+  sweepExpired(): Promise<number> {
+    if (!this.ttlSweep) {
+      this.ttlSweep = this.runTtlSweep().finally(() => {
+        this.ttlSweep = null;
+      });
+    }
+    return this.ttlSweep;
+  }
+
+  private async runTtlSweep(): Promise<number> {
+    let removed = 0;
+    for (const [region, catalog] of this.catalogs) {
+      for (const record of catalog.values()) {
+        if (!record.ttl?.enabled) continue;
+        const markKey = this.ttlMarkKey(region, record.tableName);
+        const nextExpiry = this.ttlMarks.get(markKey);
+        if (nextExpiry !== undefined && Date.now() <= nextExpiry) continue;
+        const items = this.ctx.store.table(`dynamodb/${region}/${record.tableName}/items`);
+        if (!items.isHydrated()) {
+          // A dehydrated table's expired items are already invisible (every
+          // read path purges them). Only a stream makes the deletion
+          // observable on its own, so only then is it worth rehydrating.
+          if (!record.streamSpecification?.StreamEnabled) continue;
+          await items.hydrate();
+        }
+        this.streams.ensureRegistered(region, record);
+        const before = items.size();
+        const live = this.collectLive(region, record, items);
+        removed += before - live.length;
+        let earliest = Infinity;
+        for (const item of live) earliest = Math.min(earliest, this.expiresAtMs(record, item) ?? Infinity);
+        this.ttlMarks.set(markKey, earliest);
+      }
+    }
+    return removed;
   }
 
   private removeExpired(region: string, record: TableRecord, items: ItemTable, key: string, item: AttributeMap): void {
@@ -247,6 +337,7 @@ export class DynamoDbEmulator implements TargetEmulator {
     const items = this.ctx.store.table(`dynamodb/${region}/${record.tableName}/items`);
     await items.destroy();
     this.streams.unregister(region, record.tableName);
+    this.invalidateTtlMark(region, record.tableName);
     const catalog = await this.catalogFor(region);
     catalog.delete(record.tableName);
     return {
@@ -287,6 +378,7 @@ export class DynamoDbEmulator implements TargetEmulator {
     if (spec.Enabled && currentlyEnabled) throw validationError('TimeToLive is already enabled');
     if (!spec.Enabled && !currentlyEnabled) throw validationError('TimeToLive is already disabled');
     record.ttl = { attributeName: spec.AttributeName, enabled: spec.Enabled };
+    this.invalidateTtlMark(region, record.tableName);
     (await this.catalogFor(region)).set(record.tableName, record);
     return { TimeToLiveSpecification: { AttributeName: spec.AttributeName, Enabled: spec.Enabled } };
   }
@@ -397,6 +489,7 @@ export class DynamoDbEmulator implements TargetEmulator {
     this.checkCondition(input, ctx, old);
     const stored = structuredClone(item);
     items.put(key, stored);
+    this.invalidateTtlMark(region, record.tableName);
     this.streams.append(region, record.tableName, {
       eventName: old ? 'MODIFY' : 'INSERT',
       keys: keyMapOf(record, stored),
@@ -484,6 +577,7 @@ export class DynamoDbEmulator implements TargetEmulator {
     this.assertKeyUnchanged(record, updated, keyInput);
     assertItemSize(updated);
     items.put(key, updated);
+    this.invalidateTtlMark(region, record.tableName);
     this.streams.append(region, record.tableName, {
       eventName: old ? 'MODIFY' : 'INSERT',
       keys: keyMapOf(record, updated),
@@ -615,6 +709,7 @@ export class DynamoDbEmulator implements TargetEmulator {
           const old = items.get(key) as AttributeMap | undefined;
           const stored = structuredClone(item);
           items.put(key, stored);
+          this.invalidateTtlMark(region, tableName);
           this.streams.append(region, tableName, {
             eventName: old ? 'MODIFY' : 'INSERT',
             keys: keyMapOf(record, stored),
@@ -814,6 +909,7 @@ export class DynamoDbEmulator implements TargetEmulator {
         continue;
       }
       items.put(canonical, stored!);
+      this.invalidateTtlMark(region, record.tableName);
       this.streams.append(region, record.tableName, {
         eventName: old ? 'MODIFY' : 'INSERT',
         keys: keyMapOf(record, stored!),

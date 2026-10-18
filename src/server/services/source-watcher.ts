@@ -5,6 +5,8 @@
 
 import fs from 'fs';
 import path from 'path';
+import { ConfigManager } from './config-manager.js';
+import { ignoredSubpaths, isIgnoredSubpath } from './worker-runtime.js';
 
 export interface WatchStatus {
   watching: boolean;
@@ -15,6 +17,9 @@ export interface WatchStatus {
 
 interface WatchedService {
   root: string;
+  // LSS's own write targets that sit inside this service (relative to root):
+  // see ownStatePaths().
+  ignored: string[];
   // One entry per watched subtree (see watch()): the service root itself,
   // non-recursively, plus a recursive watch on each interesting child dir.
   watchers: fs.FSWatcher[];
@@ -64,6 +69,7 @@ export class SourceWatcher {
   watch(serviceName: string, root: string): void {
     this.unwatch(serviceName);
     const watchers: fs.FSWatcher[] = [];
+    const ignored = this.ownStatePaths(root);
     const add = (dir: string, recursive: boolean, prefix: string): void => {
       const watcher = fs.watch(dir, { recursive }, (_event, filename) => {
         const name = filename ? String(filename) : '';
@@ -79,11 +85,12 @@ export class SourceWatcher {
     try {
       add(root, false, '');
       for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
-        if (!entry.isDirectory() || IGNORED_SEGMENTS.has(entry.name)) continue;
+        if (!entry.isDirectory() || IGNORED_SEGMENTS.has(entry.name) || ignored.includes(entry.name)) continue;
         add(path.join(root, entry.name), true, entry.name);
       }
       this.watched.set(serviceName, {
         root,
+        ignored,
         watchers,
         pendingFullReload: false,
         status: { watching: true },
@@ -93,6 +100,19 @@ export class SourceWatcher {
       for (const watcher of watchers) watcher.close();
       console.warn(`⚠️  Could not watch ${root}: ${err instanceof Error ? err.message : err}`);
     }
+  }
+
+  // Directories LSS itself writes to while serving: the configured stateDir
+  // (which also holds the CLI's orchestrator.pid / orchestrator.log whenever a
+  // stateDir is set) and the engine's data dir (snapshots + WAL, written on
+  // every mutation). Placed inside a service — `"stateDir": ".lss-state"` in a
+  // single-service repo is the natural spelling — each write fired a reload,
+  // the reload's own activity wrote again, and the runtime restarted forever.
+  // Only paths inside the watched root matter; the default locations live
+  // under ~/.lss and the OS temp dir and are dropped by ignoredSubpaths().
+  private ownStatePaths(root: string): string[] {
+    const config = ConfigManager.getInstance();
+    return ignoredSubpaths(root, [config.getStateDir(), config.getSelfEngineConfig().dataDir]);
   }
 
   unwatch(serviceName: string): void {
@@ -119,6 +139,7 @@ export class SourceWatcher {
 
     const segments = filename.split(path.sep);
     if (segments.some(s => IGNORED_SEGMENTS.has(s))) return;
+    if (isIgnoredSubpath(filename, watched.ignored)) return;
 
     if (FULL_RELOAD_FILES.has(path.basename(filename)) && segments.length === 1) {
       watched.pendingFullReload = true;

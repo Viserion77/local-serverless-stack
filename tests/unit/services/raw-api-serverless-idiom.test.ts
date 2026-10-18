@@ -59,10 +59,16 @@ beforeEach(() => {
   parser = new CloudFormationParser();
 });
 
+// The parse-time findings (the skipped-types summary) go to their own sink so
+// `warnings` below is purely what route assembly had to say.
+const SKIPPED_STAGE = expect.stringMatching(/^Skipped 1 of 24 resource\(s\) .*AWS::ApiGatewayV2::Stage ×1/);
+
 function assembleUsersService(over: { stateRoutes?: HttpRoute[] } = {}) {
   const warnings: string[] = [];
+  const parseWarnings: string[] = [];
   const template = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
-  const resources = parser.parse(template, warnings);
+  const resources = parser.parse(template, parseWarnings);
+  expect(parseWarnings).toEqual([SKIPPED_STAGE]);
   const result = assembleRawApiResources(parser, {
     resources,
     region: 'sa-east-1',
@@ -189,7 +195,7 @@ describe('serverless-emitted raw routes on the framework\'s own HttpApi', () => 
   it('carries a cross-stack target by ARN when the Lambda is not local', () => {
     const warnings: string[] = [];
     const template = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
-    const resources = parser.parse(template, warnings);
+    const resources = parser.parse(template);
     // The same template registered by a service that owns none of these Lambdas.
     const { routes } = assembleRawApiResources(parser, {
       resources,

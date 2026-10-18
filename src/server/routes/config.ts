@@ -4,6 +4,7 @@ import {
   ConfigValidationError,
   BrandingAssetKind,
   ServicePackageConfig,
+  ServiceRuntimeConfig,
 } from '../services/config-manager.js';
 import { FunctionRegistry } from '../services/function-registry.js';
 import { applyRegionToExplorers } from '../services/explorer-region.js';
@@ -23,6 +24,27 @@ function redactPackaging(map: Record<string, ServicePackageConfig>) {
         packageEnvKeys: Object.keys(cfg.packageEnv ?? {}),
       },
     ]),
+  );
+}
+
+// Per-service runtime blocks may carry env VALUES too (service- and
+// function-level `env`, which is where a local API key or DB password lands) —
+// the same key-names-only treatment as packageEnv. Everything else in the
+// block (ports, execution, watch, execArgv) passes through unchanged.
+function redactServiceRuntime(map: Record<string, ServiceRuntimeConfig | null>) {
+  return Object.fromEntries(
+    Object.entries(map).map(([service, cfg]) => {
+      if (!cfg) return [service, cfg];
+      const { env, functions, ...rest } = cfg;
+      const block: Record<string, unknown> = { ...rest };
+      if (env) block.envKeys = Object.keys(env);
+      if (functions) {
+        block.functions = Object.fromEntries(
+          Object.entries(functions).map(([fn, fnCfg]) => [fn, { envKeys: Object.keys(fnCfg?.env ?? {}) }]),
+        );
+      }
+      return [service, block];
+    }),
   );
 }
 
@@ -76,7 +98,7 @@ function buildConfigSnapshot(cm: ConfigManager) {
       idleTimeoutMs: cm.getLambdaIdleTimeoutMs(),
       maxWarmWorkers: cm.getLambdaMaxWarmWorkers(),
     },
-    serviceRuntime: raw.serviceRuntime ?? {},
+    serviceRuntime: redactServiceRuntime(raw.serviceRuntime ?? {}),
     secretSeedCount: Object.keys(cm.getSecretSeeds()).length,
     // Keys whose file value is masked by an env var right now — the UI flags
     // these fields so an edit that "doesn't stick" is explained.

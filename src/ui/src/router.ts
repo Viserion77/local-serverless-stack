@@ -1,4 +1,5 @@
 import { createRouter, createWebHistory, RouteRecordRaw } from 'vue-router';
+import { applyRegionFromQuery } from './services/region';
 
 const routes: RouteRecordRaw[] = [
   {
@@ -116,3 +117,6 @@ export const router = createRouter({
   history: createWebHistory(),
   routes,
 });
+
+// `?region=` on any page (explorer deep links, shared URLs) selects the region.
+router.afterEach((to) => applyRegionFromQuery(to.query.region));

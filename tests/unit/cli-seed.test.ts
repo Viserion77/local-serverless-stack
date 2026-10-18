@@ -241,7 +241,8 @@ describe('CLI — seed and seed:clear', () => {
 
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toContain('WARNING');
-      expect(result.stdout).toMatch(/Engine:\s+http:\/\/localhost:14566/);
+      // The config sets only serverPort, so the engine shares that port.
+      expect(result.stdout).toMatch(new RegExp(`Engine:\\s+http://localhost:${stub.port}`));
       expect(result.stdout).toMatch(/does NOT touch any AWS account/i);
     });
 
