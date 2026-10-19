@@ -1,0 +1,117 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "The AWS CloudFormation template for this Serverless application",
+  "Resources": {
+    "ServerlessDeploymentBucket": {
+      "Type": "AWS::S3::Bucket",
+      "Properties": {}
+    },
+    "QuoteLambdaFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "acme-partners-dev-quote",
+        "Handler": "src/quote.handler",
+        "Runtime": "nodejs20.x",
+        "MemorySize": 256,
+        "Timeout": 10,
+        "Environment": {
+          "Variables": {
+            "PARTNERS_USAGE_PLAN_ID": { "Ref": "ApiGatewayUsagePlanPartners" },
+            "INTERNAL_USAGE_PLAN_ID": { "Ref": "ApiGatewayUsagePlanInternal" },
+            "FREE_USAGE_PLAN_ID": { "Ref": "ApiGatewayUsagePlanFree" },
+            "PARTNERS_KEY_ID": { "Ref": "ApiGatewayApiKeyPartners1" },
+            "REST_API_ID": { "Ref": "ApiGatewayRestApi" }
+          }
+        }
+      }
+    },
+    "ApiGatewayRestApi": {
+      "Type": "AWS::ApiGateway::RestApi",
+      "Properties": {
+        "Name": "dev-acme-partners",
+        "EndpointConfiguration": { "Types": ["EDGE"] },
+        "Policy": ""
+      }
+    },
+    "ApiGatewayResourceQuote": {
+      "Type": "AWS::ApiGateway::Resource",
+      "Properties": {
+        "ParentId": { "Fn::GetAtt": ["ApiGatewayRestApi", "RootResourceId"] },
+        "PathPart": "quote",
+        "RestApiId": { "Ref": "ApiGatewayRestApi" }
+      }
+    },
+    "ApiGatewayDeployment1760000000000": {
+      "Type": "AWS::ApiGateway::Deployment",
+      "Properties": {
+        "RestApiId": { "Ref": "ApiGatewayRestApi" },
+        "StageName": "dev"
+      }
+    },
+    "ApiGatewayApiKeyPartners1": {
+      "Type": "AWS::ApiGateway::ApiKey",
+      "Properties": {
+        "Enabled": true,
+        "Name": "partners-key",
+        "StageKeys": [
+          { "RestApiId": { "Ref": "ApiGatewayRestApi" }, "StageName": "dev" }
+        ],
+        "Tags": [{ "Key": "team", "Value": "partners" }]
+      },
+      "DependsOn": "ApiGatewayDeployment1760000000000"
+    },
+    "ApiGatewayUsagePlanPartners": {
+      "Type": "AWS::ApiGateway::UsagePlan",
+      "DependsOn": "ApiGatewayDeployment1760000000000",
+      "Properties": {
+        "ApiStages": [
+          { "ApiId": { "Ref": "ApiGatewayRestApi" }, "Stage": "dev" }
+        ],
+        "Description": "Usage plan \"partners\" for acme-partners dev stage",
+        "UsagePlanName": "acme-partners-partners-dev",
+        "Quota": { "Limit": 5000, "Offset": 2, "Period": "MONTH" },
+        "Throttle": { "BurstLimit": 200, "RateLimit": 100 },
+        "Tags": [{ "Key": "tier", "Value": "partners" }]
+      }
+    },
+    "ApiGatewayUsagePlanInternal": {
+      "Type": "AWS::ApiGateway::UsagePlan",
+      "DependsOn": "ApiGatewayDeployment1760000000000",
+      "Properties": {
+        "ApiStages": [
+          { "ApiId": { "Ref": "ApiGatewayRestApi" }, "Stage": "dev" }
+        ],
+        "Description": "Usage plan \"internal\" for acme-partners dev stage",
+        "UsagePlanName": "acme-partners-internal-dev",
+        "Throttle": { "BurstLimit": 50, "RateLimit": 20 }
+      }
+    },
+    "ApiGatewayUsagePlanFree": {
+      "Type": "AWS::ApiGateway::UsagePlan",
+      "DependsOn": "ApiGatewayDeployment1760000000000",
+      "Properties": {
+        "ApiStages": [
+          { "ApiId": { "Ref": "ApiGatewayRestApi" }, "Stage": "dev" }
+        ],
+        "Description": "Usage plan \"free\" for acme-partners dev stage",
+        "UsagePlanName": "acme-partners-free-dev"
+      }
+    },
+    "ApiGatewayUsagePlanKeyPartners1": {
+      "Type": "AWS::ApiGateway::UsagePlanKey",
+      "Properties": {
+        "KeyId": { "Ref": "ApiGatewayApiKeyPartners1" },
+        "KeyType": "API_KEY",
+        "UsagePlanId": { "Ref": "ApiGatewayUsagePlanPartners" }
+      }
+    }
+  },
+  "Outputs": {
+    "ServiceEndpoint": {
+      "Description": "URL of the service endpoint",
+      "Value": {
+        "Fn::Join": ["", ["https://", { "Ref": "ApiGatewayRestApi" }, ".execute-api.", { "Ref": "AWS::Region" }, ".", { "Ref": "AWS::URLSuffix" }, "/dev"]]
+      }
+    }
+  }
+}

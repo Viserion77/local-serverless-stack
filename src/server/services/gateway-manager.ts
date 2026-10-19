@@ -12,6 +12,7 @@ import { LambdaRuntimeManager } from './lambda-runtime-manager.js';
 import { AuthorizerService } from './authorizer-service.js';
 import { ConfigManager } from './config-manager.js';
 import { LAMBDA_INVOKE_PATH } from './lambda-invoke-uri.js';
+import { EngineManager } from '../engine/engine-manager.js';
 import {
   IncomingRequest,
   matchRoute,
@@ -26,7 +27,11 @@ import {
   apiFlavor,
   routeFlavor,
   safeDecode,
+  checkApiKey,
   MappedResponse,
+  type ApiKeyIdentity,
+  type ApiKeyLookup,
+  type ResolvedApiKey,
 } from './api-gateway-events.js';
 
 export type ListenerStatus = 'online' | 'port-conflict' | 'stopped' | 'disabled';
@@ -53,6 +58,11 @@ export class GatewayManager {
   // Delay between rebind attempts after an EADDRINUSE. Overridable so tests
   // don't wait real seconds between retries.
   rebindIntervalMs = 5000;
+  // How a key-protected REST route resolves an API key value: the self
+  // engine's API Gateway control plane, in process. Replaceable so tests (and
+  // callers without an engine) can supply their own.
+  apiKeyLookup: ApiKeyLookup = (region, value) => this.lookupApiKeyInEngine(region, value);
+  private warnedNoApiKeyEngine = false;
 
   static getInstance(): GatewayManager {
     if (!GatewayManager.instance) {
@@ -316,6 +326,25 @@ export class GatewayManager {
         authorizer = decision.authorizer;
       }
 
+      // API key + usage plan check — REST only (HTTP APIs have no API keys),
+      // and after the authorizer, as API Gateway orders the two.
+      let apiKey: ApiKeyIdentity | undefined;
+      if (route.eventType === 'http' && route.apiKeyRequired) {
+        const check = await checkApiKey({
+          route,
+          request,
+          stage,
+          region: entry.region || ConfigManager.getInstance().getRegion(),
+          authorizer,
+          lookup: this.apiKeyLookup,
+        });
+        if (!check.ok) {
+          console.log(`🔑 [${serviceName}:${entry.apiPort}] ${request.method} ${request.path} → 403 (API key ${check.reason})`);
+          return this.send(res, gatewayErrorResponse('INVALID_API_KEY', flavor), baseHeaders);
+        }
+        apiKey = check.identity;
+      }
+
       // Resolve the route's target: a local function by short name first, then
       // (for a cross-stack raw route, or any local miss) the global registry by
       // ARN/name — the same mechanism the cross-service authorizer uses, so
@@ -333,7 +362,7 @@ export class GatewayManager {
         return this.send(res, gatewayErrorResponse('DEFAULT_5XX', flavor), baseHeaders);
       }
 
-      const eventOptions = { request, route, pathParameters, stage, authorizer, requestId, accountId };
+      const eventOptions = { request, route, pathParameters, stage, authorizer, requestId, accountId, apiKey };
       const event = route.eventType === 'httpApi' ? buildV2Event(eventOptions) : buildV1Event(eventOptions);
 
       const result = await LambdaRuntimeManager.getInstance().invoke(targetService, fn, event);
@@ -349,6 +378,23 @@ export class GatewayManager {
       console.error(`❌ Gateway error for "${serviceName}":`, err);
       return this.send(res, gatewayErrorResponse('DEFAULT_5XX', listenerFlavor), requestIdHeader(listenerFlavor, requestId));
     }
+  }
+
+  // The default API key lookup: the running self engine's API Gateway
+  // emulator (`SelfEngineBackend.getApiGateway().resolveApiKeyByValue`). Every
+  // step is guarded so a missing or not-yet-started engine — or one built
+  // without the API Gateway control plane — degrades to "unknown key" (403)
+  // with a single warning instead of a gateway 500.
+  private async lookupApiKeyInEngine(region: string, value: string): Promise<ResolvedApiKey | undefined> {
+    const gateway = engineApiGateway();
+    if (!gateway) {
+      if (!this.warnedNoApiKeyEngine) {
+        this.warnedNoApiKeyEngine = true;
+        console.warn('⚠️  API key check: the self engine\'s API Gateway control plane is not available — every key-protected REST route answers 403 until it is.');
+      }
+      return undefined;
+    }
+    return gateway.resolveApiKeyByValue(region, value);
   }
 
   private corsHeaders(entry: ServiceEntry, request: IncomingRequest): Record<string, string> {
@@ -454,4 +500,14 @@ export class GatewayManager {
       return;
     }
   }
+}
+
+// The engine's API Gateway emulator through the EngineManager seam (undefined
+// whenever the engine is not running, so a key-protected route answers 403).
+function engineApiGateway(): ApiKeyResolver | undefined {
+  return EngineManager.getInstance().getApiGateway();
+}
+
+interface ApiKeyResolver {
+  resolveApiKeyByValue(region: string, value: string): Promise<ResolvedApiKey | undefined>;
 }

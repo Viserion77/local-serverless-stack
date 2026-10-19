@@ -280,6 +280,64 @@ export interface LambdaPermissionResource {
   sourceArn: unknown;
 }
 
+// --- AWS::ApiGateway (REST v1) keys and usage plans ---------------------------
+// What `serverless package` emits for `provider.apiGateway.apiKeys` /
+// `usagePlan`. The REST API itself is served by the LSS gateway from
+// serverless-state.json; what is provisioned here is the control-plane state
+// the gateway consults for `private: true` routes (the self engine's API
+// Gateway emulator). Every `Ref` to the template's AWS::ApiGateway::RestApi has
+// already become LOCAL_API_ID in the static pass (cfn-intrinsics.ts), which is
+// the apiId a usage plan's stage must name to cover a local route.
+
+export interface RestApiResource {
+  type: 'apigw-rest-api';
+  logicalId: string;
+  name: string;
+}
+
+export interface ApiGatewayThrottle {
+  burstLimit?: number;
+  rateLimit?: number;
+}
+
+export interface UsagePlanResource {
+  type: 'apigw-usage-plan';
+  logicalId: string;
+  // UsagePlanName, else the logical id (CreateUsagePlan requires a name).
+  name: string;
+  description?: string;
+  apiStages: Array<{ apiId: string; stage: string; throttle?: Record<string, ApiGatewayThrottle> }>;
+  throttle?: ApiGatewayThrottle;
+  quota?: { limit?: number; offset?: number; period?: string };
+  tags: Record<string, string>;
+}
+
+export interface ApiKeyResource {
+  type: 'apigw-api-key';
+  logicalId: string;
+  // Name, else the logical id.
+  name: string;
+  description?: string;
+  // CFN default false, like CreateApiKey — serverless always emits true.
+  enabled: boolean;
+  // Absent (the usual case) → the engine generates the value at creation.
+  value?: string;
+  customerId?: string;
+  stageKeys: Array<{ restApiId: string; stageName: string }>;
+  tags: Record<string, string>;
+}
+
+export interface UsagePlanKeyResource {
+  type: 'apigw-usage-plan-key';
+  logicalId: string;
+  name: string;
+  // Logical id of an AWS::ApiGateway::ApiKey / ::UsagePlan in the template
+  // (from `Ref`), or a literal physical id.
+  keyRef: string;
+  usagePlanRef: string;
+  keyType: string;
+}
+
 export type Resource =
   | LambdaResource
   | DynamoDBResource
@@ -296,7 +354,11 @@ export type Resource =
   | ApiIntegrationResource
   | ApiRouteResource
   | ApiAuthorizerResource
-  | LambdaPermissionResource;
+  | LambdaPermissionResource
+  | RestApiResource
+  | UsagePlanResource
+  | ApiKeyResource
+  | UsagePlanKeyResource;
 
 // Context threaded into resolveArnLike so cross-stack IntegrationUri/AuthorizerUri/
 // Permission.FunctionName reduce to concrete Lambda ARNs. `region`/`accountId`/
@@ -451,6 +513,21 @@ export class CloudFormationParser {
         return this.parseApiAuthorizer(key, resource);
       case 'AWS::Lambda::Permission':
         return this.parseLambdaPermission(key, resource);
+      case 'AWS::ApiGateway::RestApi':
+        // Parsed (not skipped) so `Ref`/`GetAtt` on it resolve in function
+        // environments (cfn-physical-values.ts); its routes are served from
+        // serverless-state.json, under the one id LOCAL_API_ID.
+        return {
+          type: 'apigw-rest-api',
+          logicalId: key,
+          name: typeof resource.Properties?.Name === 'string' ? resource.Properties.Name : key,
+        };
+      case 'AWS::ApiGateway::UsagePlan':
+        return this.parseUsagePlan(key, resource, warnings);
+      case 'AWS::ApiGateway::ApiKey':
+        return this.parseApiKey(key, resource, warnings);
+      case 'AWS::ApiGateway::UsagePlanKey':
+        return this.parseUsagePlanKey(key, resource);
       case 'AWS::OpenSearchServerless::SecurityPolicy':
       case 'AWS::OpenSearchServerless::AccessPolicy':
       case 'AWS::OpenSearchServerless::VpcEndpoint':
@@ -865,6 +942,97 @@ export class CloudFormationParser {
     };
   }
 
+  private parseUsagePlan(key: string, resource: CloudFormationResource, warnings?: string[]): UsagePlanResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    const apiStages: UsagePlanResource['apiStages'] = [];
+    for (const raw of Array.isArray(props.ApiStages) ? props.ApiStages : []) {
+      const entry = (raw ?? {}) as Record<string, unknown>;
+      // A stage whose API is not this template's RestApi (an import, another
+      // stack's API) is left as an object by the static pass — it cannot name
+      // a local API, so it is dropped with a warning rather than sent as JSON.
+      if (typeof entry.ApiId !== 'string' || typeof entry.Stage !== 'string') {
+        warnings?.push(
+          `AWS::ApiGateway::UsagePlan "${key}": ApiStages entry ${JSON.stringify(raw)} does not resolve to an API id and a stage — skipped.`,
+        );
+        continue;
+      }
+      const stage: UsagePlanResource['apiStages'][number] = { apiId: entry.ApiId, stage: entry.Stage };
+      if (isRecord(entry.Throttle)) {
+        stage.throttle = Object.fromEntries(
+          Object.entries(entry.Throttle).map(([route, settings]) => [route, readThrottle(settings) ?? {}]),
+        );
+      }
+      apiStages.push(stage);
+    }
+    const parsed: UsagePlanResource = {
+      type: 'apigw-usage-plan',
+      logicalId: key,
+      name: typeof props.UsagePlanName === 'string' && props.UsagePlanName ? props.UsagePlanName : key,
+      apiStages,
+      tags: readTagList(props.Tags),
+    };
+    if (typeof props.Description === 'string') parsed.description = props.Description;
+    const throttle = readThrottle(props.Throttle);
+    if (throttle) parsed.throttle = throttle;
+    if (isRecord(props.Quota)) {
+      const quota = props.Quota;
+      parsed.quota = {
+        limit: readNumber(quota.Limit),
+        offset: readNumber(quota.Offset),
+        period: typeof quota.Period === 'string' ? quota.Period : undefined,
+      };
+    }
+    return parsed;
+  }
+
+  private parseApiKey(key: string, resource: CloudFormationResource, warnings?: string[]): ApiKeyResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    const stageKeys: ApiKeyResource['stageKeys'] = [];
+    for (const raw of Array.isArray(props.StageKeys) ? props.StageKeys : []) {
+      const entry = (raw ?? {}) as Record<string, unknown>;
+      if (typeof entry.RestApiId !== 'string' || typeof entry.StageName !== 'string') {
+        warnings?.push(
+          `AWS::ApiGateway::ApiKey "${key}": StageKeys entry ${JSON.stringify(raw)} does not resolve to an API id and a stage — skipped.`,
+        );
+        continue;
+      }
+      stageKeys.push({ restApiId: entry.RestApiId, stageName: entry.StageName });
+    }
+    const parsed: ApiKeyResource = {
+      type: 'apigw-api-key',
+      logicalId: key,
+      name: typeof props.Name === 'string' && props.Name ? props.Name : key,
+      // CloudFormation passes booleans through as either form.
+      enabled: props.Enabled === true || props.Enabled === 'true',
+      stageKeys,
+      tags: readTagList(props.Tags),
+    };
+    if (typeof props.Description === 'string') parsed.description = props.Description;
+    if (typeof props.CustomerId === 'string') parsed.customerId = props.CustomerId;
+    if (typeof props.Value === 'string') {
+      parsed.value = props.Value;
+    } else if (props.Value !== undefined) {
+      // Never send "[object Object]" as a secret: let the engine generate one.
+      warnings?.push(
+        `AWS::ApiGateway::ApiKey "${key}": Value ${JSON.stringify(props.Value)} is not a literal — the engine generates the key value instead.`,
+      );
+    }
+    return parsed;
+  }
+
+  private parseUsagePlanKey(key: string, resource: CloudFormationResource): UsagePlanKeyResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    return {
+      type: 'apigw-usage-plan-key',
+      logicalId: key,
+      name: key,
+      keyRef: this.extractFunctionName(props.KeyId),
+      usagePlanRef: this.extractFunctionName(props.UsagePlanId),
+      // The only key type AWS has; the emulator rejects anything else.
+      keyType: typeof props.KeyType === 'string' ? props.KeyType : 'API_KEY',
+    };
+  }
+
   // RouteKey → { method, path }. '$default' (and '*') become an ANY catch-all;
   // otherwise "METHOD /path" splits into an uppercase method + normalized path.
   private parseRouteKey(routeKey: string): { method: string; path: string } {
@@ -1051,6 +1219,32 @@ export class CloudFormationParser {
     const content = JSON.stringify(template);
     return crypto.createHash('sha256').update(content).digest('hex');
   }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
+// CFN numbers may arrive as strings ("100"); anything non-numeric is dropped.
+function readNumber(value: unknown): number | undefined {
+  if (typeof value !== 'number' && typeof value !== 'string') return undefined;
+  const n = Number(value);
+  return value !== '' && Number.isFinite(n) ? n : undefined;
+}
+
+// ThrottleSettings { BurstLimit, RateLimit } → the API's camelCase members.
+function readThrottle(raw: unknown): ApiGatewayThrottle | undefined {
+  if (!isRecord(raw)) return undefined;
+  return { burstLimit: readNumber(raw.BurstLimit), rateLimit: readNumber(raw.RateLimit) };
+}
+
+// API Gateway Tags are a [{Key, Value}] list in CFN and a map on the wire.
+function readTagList(raw: unknown): Record<string, string> {
+  const tags: Record<string, string> = {};
+  for (const entry of Array.isArray(raw) ? raw : []) {
+    if (isRecord(entry) && typeof entry.Key === 'string') tags[entry.Key] = String(entry.Value ?? '');
+  }
+  return tags;
 }
 
 // Coerce a CFN list (or a lone string) into a string[]; anything else → [].

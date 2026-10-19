@@ -189,11 +189,25 @@ function parseQuery(rawQueryString: string): {
 
 export const DEFAULT_ACCOUNT_ID = '000000000000';
 // The synthetic API id every local API answers as (methodArn, requestContext).
+// Also the REST API id a usage plan's apiStages must name to cover a local
+// API (checkApiKey) — a template's `Ref ApiGatewayRestApi` is to resolve to
+// this same value so template-declared usage plans match.
 export const LOCAL_API_ID = 'lss-local';
 
 export interface AuthorizerOutput {
   principalId?: string;
   context?: Record<string, unknown>;
+  // REST policy responses only: the API key value the authorizer vouches for,
+  // used instead of the x-api-key header when the API's apiKeySourceType is
+  // AUTHORIZER. Never surfaced in requestContext.authorizer (AWS does not).
+  usageIdentifierKey?: string;
+}
+
+// The API key identity a request passed the key check with — stamped into the
+// REST event as requestContext.identity.apiKey / apiKeyId.
+export interface ApiKeyIdentity {
+  apiKey: string;
+  apiKeyId: string;
 }
 
 export interface EventOptions {
@@ -209,6 +223,9 @@ export interface EventOptions {
   requestId?: string;
   // Account id stamped into requestContext (the self engine's account).
   accountId?: string;
+  // REST only: the API key the request was admitted with (key-protected
+  // routes). Absent → identity.apiKey / apiKeyId stay null, as in AWS.
+  apiKey?: ApiKeyIdentity;
 }
 
 // REST API (Lambda proxy integration, payload format 1.0).
@@ -243,7 +260,8 @@ export function buildV1Event(options: EventOptions): Record<string, unknown> {
         sourceIp: request.sourceIp,
         userAgent: headerValue(request.headers, 'user-agent') || null,
         accountId: null,
-        apiKey: null,
+        apiKey: options.apiKey?.apiKey ?? null,
+        ...(options.apiKey ? { apiKeyId: options.apiKey.apiKeyId } : {}),
         caller: null,
         cognitoAuthenticationProvider: null,
         cognitoAuthenticationType: null,
@@ -432,6 +450,7 @@ export type GatewayResponseType =
   | 'UNAUTHORIZED'
   | 'ACCESS_DENIED'
   | 'AUTHORIZER_CONFIGURATION_ERROR'
+  | 'INVALID_API_KEY'
   | 'INTEGRATION_FAILURE'
   | 'DEFAULT_5XX';
 
@@ -454,7 +473,8 @@ function gatewayDefault(type: GatewayResponseType, flavor: ApiFlavor, explicitDe
     switch (type) {
       case 'MISSING_AUTHENTICATION_TOKEN': return { status: 404, body: { message: 'Not Found' } };
       case 'UNAUTHORIZED': return { status: 401, body: { message: 'Unauthorized' } };
-      case 'ACCESS_DENIED': return { status: 403, body: { message: 'Forbidden' } };
+      case 'ACCESS_DENIED':
+      case 'INVALID_API_KEY': return { status: 403, body: { message: 'Forbidden' } };
       default: return { status: 500, body: { message: 'Internal Server Error' } };
     }
   }
@@ -475,6 +495,10 @@ function gatewayDefault(type: GatewayResponseType, flavor: ApiFlavor, explicitDe
       };
     case 'AUTHORIZER_CONFIGURATION_ERROR':
       return { status: 500, body: { message: null }, errorType: 'AuthorizerConfigurationException' };
+    case 'INVALID_API_KEY':
+      // Missing, unknown or disabled key, or a key in no usage plan that
+      // covers the stage — AWS answers all four identically.
+      return { status: 403, body: { message: 'Forbidden' }, errorType: 'ForbiddenException' };
     case 'INTEGRATION_FAILURE':
       // A Lambda proxy integration that crashed or answered a malformed shape.
       return { status: 502, body: { message: 'Internal server error' }, errorType: 'InternalServerErrorException' };
@@ -516,6 +540,65 @@ export function answersPreflight(routes: HttpRoute[], rawPath: string): boolean 
   if (routes.some(r => r.eventType === 'httpApi' && r.cors)) return true;
   return routes.some(r =>
     r.eventType === 'http' && r.cors && matchRoute([{ ...r, method: 'ANY' }], 'OPTIONS', rawPath) !== null);
+}
+
+// ---------------------------------------------------------------------------
+// API keys (REST APIs)
+// ---------------------------------------------------------------------------
+
+// An API key as the engine's API Gateway control plane resolves it from its
+// value: the key and every usage plan it is attached to. Declared here
+// structurally so the gateway does not import the engine.
+export interface ResolvedApiKey {
+  id: string;
+  name: string;
+  enabled: boolean;
+  usagePlans: Array<{ id: string; name: string; apiStages: Array<{ apiId: string; stage: string }> }>;
+}
+
+// Looks a key up by its value in the engine, per region. Undefined = no such key.
+export type ApiKeyLookup = (region: string, value: string) => Promise<ResolvedApiKey | undefined>;
+
+export interface ApiKeyCheckOptions {
+  route: Pick<HttpRoute, 'apiKeySourceType'>;
+  request: Pick<IncomingRequest, 'headers'>;
+  stage: string;
+  region: string;
+  // The authorizer's output, when the route ran one (AUTHORIZER source).
+  authorizer?: AuthorizerOutput;
+  lookup: ApiKeyLookup;
+}
+
+export type ApiKeyCheckResult =
+  | { ok: true; identity: ApiKeyIdentity }
+  | { ok: false; reason: 'missing' | 'unknown' | 'disabled' | 'no-usage-plan' };
+
+/**
+ * The API key check of a REST method with ApiKeyRequired, run AFTER the
+ * authorizer and its policy evaluation, as API Gateway orders it — and on
+ * every request: only the authorizer's answer (with its usageIdentifierKey)
+ * is cached, the key lookup is live, so a key disabled a moment ago is
+ * refused on the very next call even with a warm authorizer cache.
+ *
+ * The key value comes from the authorizer's `usageIdentifierKey` (AUTHORIZER
+ * source) or the `x-api-key` header (HEADER source, case-insensitive like
+ * every header). It passes when the key exists, is enabled, and sits in a
+ * usage plan with an apiStage naming exactly this API and stage — apiId
+ * equal to LOCAL_API_ID (the id in the methodArn) AND stage equal to the
+ * route's stage, as AWS matches them. A plan with no apiStages covers
+ * nothing. Usage plan throttle and quota limits are not enforced.
+ */
+export async function checkApiKey(options: ApiKeyCheckOptions): Promise<ApiKeyCheckResult> {
+  const value = options.route.apiKeySourceType === 'AUTHORIZER'
+    ? options.authorizer?.usageIdentifierKey
+    : headerValue(options.request.headers, 'x-api-key');
+  if (!value) return { ok: false, reason: 'missing' };
+  const key = await options.lookup(options.region, value);
+  if (!key) return { ok: false, reason: 'unknown' };
+  if (!key.enabled) return { ok: false, reason: 'disabled' };
+  const covered = key.usagePlans.some(plan => plan.apiStages.some(s => s.apiId === LOCAL_API_ID && s.stage === options.stage));
+  if (!covered) return { ok: false, reason: 'no-usage-plan' };
+  return { ok: true, identity: { apiKey: value, apiKeyId: key.id } };
 }
 
 function malformed(): MappedResponse {

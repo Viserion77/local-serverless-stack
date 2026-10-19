@@ -12,7 +12,8 @@ import type { Socket } from 'net';
 import type { AddressInfo } from 'net';
 import { ConfigManager, type ResolvedSelfEngineConfig } from '../../services/config-manager.js';
 import { getBindHost } from '../../services/bind-host.js';
-import type { DispatcherApi, EngineContext } from '../types.js';
+import type { AnyEmulator, DispatcherApi, EngineContext, ResettableEmulator } from '../types.js';
+import { AwsError } from '../http/errors.js';
 import { EngineBus } from '../bus.js';
 import { createEngineStore } from '../store/engine-store.js';
 import type { EngineStore } from '../store/store-types.js';
@@ -27,10 +28,11 @@ import { SecretsManagerEmulator } from '../emulators/secretsmanager/index.js';
 import { SsmEmulator } from '../emulators/ssm/index.js';
 import { LambdaCtlEmulator } from '../emulators/lambda-ctl/index.js';
 import { OpenSearchEmulator } from '../emulators/opensearch/index.js';
+import { ApiGatewayEmulator } from '../emulators/apigateway/index.js';
 import { EngineDispatcher } from '../dispatch/dispatcher.js';
 import { EngineScheduler } from '../dispatch/scheduler.js';
 
-const SERVICES = ['dynamodb', 'sqs', 'sns', 's3', 'events', 'lambda', 'sts', 'secretsmanager', 'ssm', 'aoss'] as const;
+const SERVICES = ['dynamodb', 'sqs', 'sns', 's3', 'events', 'lambda', 'sts', 'secretsmanager', 'ssm', 'aoss', 'apigateway'] as const;
 const SQS_SNAPSHOT_FILE = 'sqs-messages.snapshot.json';
 
 export class SelfEngineBackend {
@@ -46,6 +48,9 @@ export class SelfEngineBackend {
   private store: EngineStore | null = null;
   private sqs: SqsEmulator | null = null;
   private dynamo: DynamoDbEmulator | null = null;
+  private apiGateway: ApiGatewayEmulator | null = null;
+  // Every emulator of the current build, for the per-service reset.
+  private emulators: AnyEmulator[] = [];
   private dispatcher: EngineDispatcher | null = null;
   private scheduler: EngineScheduler | null = null;
   private server: http.Server | null = null;
@@ -117,7 +122,9 @@ export class SelfEngineBackend {
     const ssm = new SsmEmulator(ctx);
     const lambdaCtl = new LambdaCtlEmulator(ctx);
     const opensearch = new OpenSearchEmulator(ctx);
+    const apiGateway = new ApiGatewayEmulator(ctx);
     this.sqs = sqs;
+    this.apiGateway = apiGateway;
     this.dynamo = dynamo;
 
     const dispatcher = new EngineDispatcher({ ctx, sqs, dynamo, s3, events, lambdaCtl });
@@ -143,10 +150,11 @@ export class SelfEngineBackend {
     // REMOVE) without waiting for a read to notice them.
     dynamo.startTtlSweeper();
 
+    this.emulators = [dynamo, sqs, s3, events, sns, sts, secretsManager, ssm, lambdaCtl, opensearch, apiGateway];
     const handler = createEngineRequestHandler({
       ctx,
-      onReset: () => this.reset(),
-      emulators: [dynamo, sqs, s3, events, sns, sts, secretsManager, ssm, lambdaCtl, opensearch],
+      onReset: (service) => (service === undefined ? this.reset() : this.resetService(service)),
+      emulators: this.emulators,
     });
     this.handler = handler;
 
@@ -255,6 +263,31 @@ export class SelfEngineBackend {
     return this.resetting;
   }
 
+  /**
+   * Wipe ONE emulator's state in place (`POST /_lss/reset?service=<name>`),
+   * leaving every other service — and the delivery loops — untouched. Only
+   * emulators that implement `resetState` support it (today: apigateway); the
+   * others share state with the dispatcher (ESM loops, schedules, stream
+   * tailers), so they are only ever reset together, by the full rebuild.
+   */
+  async resetService(service: string): Promise<void> {
+    if (!this.running) throw new Error('The self engine is not running');
+    // A whole-engine reset in flight swaps every emulator: wait for the new set.
+    if (this.resetting) await this.resetting;
+    const emulator = this.emulators.find(candidate => candidate.service === service);
+    if (!emulator || !('resetState' in emulator)) {
+      const supported = this.emulators.filter(candidate => 'resetState' in candidate).map(candidate => candidate.service);
+      throw new AwsError(
+        'InvalidParameterValue',
+        `Per-service reset is not supported for "${service}" (supported: ${supported.join(', ')}). ` +
+          'Omit ?service= to reset the whole engine.',
+        { status: 400 },
+      );
+    }
+    await (emulator as unknown as ResettableEmulator).resetState();
+    console.log(`[self-engine] reset: ${service} is empty`);
+  }
+
   private async doReset(): Promise<void> {
     const config = this.config as ResolvedSelfEngineConfig;
     const store = this.store as EngineStore;
@@ -293,6 +326,16 @@ export class SelfEngineBackend {
    */
   getRequestHandler(): ((req: http.IncomingMessage, res: http.ServerResponse) => void) | null {
     return this.handler ? this.frontHandler : null;
+  }
+
+  /**
+   * The API Gateway control-plane emulator (API keys, usage plans), for the
+   * in-process gateway that enforces `private: true` routes. Re-read on every
+   * use: reset() rebuilds the emulators, so a captured instance goes stale.
+   */
+  getApiGateway(): ApiGatewayEmulator {
+    if (!this.apiGateway) throw new Error('The self engine is not running');
+    return this.apiGateway;
   }
 
   getConfig(): { endpoint: string; region: string; credentials: { accessKeyId: string; secretAccessKey: string } } {

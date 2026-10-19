@@ -28,6 +28,14 @@
 // keeps its shape with the resolvable parts substituted — `Fn::Sub` keeps the
 // unresolved `${Token}`s, `Fn::Join` keeps the unresolved parts — so a later
 // pass (or resolveArnLike) still sees a valid intrinsic.
+//
+// The one RESOURCE whose value IS known statically: an AWS::ApiGateway::RestApi.
+// LSS serves every REST API of every service under the single synthetic id
+// LOCAL_API_ID (the methodArn / requestContext.apiId the gateway emits), so a
+// `Ref ApiGatewayRestApi` — in a usage plan's ApiStages, an API key's
+// StageKeys, an Output, an env var — resolves to it right here.
+
+import { LOCAL_API_ID } from './api-gateway-events.js';
 
 export const ACCOUNT_ID = '000000000000';
 export const PARTITION = 'aws';
@@ -80,6 +88,21 @@ export interface TemplateResolution {
 }
 
 type Json = Record<string, unknown>;
+
+export const REST_API_TYPE = 'AWS::ApiGateway::RestApi';
+// `Fn::GetAtt <RestApi>.RootResourceId`. LSS models no REST API resource tree
+// (routes come from serverless-state.json), so this is only a stable,
+// recognizable stand-in — the same value on every registration, for every API.
+export const LOCAL_ROOT_RESOURCE_ID = `${LOCAL_API_ID}-root`;
+
+// What `Ref` (attribute undefined) / `Fn::GetAtt` return for a template's
+// AWS::ApiGateway::RestApi locally; undefined for an attribute AWS does not
+// document (the node is then kept, like any unresolvable reference).
+export function restApiAttribute(attribute?: string): string | undefined {
+  if (attribute === undefined || attribute === 'RestApiId') return LOCAL_API_ID;
+  if (attribute === 'RootResourceId') return LOCAL_ROOT_RESOURCE_ID;
+  return undefined;
+}
 
 const isObject = (value: unknown): value is Json =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -425,7 +448,16 @@ export function resolveTemplate(
   options: TemplateResolveOptions,
   warnings?: string[],
 ): TemplateResolution {
-  const resolver = new IntrinsicResolver(createIntrinsicContext(template, options, warnings));
+  const ctx = createIntrinsicContext(template, options, warnings);
+  // Refs to the template's own REST API(s) are the only resource references
+  // the static pass reduces (see the header) — every other one stays in place.
+  const restApis = new Set(
+    Object.entries(isObject(template.Resources) ? template.Resources : {})
+      .filter(([, entry]) => isObject(entry) && entry.Type === REST_API_TYPE)
+      .map(([logicalId]) => logicalId),
+  );
+  ctx.resolveResource = (logicalId, attribute) => (restApis.has(logicalId) ? restApiAttribute(attribute) : undefined);
+  const resolver = new IntrinsicResolver(ctx);
   const droppedByCondition: string[] = [];
 
   const resolveSection = (section: unknown, dropped?: string[]): Json | undefined => {

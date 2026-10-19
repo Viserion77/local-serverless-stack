@@ -8,6 +8,7 @@ import { S3Explorer } from '../../../src/server/services/s3-explorer';
 import { SecretsExplorer } from '../../../src/server/services/secrets-explorer';
 import { OpenSearchExplorer } from '../../../src/server/services/opensearch-explorer';
 import { QueueInspector } from '../../../src/server/services/queue-inspector';
+import { ApiGatewayExplorer } from '../../../src/server/services/apigateway-explorer';
 
 const singletons = () => [
   DynamoExplorer.getInstance(),
@@ -15,6 +16,7 @@ const singletons = () => [
   SecretsExplorer.getInstance(),
   OpenSearchExplorer.getInstance(),
   QueueInspector.getInstance(),
+  ApiGatewayExplorer.getInstance(),
 ];
 
 beforeEach(() => {

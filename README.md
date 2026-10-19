@@ -23,7 +23,7 @@ flowchart LR
 
 Every feature LSS ships, grouped by area. Each one expands into **how it works** (the real
 mechanism and defaults), **where it lives** (the files that own it) and **why it exists** (the
-problem it solves). 92 features in nine areas — start with [Quick Start](#quick-start) if you just
+problem it solves). 95 features in nine areas — start with [Quick Start](#quick-start) if you just
 want it running.
 
 > **⚠️ Keep this inventory alive.** A new capability MUST be added here **and** to
@@ -113,7 +113,7 @@ want it running.
 <details>
 <summary><b><code>lss reset</code></b> — empty every emulator in place, without restarting the stack</summary>
 
-**How it works.** After the same `confirmar` prompt as `seed:clear` (or `--yes`), it posts to the engine's `POST /_lss/reset`, which stops event delivery, flushes the store, deletes the data dir's contents in persistent mode (refusing a directory that looks like a project or home dir) and rebuilds every emulator over an empty store on the same listener — tables, queues, buckets, topics, buses and rules, secrets, parameters, OpenSearch collections, Lambda metadata and mappings, all gone; requests that arrive meanwhile wait for it. The route only answers loopback clients and requires the `x-lss-confirm-reset: true` header, which forces a CORS preflight it never answers, so a web page open in your browser cannot trigger it. Registered services stay registered: `lss register` puts their resources back.
+**How it works.** After the same `confirmar` prompt as `seed:clear` (or `--yes`), it posts to the engine's `POST /_lss/reset`, which stops event delivery, flushes the store, deletes the data dir's contents in persistent mode (refusing a directory that looks like a project or home dir) and rebuilds every emulator over an empty store on the same listener — tables, queues, buckets, topics, buses and rules, secrets, parameters, OpenSearch collections, Lambda metadata and mappings, all gone; requests that arrive meanwhile wait for it. The route only answers loopback clients and requires the `x-lss-confirm-reset: true` header, which forces a CORS preflight it never answers, so a web page open in your browser cannot trigger it. Registered services stay registered: `lss register` puts their resources back. `POST /_lss/reset?service=apigateway` empties only the API Gateway control plane — the one emulator nothing else shares state with.
 
 **Where it lives.** `bin/cli.js` — the `reset` command. `src/server/engine/http/reset.ts` — the guarded route. `src/server/engine/backends/self-backend.ts` — `reset()`, `wipeDataDir()`.
 
@@ -248,7 +248,7 @@ npx [-y|--yes]…   serverless|sls|osls[@version]   package   [args…]
 <details>
 <summary><b>Packaged template → typed resource graph</b> — LSS reads the same CloudFormation you deploy and turns it into the resources it will create locally</summary>
 
-**How it works.** On `lss register` (or `POST /api/services/register`) the registrar reads `<service>/.serverless/cloudformation-template-update-stack.json` — running `serverless package` first when the file is missing and `autoPackage` is on — and `CloudFormationParser.parse()` walks `Resources`, switching on `Type`. Supported types: `AWS::Lambda::Function`, `AWS::DynamoDB::Table`, `AWS::SQS::Queue`, `AWS::SNS::Topic`, `AWS::S3::Bucket`, `AWS::SecretsManager::Secret`, `AWS::SSM::Parameter`, `AWS::Lambda::EventSourceMapping`, `AWS::Events::EventBus`, `AWS::Events::Rule`, `AWS::OpenSearchServerless::Collection`, `AWS::ApiGatewayV2::Api` / `::Integration` / `::Route` / `::Authorizer`, and `AWS::Lambda::Permission`. Unknown types are not provisioned, and registration says so in **one** summary warning sorted by count (`Skipped 110 of 151 resource(s) whose type LSS does not provision: AWS::IAM::Role ×20, …`); the Serverless Framework's `ServerlessDeploymentBucket` is dropped by logical id without counting; `AWS::Events::Archive` and `AWS::OpenSearchServerless::SecurityPolicy` / `::AccessPolicy` / `::VpcEndpoint` push an explicit warning ("not provisioned locally" / "no-op locally") into the `warnings[]` array returned to the caller and logged as `⚠️ [service] …`. A SHA-256 of the whole template is stored as the service's `templateHash`.
+**How it works.** On `lss register` (or `POST /api/services/register`) the registrar reads `<service>/.serverless/cloudformation-template-update-stack.json` — running `serverless package` first when the file is missing and `autoPackage` is on — and `CloudFormationParser.parse()` walks `Resources`, switching on `Type`. Supported types: `AWS::Lambda::Function`, `AWS::DynamoDB::Table`, `AWS::SQS::Queue`, `AWS::SNS::Topic`, `AWS::S3::Bucket`, `AWS::SecretsManager::Secret`, `AWS::SSM::Parameter`, `AWS::ApiGateway::RestApi` / `::UsagePlan` / `::ApiKey` / `::UsagePlanKey`, `AWS::Lambda::EventSourceMapping`, `AWS::Events::EventBus`, `AWS::Events::Rule`, `AWS::OpenSearchServerless::Collection`, `AWS::ApiGatewayV2::Api` / `::Integration` / `::Route` / `::Authorizer`, and `AWS::Lambda::Permission`. Unknown types are not provisioned, and registration says so in **one** summary warning sorted by count (`Skipped 110 of 151 resource(s) whose type LSS does not provision: AWS::IAM::Role ×20, …`); the Serverless Framework's `ServerlessDeploymentBucket` is dropped by logical id without counting; `AWS::Events::Archive` and `AWS::OpenSearchServerless::SecurityPolicy` / `::AccessPolicy` / `::VpcEndpoint` push an explicit warning ("not provisioned locally" / "no-op locally") into the `warnings[]` array returned to the caller and logged as `⚠️ [service] …`. A SHA-256 of the whole template is stored as the service's `templateHash`.
 
 **Where it lives.** `src/server/services/cloudformation-parser.ts` — the type switch, one parser per resource type, and `calculateHash`. `src/server/services/service-registrar.ts` — reads the template (with auto-package fallback), collects warnings, persists metadata and calls the provisioner.
 
@@ -345,6 +345,17 @@ npx [-y|--yes]…   serverless|sls|osls[@version]   package   [args…]
 </details>
 
 <details>
+<summary><b>API keys and usage plans</b> — <code>provider.apiGateway.apiKeys</code> / <code>usagePlan</code> come up with the stack, and private routes accept their keys</summary>
+
+**How it works.** The `AWS::ApiGateway::UsagePlan`, `ApiKey` and `UsagePlanKey` resources `serverless package` compiles from `provider.apiGateway` are created in the engine's API Gateway control plane at registration, in the service's region — plans and keys first, memberships after, since a `UsagePlanKey` references both. The template's own `AWS::ApiGateway::RestApi` resolves to the id the local gateway serves the API under (`Ref` → `lss-local`, `RootResourceId` → `lss-local-root`), so a plan's `ApiStages: [{ApiId: !Ref ApiGatewayRestApi, Stage: dev}]` covers exactly the routes LSS serves; a key without `Value` gets one generated; a plan or key `Ref` in a function's environment becomes its engine id (`PARTNERS_USAGE_PLAN_ID: !Ref ApiGatewayUsagePlanPartners` just works). Everything created is tagged `lss:stack` / `lss:logical-id`, and that is how registration finds its own items again: registering or reloading the same service reuses the same plans and keys — same ids, same generated value, no duplicate memberships — patches drift back, deletes tagged items the template no longer declares, and deregistering the service removes them. Untagged items, and other services' items, are never touched. Every failure is a `warnings[]` entry, never an aborted boot.
+
+**Where it lives.** `src/server/services/cloudformation-parser.ts` — the three resource arms. `src/server/services/cfn-intrinsics.ts` — the RestApi `Ref` / `GetAtt` resolution. `src/server/services/resource-provisioner.ts` — `provisionApiGatewayUsage`, the tag-driven reconciliation and teardown. `src/server/services/cfn-physical-values.ts` — plan and key ids for function environments.
+
+**Why it exists.** A REST API that hands out partner keys declares its plans in the template and reads their ids from its environment; without this the plans did not exist locally and every handler that adds a key to a plan failed, or a script had to create them by hand and patch the ids in.
+
+</details>
+
+<details>
 <summary><b>Secrets Manager secrets, including GenerateSecretString</b> — the secret exists with a value before your first `GetSecretValue`</summary>
 
 **How it works.** Each `AWS::SecretsManager::Secret` is created with `CreateSecret` (name falls back to the logical id) so an `AWSCURRENT` version exists up front. When the template declares `GenerateSecretString` instead of `SecretString`, the value is synthesized the way CloudFormation does: `GetRandomPassword` with the real AWS defaults — `PasswordLength` **32**, `RequireEachIncludedType` **true**, every exclude flag passed through — and, when both `SecretStringTemplate` and `GenerateStringKey` are present, the generated password is injected into the parsed template at that key. `ResourceExistsException` is the idempotent path; `InvalidRequestException` (secret scheduled for deletion) warns and skips; a secret declaring neither form is created with no value and warns, matching AWS.
@@ -415,7 +426,7 @@ npx [-y|--yes]…   serverless|sls|osls[@version]   package   [args…]
 <details>
 <summary><b>API Gateway emulation</b> — each service's HTTP routes are served on its own port with faithful v1/v2 payloads</summary>
 
-**How it works.** For every service with routes and an `apiPort` (the examples use 3631–3634, declared as `custom.lss.apiPort`), the orchestrator binds an HTTP listener *inside its own process*. A request is matched against the service's routes by specificity — literal segment 100, `{param}` 10, `{proxy+}` 1, the HTTP API `$default` catch-all 0, with an exact method beating `ANY` by one point. The matched route builds either a REST payload format 1.0 event (`http`) or an HTTP API 2.0 event (`httpApi`, including split `cookies` and `routeKey`), invokes the target function, and maps the result back: v1 demands a well-formed `{statusCode,…}` and answers 502 otherwise, v2 accepts a bare return value and infers `200 application/json`. Binary bodies are base64-encoded unless the content type is textual (`text/*`, `application/json|xml|javascript|x-www-form-urlencoded`, `*+json`/`*+xml`). `OPTIONS` preflight is answered by the gateway itself (204, `access-control-max-age: 300`, allow-headers echoing the request or `Content-Type,Authorization,X-Api-Key`) only when CORS is configured — API-wide for HTTP APIs, per resource for REST `cors: true` — otherwise it goes to an `OPTIONS`/`ANY` route or is a miss; a handler failure returns 500 for HTTP APIs and 502 for REST. A missing route answers like the API type: REST 403 `{"message":"Missing Authentication Token"}`, HTTP API 404 `{"message":"Not Found"}`. Each request gets one id, shared by the authorizer and integration events' `requestContext.requestId` and the `x-amzn-RequestId` (REST) / `apigw-requestid` (HTTP API) response header. The path is percent-decoded exactly once, so `%2F` stays inside a path parameter and `%2525` arrives as `%25`.
+**How it works.** For every service with routes and an `apiPort` (the examples use 3631–3634, declared as `custom.lss.apiPort`), the orchestrator binds an HTTP listener *inside its own process*. A request is matched against the service's routes by specificity — literal segment 100, `{param}` 10, `{proxy+}` 1, the HTTP API `$default` catch-all 0, with an exact method beating `ANY` by one point. The matched route builds either a REST payload format 1.0 event (`http`) or an HTTP API 2.0 event (`httpApi`, including split `cookies` and `routeKey`), invokes the target function, and maps the result back: v1 demands a well-formed `{statusCode,…}` and answers 502 otherwise, v2 accepts a bare return value and infers `200 application/json`. Binary bodies are base64-encoded unless the content type is textual (`text/*`, `application/json|xml|javascript|x-www-form-urlencoded`, `*+json`/`*+xml`). `OPTIONS` preflight is answered by the gateway itself (204, `access-control-max-age: 300`, allow-headers echoing the request or `Content-Type,Authorization,X-Api-Key`) only when CORS is configured — API-wide for HTTP APIs, per resource for REST `cors: true` — otherwise it goes to an `OPTIONS`/`ANY` route or is a miss; a handler failure returns 500 for HTTP APIs and 502 for REST. A missing route answers like the API type: REST 403 `{"message":"Missing Authentication Token"}`, HTTP API 404 `{"message":"Not Found"}`. Each request gets one id, shared by the authorizer and integration events' `requestContext.requestId` and the `x-amzn-RequestId` (REST) / `apigw-requestid` (HTTP API) response header. The path is percent-decoded exactly once, so `%2F` stays inside a path parameter and `%2525` arrives as `%25`. A `private: true` REST route requires an API key, taken from the `x-api-key` header or — with `provider.apiGateway.apiKeySourceType: AUTHORIZER` — from the authorizer's `usageIdentifierKey`; it is checked on every request after the authorizer, live against the engine's control plane, and a missing, unknown or disabled key, or one in no usage plan covering this API and stage, is a 403 `{"message":"Forbidden"}`. The integration event then carries `requestContext.identity.apiKey` / `apiKeyId`. Throttle and quota are not enforced.
 
 **Where it lives.** `src/server/services/gateway-manager.ts` — listener lifecycle, request/response plumbing, CORS. `src/server/services/api-gateway-events.ts` — pure route matching, v1/v2 event builders, response mapping. `src/server/services/serverless-state-parser.ts` — routes from `functions[].events`. `src/server/services/raw-api-assembler.ts` — routes from raw `AWS::ApiGatewayV2::*` resources, de-duplicated against state routes by `METHOD /path` (state wins).
 
@@ -602,6 +613,17 @@ npx [-y|--yes]…   serverless|sls|osls[@version]   package   [args…]
 **Where it lives.** `src/server/engine/emulators/secretsmanager/index.ts` — the full operation surface, version staging and recovery-window logic.
 
 **Why it exists.** Services read their configuration from Secrets Manager on the first invocation, so without it every handler fails at boot. Having it in-process is what let the project retire the LocalStack Secrets Manager the engine used to proxy through `fallbackEndpoint`, and the orchestrator's seeds populate it before services are reactivated.
+
+</details>
+
+<details>
+<summary><b>API Gateway control plane</b> — API keys, usage plans and their keys, so private routes need no second emulator</summary>
+
+**How it works.** The REST API Gateway control plane over its real wire (rest-json, SigV4 signing name `apigateway`), so `@aws-sdk/client-api-gateway`, the CLI or Terraform talk to it unchanged: `CreateApiKey` / `GetApiKey(s)` / `UpdateApiKey` / `DeleteApiKey`, `CreateUsagePlan` / `GetUsagePlan(s)` / `UpdateUsagePlan` / `DeleteUsagePlan`, `CreateUsagePlanKey` / `GetUsagePlanKey(s)` / `DeleteUsagePlanKey`, tags, and an always-empty `GetUsage`. The details that make an SDK client work are AWS's own: lists come back as `{"item": [...], "position"}` (the SDK silently reads anything else as empty), dates are epoch seconds, and `position` is a cursor over items ordered by id, so a caller deleting keys while it pages never skips or repeats one. `enabled` defaults to `false`; a provided `value` is kept byte for byte (minimum 20 characters) and one is generated otherwise (40 alphanumerics); values are unique engine-wide while names may repeat (a key rotation creates a second key with the same name); `UpdateApiKey` takes JSON-patch `patchOperations` (`replace /enabled` with the string `"false"`, `add`/`remove /stages`, …); deleting a key takes it out of every plan, and a plan can be deleted with stages and keys still attached. Errors carry `x-amzn-ErrorType` plus `{message}`; every other API Gateway operation is an explicit `NotImplemented` (501). State persists per region like the other catalogs, and `POST /_lss/reset?service=apigateway` empties just this emulator. The local gateway reads it in process — a value → key index and key → plans index, never a catalog scan — to enforce `private: true` routes.
+
+**Where it lives.** `src/server/engine/emulators/apigateway/index.ts` — operations, indexes, patch logic, the in-process `resolveApiKeyByValue`. `src/server/engine/emulators/apigateway/wire.ts` — ids, cursors, error and body helpers. `src/server/engine/engine-manager.ts` — `getApiGateway()`, the non-throwing seam the gateway calls.
+
+**Why it exists.** API keys and usage plans are the one API Gateway feature a REST API's own Lambdas manage at runtime — an onboarding handler creates a partner's key and adds it to a plan, an offboarding one disables it — so without this control plane the only local option was a second, container-based emulator kept around for a single service.
 
 </details>
 
@@ -939,6 +961,17 @@ red/green are 4.4 ΔE apart under deuteranopia.
 </details>
 
 <details>
+<summary><b>API keys tab</b> — the stack's API keys and usage plans, with values masked until you ask</summary>
+
+**How it works.** Two tables, region-aware like every explorer. Keys: id, name and customer, an enabled/disabled badge, the usage plans holding the key, and the value hidden behind a per-row **Reveal** that reads that one key from its own endpoint (Copy and Hide once shown; revealed values live only in the page's memory). Plans: id, name, API stages (`apiId/stage`), throttle, quota and key count. Every list follows the control plane's `position` to the end, so a stack with thousands of leftover test keys is still listed whole; the page refreshes every 15 s.
+
+**Where it lives.** `src/ui/src/pages/ApiKeysPage.vue` and `src/ui/src/components/apigateway/ApiKeysList.vue`. `src/server/services/apigateway-explorer.ts` — rest-json reads over `fetch`. `src/server/routes/apigateway.ts` — `GET /api/apigateway/keys`, `/keys/:id/value`, `/plans`. `src/mcp/tools.ts` — `lss_api_keys`, `lss_usage_plans` (never values).
+
+**Why it exists.** "Which key does this partner have, is it still enabled, and is it in the right plan?" is the first question when a private route answers 403; this answers it without writing an SDK script.
+
+</details>
+
+<details>
 <summary><b>OpenSearch explorer</b> — list a collection's indices and run a query string search</summary>
 
 **How it works.** The collections list refreshes every 15s from `GET /api/opensearch/collections`. Opening a collection lists its indices with doc count, health and status, and offers a search box: an optional index filter (or all indices), a free-text `q`, and a result size of 10/25/50, posted to `/api/opensearch/collections/:name/search`. Hits render as index / `_id` / pretty-printed `_source`. A 404 from the emulator ("no such index", "does not exist") is shown as an empty result with a hint rather than an error, because an index only exists after its first document.
@@ -1007,13 +1040,13 @@ red/green are 4.4 ΔE apart under deuteranopia.
 </details>
 
 <details>
-<summary><b>MCP server (`lss mcp`) — 26 tools</b> — hands an AI coding agent read and write access to the running stack.</summary>
+<summary><b>MCP server (`lss mcp`) — 28 tools</b> — hands an AI coding agent read and write access to the running stack.</summary>
 
 **How it works.** `lss mcp` dynamic-imports the ESM build at `dist/mcp/server.js` and speaks newline-delimited JSON-RPC 2.0 on stdin/stdout — protocol revision `2024-11-05`, advertising `capabilities.tools.listChanged: false`. It implements `initialize`, `ping`, `tools/list` and `tools/call`; unimplemented *notifications* are silently accepted per spec, while a request for an unknown method gets `-32601`. Incoming lines are processed through a promise chain so responses come back in arrival order, and stdout carries protocol frames only (diagnostics go to stderr). The 26 tools are thin wrappers over the same REST API the client uses — no AWS SDK in the process — and five of them are flagged `MUTATES` in their description because the MCP client shows that text to a human before approving: `lss_register_service`, `lss_invoke`, `lss_dynamo_put_item`, `lss_queue_send`, `lss_seed_run`. A failing tool answers a text result with `isError: true` (a normal outcome the model reads and reacts to) rather than a transport-level JSON-RPC error, and every result is pretty-printed JSON text. The HTTP layer here uses a 130 s timeout — deliberately above `lss_queue_await_idle`'s 120 s server-side clamp — and treats 408 as a result, not a failure.
 
 **Where it lives.** `src/mcp/tools.ts` — the 26 tool definitions, their JSON schemas and the HTTP call each makes. `src/mcp/protocol.ts` — hand-rolled JSON-RPC dispatch (`handleMessage`/`handleLine`), pure and testable. `src/mcp/server.ts` — the stdio seam: readline in, `JSON.stringify` frames out. `src/mcp/http.ts` — base-URL resolution and the fetch caller with `LssUnreachableError`.
 
-**Why it exists.** An agent debugging a serverless monorepo otherwise guesses at local state; with this it can ask what's provisioned (`lss_health`, `lss_resources`, `lss_resource_owners`, `lss_apis`) and how one service is wired (`lss_service_graph`), read data (`lss_dynamo_scan`/`_query`, `lss_bucket_objects`, `lss_opensearch_search`, `lss_secrets`, `lss_lambda_logs`), and then act (`lss_invoke`, `lss_queue_send`, `lss_seed_run`) against the real local stack. The official MCP SDK is skipped on purpose: stdio JSON-RPC is a few dozen lines, and the package keeps a deliberately small dependency tree. The repo's own `.mcp.json` wires it up as `node ./bin/cli.js mcp`.
+**Why it exists.** An agent debugging a serverless monorepo otherwise guesses at local state; with this it can ask what's provisioned (`lss_health`, `lss_resources`, `lss_resource_owners`, `lss_apis`) and how one service is wired (`lss_service_graph`), read data (`lss_dynamo_scan`/`_query`, `lss_bucket_objects`, `lss_opensearch_search`, `lss_secrets`, `lss_api_keys`, `lss_usage_plans`, `lss_lambda_logs`), and then act (`lss_invoke`, `lss_queue_send`, `lss_seed_run`) against the real local stack. The official MCP SDK is skipped on purpose: stdio JSON-RPC is a few dozen lines, and the package keeps a deliberately small dependency tree. The repo's own `.mcp.json` wires it up as `node ./bin/cli.js mcp`.
 
 </details>
 
@@ -1130,7 +1163,7 @@ AWS_ENDPOINT_URL=http://localhost:14566   # point your services here, done (LSS-
 flowchart LR
     APP[Your services<br/>AWS SDK → :14566] --> ENG
     subgraph ORCH["One orchestrator process — no Docker"]
-        ENG[Self engine<br/>DynamoDB · SQS · S3 · EventBridge<br/>OpenSearch · Secrets Manager · SSM · SNS · STS]
+        ENG[Self engine<br/>DynamoDB · SQS · S3 · EventBridge<br/>OpenSearch · Secrets Manager · SSM · API Gateway · SNS · STS]
         ENG -->|in-process events| RT[LSS Lambda runtime<br/>your handlers, ports 30xx/130xx]
         ENG --- FS[(local files<br/>~/.lss/engine)]
     end
@@ -1298,12 +1331,12 @@ Boot prints a warning naming exactly what you opened. Full detail:
 
 ## Dashboard
 
-The Vue 3 dashboard at `http://localhost:14566` has ten tabs — **Overview** (health,
+The Vue 3 dashboard at `http://localhost:14566` has eleven tabs — **Overview** (health,
 config snapshot, exposed-ports map), **Services** (status, start/stop, live logs,
 per-service resource breakdown incl. EventBridge buses & rules, plus a wiring diagram
 of what the service declared talking to what — declared wires and guessed env-var
 matches drawn apart), **Lambdas** (registry + invoke), **APIs** (emulated HTTP
-routes), **Queues** (send/receive/purge, consumers),
+routes), **API keys** (keys and usage plans, values masked), **Queues** (send/receive/purge, consumers),
 **S3** (objects, upload/download), **DynamoDB** (items explorer, editor, TTL, seeds),
 **OpenSearch**, **Secrets**, and **Settings** — which edits `lss.config.json` in place
 (only changed fields are written, so you review and commit the diff), hot-reloads what it

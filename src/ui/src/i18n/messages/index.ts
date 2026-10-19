@@ -15,6 +15,7 @@ import { dynamo } from './dynamo';
 import { buckets } from './buckets';
 import { opensearch } from './opensearch';
 import { secrets } from './secrets';
+import { apiKeys } from './apiKeys';
 import { settings } from './settings';
 
 // One area's messages: the same key set in every language. Keeping the three
@@ -36,6 +37,7 @@ const AREAS: Record<string, AreaMessages> = {
   buckets,
   opensearch,
   secrets,
+  apiKeys,
   settings,
 };
 

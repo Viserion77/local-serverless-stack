@@ -45,7 +45,19 @@ export interface HttpRoute {
   // The granting AWS::Lambda::Permission SourceArn (execute-api ARN), when a
   // matching apigateway.amazonaws.com permission was found.
   sourceArn?: string;
+  // REST (`http`) routes only: the event declared `private: true`, so API
+  // Gateway demands an API key that belongs to a usage plan covering the
+  // stage (checked after the authorizer). Absent for public routes.
+  apiKeyRequired?: boolean;
+  // Where the REST API reads that key from — `provider.apiGateway.apiKeySourceType`:
+  // HEADER (the default, the `x-api-key` request header) or AUTHORIZER (the
+  // Lambda authorizer's `usageIdentifierKey`). A property of the whole REST
+  // API, carried on each key-protected route so the gateway needs nothing
+  // beyond the route. Set only alongside `apiKeyRequired`.
+  apiKeySourceType?: ApiKeySourceType;
 }
+
+export type ApiKeySourceType = 'HEADER' | 'AUTHORIZER';
 
 export interface AuthorizerConfig {
   name: string;
@@ -129,6 +141,9 @@ interface ServerlessState {
       httpApi?: {
         cors?: unknown;
         authorizers?: Record<string, Record<string, unknown>>;
+      };
+      apiGateway?: {
+        apiKeySourceType?: unknown;
       };
     };
     functions?: Record<string, StateFunctionDef>;
@@ -281,6 +296,7 @@ export class ServerlessStateParser {
     const { stage, serviceName } = readStateIdentity(state);
     const httpApi = this.deref(provider.httpApi) as NonNullable<typeof provider.httpApi> | undefined;
     const httpApiCors = Boolean(httpApi?.cors);
+    const apiKeySourceType = this.parseApiKeySourceType(provider.apiGateway, warnings);
 
     const lss = state.service?.custom?.lss || {};
     const apiPort = asPort(lss.apiPort);
@@ -325,7 +341,10 @@ export class ServerlessStateParser {
             httpApiCors,
             warnings,
           );
-          if (route) routes.push(route);
+          if (route) {
+            if (route.apiKeyRequired) route.apiKeySourceType = apiKeySourceType;
+            routes.push(route);
+          }
         }
       }
 
@@ -478,6 +497,7 @@ export class ServerlessStateParser {
     let path: string | undefined;
     let cors = eventType === 'httpApi' ? httpApiCors : false;
     let authorizerName: string | undefined;
+    let apiKeyRequired = false;
 
     if (typeof raw === 'string') {
       // Shorthand: "GET /users" or "post users" — httpApi also allows "*".
@@ -505,6 +525,10 @@ export class ServerlessStateParser {
         }
       }
       if (event.cors !== undefined) cors = Boolean(event.cors);
+      // `private: true` is the framework's spelling of a method with
+      // ApiKeyRequired. HTTP APIs have no API keys — the framework rejects
+      // the flag there, and so does the gateway: only REST routes carry it.
+      if (eventType === 'http' && event.private === true) apiKeyRequired = true;
 
       authorizerName = this.registerEventAuthorizer(functionName, eventType, this.deref(event.authorizer), authorizers, warnings);
     }
@@ -521,7 +545,24 @@ export class ServerlessStateParser {
       eventType,
       cors,
       authorizerName,
+      ...(apiKeyRequired ? { apiKeyRequired } : {}),
     };
+  }
+
+  // provider.apiGateway.apiKeySourceType → HEADER (the AWS default when
+  // unset) or AUTHORIZER, read case-insensitively as the framework accepts
+  // both spellings. Anything else is a typo AWS would reject at deploy time;
+  // the gateway falls back to HEADER and says so.
+  private parseApiKeySourceType(rawApiGateway: unknown, warnings: string[]): ApiKeySourceType {
+    const apiGateway = this.deref(rawApiGateway);
+    const raw = apiGateway && typeof apiGateway === 'object'
+      ? this.deref((apiGateway as Record<string, unknown>).apiKeySourceType)
+      : undefined;
+    if (raw === undefined || raw === null) return 'HEADER';
+    const value = String(raw).toUpperCase();
+    if (value === 'HEADER' || value === 'AUTHORIZER') return value;
+    warnings.push(`provider.apiGateway.apiKeySourceType "${String(raw)}" is not HEADER or AUTHORIZER — API keys are read from the x-api-key header.`);
+    return 'HEADER';
   }
 
   // REST (v1) authorizers are declared inline on the event; httpApi (v2) events

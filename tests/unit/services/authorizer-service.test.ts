@@ -623,3 +623,28 @@ describe('clearCache', () => {
     expect(service.clearCache()).toBe(2);
   });
 });
+
+describe('usageIdentifierKey (AUTHORIZER-sourced API keys)', () => {
+  const rest = config({
+    eventType: 'http', type: 'token', payloadVersion: '1.0',
+    identitySource: ['method.request.header.Authorization'], resultTtlInSeconds: 300,
+  });
+
+  it('hands the key back with the authorizer output and caches it together with the policy', async () => {
+    answer({ ...ALLOW_POLICY, usageIdentifierKey: 'key-value-1' });
+    const first = await service.authorize('svc', 'dev', route, rest, req());
+    const cached = await service.authorize('svc', 'dev', route, rest, req());
+    expect(first.authorizer).toEqual({ principalId: 'user-1', context: { plan: 'pro' }, usageIdentifierKey: 'key-value-1' });
+    expect(cached).toEqual(first);
+    expect(invokeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('ignores an empty or non-string usageIdentifierKey', async () => {
+    for (const usageIdentifierKey of ['', 42]) {
+      service.clearCache();
+      answer({ ...ALLOW_POLICY, usageIdentifierKey });
+      const decision = await service.authorize('svc', 'dev', route, rest, req());
+      expect(decision.authorizer).toEqual({ principalId: 'user-1', context: { plan: 'pro' } });
+    }
+  });
+});

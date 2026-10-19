@@ -10,7 +10,10 @@ import {
   intrinsicName,
   createIntrinsicContext,
   resolveTemplate,
+  restApiAttribute,
+  LOCAL_ROOT_RESOURCE_ID,
 } from '../../../src/server/services/cfn-intrinsics';
+import { LOCAL_API_ID } from '../../../src/server/services/api-gateway-events';
 
 const MAPPINGS = {
   StageConfig: {
@@ -474,5 +477,47 @@ describe('resolveTemplate', () => {
     const { template: resolved, droppedByCondition } = resolveTemplate({ Description: 'empty' }, {});
     expect(resolved).toEqual({ Description: 'empty' });
     expect(droppedByCondition).toEqual([]);
+  });
+});
+
+describe('resolveTemplate — the template\'s REST API', () => {
+  it('resolves Ref / GetAtt on an AWS::ApiGateway::RestApi to the local API id everywhere', () => {
+    const { template: resolved } = resolveTemplate({
+      Resources: {
+        ApiGatewayRestApi: { Type: 'AWS::ApiGateway::RestApi', Properties: { Name: 'dev-acme' } },
+        Plan: {
+          Type: 'AWS::ApiGateway::UsagePlan',
+          Properties: { ApiStages: [{ ApiId: { Ref: 'ApiGatewayRestApi' }, Stage: 'dev' }] },
+        },
+        Resource: {
+          Type: 'AWS::ApiGateway::Resource',
+          Properties: {
+            ParentId: { 'Fn::GetAtt': ['ApiGatewayRestApi', 'RootResourceId'] },
+            Id: { 'Fn::GetAtt': 'ApiGatewayRestApi.RestApiId' },
+            Other: { 'Fn::GetAtt': ['ApiGatewayRestApi', 'Nope'] },
+            Url: { 'Fn::Sub': 'https://${ApiGatewayRestApi}.execute-api' },
+            Queue: { Ref: 'Queue' },
+          },
+        },
+        Queue: { Type: 'AWS::SQS::Queue' },
+      },
+    }, {});
+    const resources = resolved.Resources as Record<string, any>;
+    expect(resources.Plan.Properties.ApiStages).toEqual([{ ApiId: LOCAL_API_ID, Stage: 'dev' }]);
+    expect(resources.Resource.Properties).toEqual({
+      ParentId: LOCAL_ROOT_RESOURCE_ID,
+      Id: LOCAL_API_ID,
+      // An attribute AWS does not document, and any other resource, stay in place.
+      Other: { 'Fn::GetAtt': ['ApiGatewayRestApi', 'Nope'] },
+      Url: `https://${LOCAL_API_ID}.execute-api`,
+      Queue: { Ref: 'Queue' },
+    });
+  });
+
+  it('restApiAttribute answers Ref, RestApiId and RootResourceId only', () => {
+    expect(restApiAttribute()).toBe('lss-local');
+    expect(restApiAttribute('RestApiId')).toBe('lss-local');
+    expect(restApiAttribute('RootResourceId')).toBe('lss-local-root');
+    expect(restApiAttribute('Arn')).toBeUndefined();
   });
 });

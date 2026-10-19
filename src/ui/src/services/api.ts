@@ -613,6 +613,39 @@ export interface SecretValue {
   createdDate?: string;
 }
 
+// API Gateway control plane (API keys and usage plans). A key summary never
+// carries its value — that comes from getApiKeyValue, on explicit request.
+export interface ApiKeySummary {
+  id: string;
+  name?: string;
+  description?: string;
+  enabled: boolean;
+  customerId?: string;
+  createdDate?: string;
+  lastUpdatedDate?: string;
+  stageKeys: string[];
+  tags: Record<string, string>;
+  usagePlans: Array<{ id: string; name: string }>;
+}
+
+export interface ApiKeyValue {
+  id: string;
+  name?: string;
+  value: string;
+}
+
+export interface UsagePlanSummary {
+  id: string;
+  name: string;
+  description?: string;
+  apiStages: Array<{ apiId: string; stage: string }>;
+  throttle?: { burstLimit?: number; rateLimit?: number };
+  quota?: { limit?: number; offset?: number; period?: string };
+  productCode?: string;
+  tags: Record<string, string>;
+  keyCount: number;
+}
+
 export interface OpenSearchIndexSummary {
   index: string;
   docsCount: number;
@@ -981,6 +1014,12 @@ export const api = {
     request<SecretDetail>(`/api/secrets/${encodeURIComponent(name)}`),
   getSecretValue: (name: string) =>
     request<SecretValue>(`/api/secrets/${encodeURIComponent(name)}/value`),
+
+  // API Gateway (API keys and usage plans)
+  listApiKeys: () => request<{ keys: ApiKeySummary[] }>('/api/apigateway/keys'),
+  getApiKeyValue: (id: string) =>
+    request<ApiKeyValue>(`/api/apigateway/keys/${encodeURIComponent(id)}/value`),
+  listUsagePlans: () => request<{ plans: UsagePlanSummary[] }>('/api/apigateway/plans'),
 
   // Queues
   listQueues: () => request<QueueSnapshot[]>('/api/queues'),

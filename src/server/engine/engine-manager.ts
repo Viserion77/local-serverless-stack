@@ -10,6 +10,7 @@
 import type http from 'http';
 import { ConfigManager } from '../services/config-manager.js';
 import type { SelfEngineBackend } from './backends/self-backend.js';
+import type { ApiGatewayEmulator } from './emulators/apigateway/index.js';
 
 export class EngineManager {
   private static instance: EngineManager;
@@ -63,6 +64,19 @@ export class EngineManager {
       // request without credentials at all.
       credentials: { accessKeyId: 'test', secretAccessKey: 'test' },
     };
+  }
+
+  // The running engine's API Gateway control plane — what the local gateway
+  // consults to enforce API keys on `private: true` routes. Undefined (never a
+  // throw) before the engine starts, after it stops, or mid-reset: the gateway
+  // turns that into a 403 for the key-protected route, not a 500.
+  getApiGateway(): ApiGatewayEmulator | undefined {
+    if (!this.backend?.isRunning()) return undefined;
+    try {
+      return this.backend.getApiGateway();
+    } catch {
+      return undefined;
+    }
   }
 
   healthDetail(): Record<string, unknown> {

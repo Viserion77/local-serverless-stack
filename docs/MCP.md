@@ -90,6 +90,8 @@ that text before asking a human to approve the call.
 | `lss_queues` / `lss_queue_send` / `lss_queue_await_idle` | Queue metrics and consumers; send; block until drained |
 | `lss_buckets` / `lss_bucket_objects` | S3 buckets and object listings (prefix/delimiter) |
 | `lss_secrets` | Secret names, ARNs and version stages — **never values** |
+| `lss_api_keys` | API Gateway API keys with their usage plans — **never values** |
+| `lss_usage_plans` | Usage plans: API stages, throttle, quota, key count |
 | `lss_opensearch_search` | Raw OpenSearch DSL against a collection |
 | `lss_seeds` / `lss_seed_run` | Seed files vs live tables; **MUTATES** on run |
 

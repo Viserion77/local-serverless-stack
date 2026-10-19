@@ -51,7 +51,15 @@ export interface AuthorizeContext {
 // What an authorizer said, normalized — the unit of caching.
 type AuthorizerAnswer =
   | { kind: 'simple'; isAuthorized: boolean; context: Record<string, unknown> }
-  | { kind: 'policy'; principalId?: string; statements: PolicyStatement[]; context: Record<string, unknown> };
+  | {
+    kind: 'policy';
+    principalId?: string;
+    statements: PolicyStatement[];
+    context: Record<string, unknown>;
+    // The API key a REST authorizer hands back for an AUTHORIZER-sourced
+    // API key check. Cached with the policy, as API Gateway does.
+    usageIdentifierKey?: string;
+  };
 
 interface PolicyStatement {
   Effect?: unknown;
@@ -409,6 +417,9 @@ export class AuthorizerService {
       principalId: typeof response.principalId === 'string' ? response.principalId : undefined,
       statements,
       context,
+      ...(typeof response.usageIdentifierKey === 'string' && response.usageIdentifierKey
+        ? { usageIdentifierKey: response.usageIdentifierKey }
+        : {}),
     };
   }
 
@@ -427,7 +438,13 @@ export class AuthorizerService {
     if (verdict !== 'allow') {
       return { denial: 'ACCESS_DENIED', explicitDeny: verdict === 'deny' };
     }
-    return { authorizer: { principalId: answer.principalId, context: answer.context } };
+    return {
+      authorizer: {
+        principalId: answer.principalId,
+        context: answer.context,
+        ...(answer.usageIdentifierKey ? { usageIdentifierKey: answer.usageIdentifierKey } : {}),
+      },
+    };
   }
 }
 
