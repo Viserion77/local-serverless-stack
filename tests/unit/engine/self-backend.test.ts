@@ -135,7 +135,7 @@ describe('SelfEngineBackend', () => {
       });
       const detail = backend.healthDetail();
       expect(detail.port).toBe(Number(new URL(endpoint).port));
-      expect(detail.services).toEqual(['dynamodb', 'sqs', 'sns', 's3', 'events', 'lambda', 'sts', 'secretsmanager', 'ssm', 'aoss']);
+      expect(detail.services).toEqual(['dynamodb', 'sqs', 'sns', 's3', 'events', 'lambda', 'sts', 'secretsmanager', 'ssm', 'aoss', 'apigateway']);
       expect(detail.eventSourceLoops).toEqual({ sqs: 0, streams: 0 });
       expect(detail.scheduleRules).toBe(0);
     } finally {

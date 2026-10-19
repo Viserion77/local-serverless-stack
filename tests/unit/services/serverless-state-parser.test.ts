@@ -721,3 +721,54 @@ describe('stage helpers', () => {
     ]);
   });
 });
+
+describe('API keys (private REST routes)', () => {
+  const stateWith = (provider: Record<string, unknown>, events: unknown[]) => ({
+    service: { service: 'catalog', provider: { stage: 'dev', ...provider }, functions: { list: { handler: 'h.list', events } } },
+  });
+
+  it('marks `private: true` http routes as key-protected, defaulting the source to HEADER', () => {
+    const parsed = parser.parse(stateWith({}, [
+      { http: { method: 'get', path: 'items', private: true } },
+      { http: { method: 'post', path: 'items', private: false } },
+      { http: 'GET public' },
+    ]));
+    expect(parsed.routes).toEqual([
+      { functionName: 'list', method: 'GET', path: '/items', eventType: 'http', cors: false, authorizerName: undefined, apiKeyRequired: true, apiKeySourceType: 'HEADER' },
+      { functionName: 'list', method: 'POST', path: '/items', eventType: 'http', cors: false, authorizerName: undefined },
+      { functionName: 'list', method: 'GET', path: '/public', eventType: 'http', cors: false, authorizerName: undefined },
+    ]);
+    expect(parsed.warnings).toEqual([]);
+  });
+
+  it('reads provider.apiGateway.apiKeySourceType case-insensitively, following $ref pointers', () => {
+    const state = stateWith({ apiGateway: { apiKeySourceType: 'authorizer' } }, [{ http: { method: 'get', path: 'a', private: true } }]);
+    expect(parser.parse(state).routes[0].apiKeySourceType).toBe('AUTHORIZER');
+
+    const pointed = {
+      service: {
+        service: 'catalog',
+        custom: { keySource: 'HEADER' },
+        provider: { stage: 'dev', apiGateway: { apiKeySourceType: { $ref: '$["service"]["custom"]["keySource"]' } } },
+        functions: { list: { handler: 'h.list', events: [{ http: { method: 'get', path: 'a', private: true } }] } },
+      },
+    };
+    expect(parser.parse(pointed as never).routes[0].apiKeySourceType).toBe('HEADER');
+  });
+
+  it('falls back to HEADER with a warning on an unknown source, and when apiGateway is not an object', () => {
+    const bad = parser.parse(stateWith({ apiGateway: { apiKeySourceType: 'COOKIE' } }, [{ http: { method: 'get', path: 'a', private: true } }]));
+    expect(bad.routes[0].apiKeySourceType).toBe('HEADER');
+    expect(bad.warnings).toEqual([expect.stringContaining('apiKeySourceType "COOKIE" is not HEADER or AUTHORIZER')]);
+
+    const odd = parser.parse(stateWith({ apiGateway: 'shared' }, [{ http: { method: 'get', path: 'a', private: true } }]));
+    expect(odd.routes[0].apiKeySourceType).toBe('HEADER');
+    expect(odd.warnings).toEqual([]);
+  });
+
+  it('ignores `private` on httpApi events — HTTP APIs have no API keys', () => {
+    const parsed = parser.parse(stateWith({}, [{ httpApi: { method: 'get', path: '/v2', private: true } }]));
+    expect(parsed.routes[0].apiKeyRequired).toBeUndefined();
+    expect(parsed.routes[0].apiKeySourceType).toBeUndefined();
+  });
+});

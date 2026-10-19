@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-10-19
+
+### Added
+
+- **API Gateway control plane** in the self engine (rest-json `apigateway`): API keys, usage plans and
+  usage-plan keys with AWS's wire details — `{"item": [...], "position"}` lists with a cursor that stays
+  stable while items are deleted, epoch-second dates, `enabled` defaulting to `false`, values kept byte
+  for byte (or 40 generated) and unique engine-wide while names may repeat, JSON-patch updates, tags.
+  Other API Gateway operations answer `NotImplemented` (501). `POST /_lss/reset?service=apigateway`
+  empties it alone.
+- **API keys on `private: true` REST routes**: the key comes from `x-api-key` or, with
+  `apiKeySourceType: AUTHORIZER`, from the authorizer's `usageIdentifierKey`; it is checked on every
+  request after the authorizer, so a disabled key is refused on the next call even with a warm
+  authorizer cache. A missing, unknown or disabled key, or one in no usage plan covering the API and
+  stage, is 403 `{"message":"Forbidden"}`. The event carries `requestContext.identity.apiKey` / `apiKeyId`.
+- **`AWS::ApiGateway::UsagePlan` / `ApiKey` / `UsagePlanKey` provisioned from the template**, with
+  `Ref ApiGatewayRestApi` resolved to the local API id and plan/key `Ref`s resolved to their ids in
+  function environments. Re-registering reuses the same plans and keys (found by `lss:stack` /
+  `lss:logical-id` tags); deregistering removes them.
+- **API keys tab** in the dashboard (values masked until revealed) and the `lss_api_keys` /
+  `lss_usage_plans` MCP tools.
+
 ## [1.1.0] - 2026-10-18
 
 **Templates that run on AWS now run on LSS without an adapter.** A real serverless stack names its
@@ -1077,6 +1099,8 @@ Not applicable (initial release)
 ---
 
 ## [Unreleased]
+
+## [1.2.0] - 2026-10-19
 
 ## [1.1.0] - 2026-10-18
 

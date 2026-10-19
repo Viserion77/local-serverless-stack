@@ -93,6 +93,9 @@ const navItems = computed<TNavMenuItem[]>(() => [
   { label: t('nav.services'), value: '/services', icon: 'boxes' },
   { label: t('nav.lambdas'), value: '/lambdas', icon: 'aws-lambda' },
   { label: t('nav.apis'), value: '/apis', icon: 'aws-api-gateway' },
+  // Same AWS service as APIs, so the brand mark would make two identical tiles
+  // in the collapsed rail; the key is a TreeUI functional (object) icon.
+  { label: t('nav.apiKeys'), value: '/api-keys', icon: 'key-round' },
   { label: t('nav.queues'), value: '/queues', icon: 'aws-sqs' },
   { label: 'S3', value: '/buckets', icon: 'aws-s3' },
   { label: 'DynamoDB', value: '/dynamo', icon: 'aws-dynamodb' },

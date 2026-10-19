@@ -48,6 +48,9 @@ import type {
   EventRuleResource,
   OpenSearchCollectionResource,
   EventSourceMapping,
+  UsagePlanResource,
+  ApiKeyResource,
+  UsagePlanKeyResource,
 } from './cloudformation-parser.js';
 import AdmZip from 'adm-zip';
 
@@ -93,6 +96,77 @@ function isMissingBusError(error: unknown): boolean {
   if (name === 'ResourceNotFoundException') return true;
   const message = errorMessageOf(error).toLowerCase();
   return message.includes('bus') && message.includes('does not exist');
+}
+
+// --- API Gateway keys and usage plans ----------------------------------------
+// Neither has a unique physical name (names may repeat, ids are minted by the
+// engine), so "already exists" cannot come from the create call the way it
+// does for a table or a queue. Ownership is recorded in two tags instead, and
+// every registration finds what it created before by them: the same template
+// registered again reuses the same plan and key ids — and a generated key
+// VALUE stays the one clients already hold.
+const STACK_TAG = 'lss:stack';
+const LOGICAL_ID_TAG = 'lss:logical-id';
+// The largest page GetApiKeys / GetUsagePlans serve.
+const API_GATEWAY_PAGE_LIMIT = '500';
+
+interface ApiGatewayThrottleShape {
+  burstLimit?: number;
+  rateLimit?: number;
+}
+
+// The members of a GetUsagePlans / GetApiKeys item the reconciliation reads.
+interface ManagedUsagePlan {
+  id: string;
+  name: string;
+  description?: string;
+  apiStages: Array<{ apiId: string; stage: string }>;
+  throttle?: ApiGatewayThrottleShape;
+  quota?: { limit?: number; offset?: number; period?: string };
+  tags: Record<string, string>;
+}
+
+interface ManagedApiKey {
+  id: string;
+  name?: string;
+  description?: string;
+  enabled: boolean;
+  customerId?: string;
+  value?: string;
+  stageKeys: string[];
+  tags: Record<string, string>;
+}
+
+// Everything tagged as created for one stack, in id order.
+interface ManagedApiGateway {
+  plans: ManagedUsagePlan[];
+  keys: ManagedApiKey[];
+}
+
+interface PatchOperation {
+  op: 'add' | 'remove' | 'replace';
+  path: string;
+  value?: string;
+}
+
+const isApiGatewayUsageResource = (r: Resource): r is UsagePlanResource | ApiKeyResource | UsagePlanKeyResource =>
+  r.type === 'apigw-usage-plan' || r.type === 'apigw-api-key' || r.type === 'apigw-usage-plan-key';
+
+// `replace` ops for the members of `wanted` that differ from `current` —
+// a member the template leaves out is left as it is (AWS keeps its default).
+function replaceDrift(prefix: string, wanted: object, current: object | undefined): PatchOperation[] {
+  const have = (current ?? {}) as Record<string, unknown>;
+  return Object.entries(wanted)
+    .filter(([member, value]) => value !== undefined && value !== have[member])
+    .map(([member, value]) => ({ op: 'replace' as const, path: `${prefix}/${member}`, value: String(value) }));
+}
+
+// add/remove ops turning the `current` set of entries into the `wanted` one.
+function setDrift(path: string, wanted: string[], current: string[]): PatchOperation[] {
+  return [
+    ...wanted.filter(entry => !current.includes(entry)).map(value => ({ op: 'add' as const, path, value })),
+    ...current.filter(entry => !wanted.includes(entry)).map(value => ({ op: 'remove' as const, path, value })),
+  ];
 }
 
 // Which base endpoint aoss clients (and the collection data-plane URLs LSS
@@ -256,6 +330,10 @@ export class ResourceProvisioner {
         }
       }
     }
+
+    // API Gateway usage plans and keys first, then the memberships that Ref
+    // both (UsagePlanKey) — a pass of its own because it reconciles by tag.
+    provisionedCount += await this.provisionApiGatewayUsage(serviceName, resources, warnings);
 
     // A bus this stack owns may be the one an earlier registration's rules were
     // waiting for. Flush them before this service's own rules so a mixed batch
@@ -1256,6 +1334,267 @@ export const handler = async (event, context) => {
     throw new Error(`Event source not found: ${arnRef} (resolved as: ${resourceName})`);
   }
 
+  // -- API Gateway keys and usage plans -------------------------------------
+
+  /**
+   * AWS::ApiGateway::UsagePlan / ApiKey / UsagePlanKey → the self engine's API
+   * Gateway control plane, which the LSS gateway consults for `private: true`
+   * routes. Reconciled by tag rather than created blindly (see STACK_TAG):
+   *   1. everything tagged for this stack is listed (both lists, every page);
+   *   2. each declared plan / key reuses the item tagged with its logical id —
+   *      drift in the cheap members is PATCHed back to the template — or is
+   *      created with the tags;
+   *   3. each UsagePlanKey adds its key to its plan (an existing membership
+   *      is a ConflictException, i.e. already done);
+   *   4. tagged items the template no longer declares — and strays sharing a
+   *      logical id — are deleted, as a CloudFormation stack update would.
+   * Non-fatal throughout: every failure is a warning, the pass goes on.
+   * Returns how many declared resources ended up in place.
+   */
+  private async provisionApiGatewayUsage(serviceName: string, resources: Resource[], warnings: string[]): Promise<number> {
+    const plans = resources.filter((r): r is UsagePlanResource => r.type === 'apigw-usage-plan');
+    const keys = resources.filter((r): r is ApiKeyResource => r.type === 'apigw-api-key');
+    const planKeys = resources.filter((r): r is UsagePlanKeyResource => r.type === 'apigw-usage-plan-key');
+    if (plans.length + keys.length + planKeys.length === 0) return 0;
+
+    let managed: ManagedApiGateway;
+    try {
+      managed = await this.findManagedApiGateway(serviceName);
+    } catch (error) {
+      // Without the listing a create could duplicate what exists — skip it all.
+      warnings.push(`API Gateway usage plans and keys were NOT provisioned (could not list the existing ones): ${errorMessageOf(error)}`);
+      return 0;
+    }
+
+    let provisioned = 0;
+    const planIds = new Map<string, string>();
+    const keyIds = new Map<string, string>();
+    // Physical ids that stay — a reused item stays even when its update fails.
+    const keep = new Set<string>();
+    for (const plan of plans) {
+      const current = managed.plans.find(p => p.tags[LOGICAL_ID_TAG] === plan.logicalId);
+      if (current) keep.add(current.id);
+      try {
+        const id = await this.ensureUsagePlan(serviceName, plan, current);
+        keep.add(id);
+        planIds.set(plan.logicalId, id);
+        provisioned++;
+      } catch (error) {
+        console.error(`Failed to provision usage plan ${plan.name}:`, errorMessageOf(error));
+        warnings.push(`apigw-usage-plan "${plan.name}" was NOT provisioned: ${errorMessageOf(error)}`);
+      }
+    }
+    for (const key of keys) {
+      const current = managed.keys.find(k => k.tags[LOGICAL_ID_TAG] === key.logicalId);
+      if (current) keep.add(current.id);
+      try {
+        const id = await this.ensureApiKey(serviceName, key, current, warnings);
+        keep.add(id);
+        keyIds.set(key.logicalId, id);
+        provisioned++;
+      } catch (error) {
+        console.error(`Failed to provision API key ${key.name}:`, errorMessageOf(error));
+        warnings.push(`apigw-api-key "${key.name}" was NOT provisioned: ${errorMessageOf(error)}`);
+      }
+    }
+
+    for (const planKey of planKeys) {
+      // A Ref to a plan / key of this template → the id just provisioned (none
+      // when that failed); anything else is taken as a literal physical id.
+      const resolveRef = (ref: string, ids: Map<string, string>): string | undefined =>
+        this.resourcesByLogicalId.has(ref) ? ids.get(ref) : ref || undefined;
+      const planId = resolveRef(planKey.usagePlanRef, planIds);
+      const keyId = resolveRef(planKey.keyRef, keyIds);
+      if (!planId || !keyId) {
+        warnings.push(
+          `apigw-usage-plan-key "${planKey.logicalId}" was NOT provisioned: its usage plan or API key ` +
+            `(${planKey.usagePlanRef || '?'} / ${planKey.keyRef || '?'}) is not available`,
+        );
+        continue;
+      }
+      try {
+        await this.apiGatewayCall('POST', `/usageplans/${encodeURIComponent(planId)}/keys`, {
+          body: { keyId, keyType: planKey.keyType },
+        });
+        console.log(`  ✓ Added API key ${keyId} to usage plan ${planId}`);
+        provisioned++;
+      } catch (error) {
+        if ((error as Error).name === 'ConflictException') {
+          provisioned++;
+          continue;
+        }
+        console.error(`Failed to provision usage plan key ${planKey.logicalId}:`, errorMessageOf(error));
+        warnings.push(`apigw-usage-plan-key "${planKey.logicalId}" was NOT provisioned: ${errorMessageOf(error)}`);
+      }
+    }
+
+    await this.removeManagedApiGateway(managed, keep, warnings);
+    return provisioned;
+  }
+
+  private async ensureUsagePlan(serviceName: string, plan: UsagePlanResource, current?: ManagedUsagePlan): Promise<string> {
+    if (!current) {
+      const created = await this.apiGatewayCall<{ id: string }>('POST', '/usageplans', {
+        body: {
+          name: plan.name,
+          description: plan.description,
+          apiStages: plan.apiStages,
+          throttle: plan.throttle,
+          quota: plan.quota,
+          tags: { ...plan.tags, [STACK_TAG]: serviceName, [LOGICAL_ID_TAG]: plan.logicalId },
+        },
+      });
+      console.log(`  ✓ Created usage plan: ${plan.name} (${created.id})`);
+      return created.id;
+    }
+    const operations: PatchOperation[] = [
+      ...replaceDrift('', { name: plan.name, description: plan.description }, current),
+      ...(plan.throttle ? replaceDrift('/throttle', plan.throttle, current.throttle) : []),
+      ...(!plan.throttle && current.throttle ? [{ op: 'remove' as const, path: '/throttle' }] : []),
+      ...(plan.quota ? replaceDrift('/quota', plan.quota, current.quota) : []),
+      ...(!plan.quota && current.quota ? [{ op: 'remove' as const, path: '/quota' }] : []),
+      ...setDrift(
+        '/apiStages',
+        plan.apiStages.map(s => `${s.apiId}:${s.stage}`),
+        current.apiStages.map(s => `${s.apiId}:${s.stage}`),
+      ),
+    ];
+    if (operations.length > 0) {
+      await this.apiGatewayCall('PATCH', `/usageplans/${encodeURIComponent(current.id)}`, { body: { patchOperations: operations } });
+      console.log(`  ✓ Updated usage plan: ${plan.name} (${current.id})`);
+    } else {
+      console.log(`  ⚠ Usage plan already exists: ${plan.name} (${current.id})`);
+    }
+    return current.id;
+  }
+
+  private async ensureApiKey(
+    serviceName: string,
+    key: ApiKeyResource,
+    current: ManagedApiKey | undefined,
+    warnings: string[],
+  ): Promise<string> {
+    const stageKeys = key.stageKeys.map(s => `${s.restApiId}/${s.stageName}`);
+    if (!current) {
+      // The value is never logged — it is a credential.
+      const created = await this.apiGatewayCall<{ id: string }>('POST', '/apikeys', {
+        body: {
+          name: key.name,
+          description: key.description,
+          enabled: key.enabled,
+          value: key.value,
+          customerId: key.customerId,
+          stageKeys: key.stageKeys,
+          tags: { ...key.tags, [STACK_TAG]: serviceName, [LOGICAL_ID_TAG]: key.logicalId },
+        },
+      });
+      console.log(`  ✓ Created API key: ${key.name} (${created.id})`);
+      return created.id;
+    }
+    if (key.value !== undefined && key.value !== current.value) {
+      // AWS replaces the key for a new Value; reusing the existing one keeps
+      // what clients hold working, and says so.
+      warnings.push(
+        `apigw-api-key "${key.name}": the template's Value differs from the existing key's — an API key value cannot be updated, ` +
+          'so the existing key keeps its value (delete the key to recreate it).',
+      );
+    }
+    const operations: PatchOperation[] = [
+      ...replaceDrift('', { name: key.name, description: key.description, customerId: key.customerId }, current),
+      ...(key.enabled !== current.enabled ? [{ op: 'replace' as const, path: '/enabled', value: String(key.enabled) }] : []),
+      ...setDrift('/stages', stageKeys, current.stageKeys),
+    ];
+    if (operations.length > 0) {
+      await this.apiGatewayCall('PATCH', `/apikeys/${encodeURIComponent(current.id)}`, { body: { patchOperations: operations } });
+      console.log(`  ✓ Updated API key: ${key.name} (${current.id})`);
+    } else {
+      console.log(`  ⚠ API key already exists: ${key.name} (${current.id})`);
+    }
+    return current.id;
+  }
+
+  // Everything tagged as created for `serviceName`, in the provisioner's region.
+  private async findManagedApiGateway(serviceName: string): Promise<ManagedApiGateway> {
+    // The engine always answers `tags` (an empty map at least).
+    const owned = <T extends { tags: Record<string, string> }>(items: T[]): T[] =>
+      items.filter(item => item.tags[STACK_TAG] === serviceName && typeof item.tags[LOGICAL_ID_TAG] === 'string');
+    const [plans, keys] = await Promise.all([
+      this.listApiGateway<ManagedUsagePlan>('/usageplans', {}),
+      // Values included: a template Value is compared against the existing one.
+      this.listApiGateway<ManagedApiKey>('/apikeys', { includeValues: 'true' }),
+    ]);
+    return { plans: owned(plans), keys: owned(keys) };
+  }
+
+  // Every page of a GetUsagePlans / GetApiKeys list (`item` + `position`).
+  private async listApiGateway<T>(path: string, query: Record<string, string>): Promise<T[]> {
+    const items: T[] = [];
+    let position: string | undefined;
+    do {
+      const page: { item?: T[]; position?: string } = await this.apiGatewayCall('GET', path, {
+        query: { ...query, limit: API_GATEWAY_PAGE_LIMIT, ...(position ? { position } : {}) },
+      });
+      items.push(...(page.item ?? []));
+      position = page.position;
+    } while (position);
+    return items;
+  }
+
+  // Deletes the managed items whose id is not in `keep`; failures are pushed
+  // to `failures` and the rest goes on. Returns how many were deleted.
+  private async removeManagedApiGateway(managed: ManagedApiGateway, keep: Set<string>, failures: string[]): Promise<number> {
+    const doomed = [
+      ...managed.plans.map(item => ({ kind: 'usage plan', path: 'usageplans', item })),
+      ...managed.keys.map(item => ({ kind: 'API key', path: 'apikeys', item })),
+    ].filter(({ item }) => !keep.has(item.id));
+    let removed = 0;
+    for (const { kind, path, item } of doomed) {
+      const label = `${kind} "${item.name ?? item.id}" (${item.id}, ${item.tags[LOGICAL_ID_TAG]})`;
+      try {
+        await this.apiGatewayCall('DELETE', `/${path}/${encodeURIComponent(item.id)}`);
+        console.log(`Deleted ${label}`);
+        removed++;
+      } catch (error) {
+        failures.push(`${label} could not be removed: ${errorMessageOf(error)}`);
+      }
+    }
+    return removed;
+  }
+
+  // The API Gateway control plane over its rest-json wire. Like
+  // createSsmParameter: no SDK client (@aws-sdk/client-api-gateway is not a
+  // dependency), the region pinned through a scope-shaped credential — the
+  // engine reads {region, service} from it and never verifies the signature.
+  // Failures throw an Error named after `x-amzn-ErrorType`.
+  private async apiGatewayCall<T = Record<string, unknown>>(
+    method: string,
+    path: string,
+    options: { query?: Record<string, string>; body?: unknown } = {},
+  ): Promise<T> {
+    const url = new URL(path, EngineManager.getInstance().getConfig().endpoint);
+    for (const [name, value] of Object.entries(options.query ?? {})) url.searchParams.set(name, value);
+    const response = await fetch(url, {
+      method,
+      headers: {
+        authorization: `AWS4-HMAC-SHA256 Credential=lss-provisioner/00000000/${this.currentRegion}/apigateway/aws4_request, SignedHeaders=host, Signature=0`,
+        'content-type': 'application/json',
+      },
+      body: options.body === undefined ? undefined : JSON.stringify(options.body),
+    });
+    const text = await response.text();
+    if (response.ok) return (text ? JSON.parse(text) : {}) as T;
+    let message = text;
+    try {
+      message = (JSON.parse(text) as { message?: string }).message ?? text;
+    } catch {
+      // Not a rest-json error body (a proxy or a crashed listener) — keep the text.
+    }
+    const type = response.headers.get('x-amzn-errortype')?.split(':')[0] || `HTTP ${response.status}`;
+    const error = new Error(`${type}: ${message}`);
+    error.name = type;
+    throw error;
+  }
+
   /**
    * The attributes of a service's resources that only exist once the resources
    * do — queue URLs, stream ARNs (the label is minted at CreateTable), secret
@@ -1265,7 +1604,7 @@ export const handler = async (event, context) => {
    * Best-effort by design: a failed lookup leaves the attribute out and the
    * environment pass warns about the variable that needed it.
    */
-  async lookupRuntimeAttributes(resources: Resource[]): Promise<RuntimeAttributes> {
+  async lookupRuntimeAttributes(resources: Resource[], serviceName?: string): Promise<RuntimeAttributes> {
     const attrs = emptyRuntimeAttributes();
     const attempt = async (what: string, lookup: () => Promise<void>): Promise<void> => {
       try {
@@ -1295,6 +1634,17 @@ export const handler = async (event, context) => {
       } else if (resource.type === 'opensearch') {
         collections.push(resource.name);
       }
+    }
+    // Usage plan / API key ids are found by the tags provisioning put on them,
+    // which name the stack — without a service name there is nothing to match.
+    if (serviceName && resources.some(r => r.type === 'apigw-usage-plan' || r.type === 'apigw-api-key')) {
+      await attempt(`the API Gateway usage plans and keys of "${serviceName}"`, async () => {
+        const managed = await this.findManagedApiGateway(serviceName);
+        // In id order, the first item per logical id is the one provisioning
+        // keeps (any other is a stray it removes) — reverse so the first wins.
+        for (const plan of [...managed.plans].reverse()) attrs.usagePlanIds.set(plan.tags[LOGICAL_ID_TAG], plan.id);
+        for (const key of [...managed.keys].reverse()) attrs.apiKeyIds.set(key.tags[LOGICAL_ID_TAG], key.id);
+      });
     }
     if (collections.length > 0) {
       await attempt(`OpenSearch collection(s) ${collections.join(', ')}`, async () => {
@@ -1474,6 +1824,19 @@ export const handler = async (event, context) => {
       } catch (error) {
         const errorMessage = error instanceof Error ? error.message : 'Unknown error';
         console.error(`Failed to cleanup eventbus:${bus.name}:`, errorMessage);
+      }
+    }
+
+    // Usage plans and keys are found by their stack tag (their ids are not in
+    // the template); the memberships go with them.
+    if (resources.some(isApiGatewayUsageResource)) {
+      try {
+        const managed = await this.findManagedApiGateway(serviceName);
+        const failures: string[] = [];
+        cleaned += await this.removeManagedApiGateway(managed, new Set(), failures);
+        for (const failure of failures) console.error(`Failed to cleanup ${failure}`);
+      } catch (error) {
+        console.error(`Failed to cleanup the API Gateway usage plans and keys of ${serviceName}:`, errorMessageOf(error));
       }
     }
 

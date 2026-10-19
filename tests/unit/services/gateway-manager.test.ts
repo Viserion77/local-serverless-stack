@@ -22,6 +22,8 @@ import { FunctionRegistry, type ServiceEntry } from '../../../src/server/service
 import { AuthorizerService } from '../../../src/server/services/authorizer-service';
 import { LambdaRuntimeManager } from '../../../src/server/services/lambda-runtime-manager';
 import type { HttpRoute, AuthorizerConfig, RegisteredFunction } from '../../../src/server/services/serverless-state-parser';
+import { LOCAL_API_ID, type ResolvedApiKey } from '../../../src/server/services/api-gateway-events';
+import { EngineManager } from '../../../src/server/engine/engine-manager';
 
 const sleep = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
@@ -330,5 +332,145 @@ describe('API request handling', () => {
     const thrown = await call('GET', '/secure/1', { authorization: 'throw' });
     expect(thrown.status).toBe(401);
     expect(await thrown.json()).toEqual({ message: 'Unauthorized' });
+  });
+  describe('API keys (REST, private routes)', () => {
+    const plan = (stage: string, apiId = LOCAL_API_ID) => ({ id: 'p1', name: 'basic', apiStages: [{ apiId, stage }] });
+    const key = (overrides: Partial<ResolvedApiKey> = {}): ResolvedApiKey =>
+      ({ id: 'k1abc', name: 'partner-acme', enabled: true, usagePlans: [plan('dev')], ...overrides });
+    const keys: Record<string, ResolvedApiKey> = {
+      'good-key': key(),
+      'off-key': key({ id: 'k2', enabled: false }),
+      'lonely-key': key({ id: 'k3', usagePlans: [] }),
+      'empty-plan-key': key({ id: 'k4', usagePlans: [{ id: 'p0', name: 'nothing', apiStages: [] }] }),
+      'prod-key': key({ id: 'k5', usagePlans: [plan('prod')] }),
+      'other-api-key': key({ id: 'k6', usagePlans: [plan('dev', 'restapi-xyz')] }),
+    };
+    let lookup: jest.Mock;
+
+    beforeEach(() => {
+      lookup = jest.fn(async (_region: string, value: string) => keys[value]);
+      gm.apiKeyLookup = lookup;
+    });
+
+    const expectForbidden = async (res: Response) => {
+      expect(res.status).toBe(403);
+      expect(await res.json()).toEqual({ message: 'Forbidden' });
+      expect(res.headers.get('x-amzn-errortype')).toBe('ForbiddenException');
+      expect(res.headers.get('x-amzn-requestid')).toMatch(/^[0-9a-f-]{36}$/);
+    };
+
+    it('HEADER: missing, unknown, disabled, plan-less and wrong-stage keys → 403; a covered key reaches the handler', async () => {
+      await serve([restRoute('GET', '/items', { apiKeyRequired: true, apiKeySourceType: 'HEADER' }), restRoute('GET', '/open')]);
+
+      await expectForbidden(await call('GET', '/items'));
+      for (const value of ['nope', 'off-key', 'lonely-key', 'empty-plan-key', 'prod-key', 'other-api-key']) {
+        await expectForbidden(await call('GET', '/items', { 'X-Api-Key': value }));
+      }
+      expect(invokeMock).not.toHaveBeenCalled();
+
+      const ok = await call('GET', '/items', { 'X-API-KEY': 'good-key' });
+      expect(ok.status).toBe(200);
+      expect(lookup).toHaveBeenLastCalledWith('sa-east-1', 'good-key');
+      const event = invokeMock.mock.calls[0][2];
+      expect(event.requestContext.identity).toEqual(expect.objectContaining({ apiKey: 'good-key', apiKeyId: 'k1abc' }));
+
+      // A public route on the same API never asks for a key.
+      const open = await call('GET', '/open');
+      expect(open.status).toBe(200);
+      expect(invokeMock.mock.calls[1][2].requestContext.identity.apiKey).toBeNull();
+    });
+
+    it('AUTHORIZER: the key is the authorizer\'s usageIdentifierKey; an authorizer deny wins before any key check', async () => {
+      const auth: AuthorizerConfig = {
+        name: 'fn:auth', type: 'token', eventType: 'http', payloadVersion: '1.0', enableSimpleResponses: false,
+        identitySource: ['method.request.header.Authorization'], resultTtlInSeconds: 0, functionName: 'authFn',
+      };
+      await serve([restRoute('GET', '/items', { authorizerName: 'fn:auth', apiKeyRequired: true, apiKeySourceType: 'AUTHORIZER' })], [auth]);
+      invokeMock.mockImplementation(async (_svc: string, fn: RegisteredFunction, event: any) => {
+        if (fn.name !== 'authFn') return { ok: true, payload: { statusCode: 200, body: 'in' }, logs: [], durationMs: 1 };
+        const effect = event.authorizationToken === 'deny' ? 'Deny' : 'Allow';
+        return {
+          ok: true,
+          payload: {
+            principalId: 'u',
+            policyDocument: { Statement: [{ Effect: effect, Action: 'execute-api:Invoke', Resource: '*' }] },
+            ...(event.authorizationToken === 'nokey' ? {} : { usageIdentifierKey: event.authorizationToken }),
+          },
+          logs: [], durationMs: 1,
+        };
+      });
+
+      // Deny first: 403 AccessDenied, the key is never looked up.
+      const denied = await call('GET', '/items', { authorization: 'deny', 'x-api-key': 'good-key' });
+      expect(denied.status).toBe(403);
+      expect(await denied.json()).toEqual({ Message: 'User is not authorized to access this resource with an explicit deny' });
+      expect(lookup).not.toHaveBeenCalled();
+
+      // Allowed but no usageIdentifierKey: the x-api-key header does not count.
+      await expectForbidden(await call('GET', '/items', { authorization: 'nokey', 'x-api-key': 'good-key' }));
+      await expectForbidden(await call('GET', '/items', { authorization: 'off-key' }));
+
+      const ok = await call('GET', '/items', { authorization: 'good-key' });
+      expect(ok.status).toBe(200);
+      const event = invokeMock.mock.calls.find(c => c[1].name === 'fn')?.[2];
+      expect(event.requestContext.identity).toEqual(expect.objectContaining({ apiKey: 'good-key', apiKeyId: 'k1abc' }));
+    });
+
+    it('the key check is live on every request: disabling a key 403s the next call despite a warm authorizer cache', async () => {
+      const auth: AuthorizerConfig = {
+        name: 'fn:auth', type: 'token', eventType: 'http', payloadVersion: '1.0', enableSimpleResponses: false,
+        identitySource: ['method.request.header.Authorization'], resultTtlInSeconds: 300, functionName: 'authFn',
+      };
+      await serve([restRoute('GET', '/items', { authorizerName: 'fn:auth', apiKeyRequired: true, apiKeySourceType: 'AUTHORIZER' })], [auth]);
+      invokeMock.mockImplementation(async (_svc: string, fn: RegisteredFunction) => {
+        if (fn.name !== 'authFn') return { ok: true, payload: { statusCode: 200, body: 'in' }, logs: [], durationMs: 1 };
+        return {
+          ok: true,
+          payload: { principalId: 'u', usageIdentifierKey: 'toggled-key', policyDocument: { Statement: [{ Effect: 'Allow', Action: 'execute-api:Invoke', Resource: '*' }] } },
+          logs: [], durationMs: 1,
+        };
+      });
+      const toggled = key({ id: 'k7' });
+      keys['toggled-key'] = toggled;
+      try {
+        expect((await call('GET', '/items', { authorization: 'tok' })).status).toBe(200);
+        toggled.enabled = false;
+        await expectForbidden(await call('GET', '/items', { authorization: 'tok' }));
+        // The authorizer ran once (cache warm); the key was looked up both times.
+        expect(invokeMock.mock.calls.filter(c => c[1].name === 'authFn')).toHaveLength(1);
+        expect(lookup).toHaveBeenCalledTimes(2);
+        expect(lookup).toHaveBeenLastCalledWith('sa-east-1', 'toggled-key');
+      } finally {
+        delete keys['toggled-key'];
+      }
+    });
+
+    it('HTTP API routes are untouched — no key check even if a route claims one', async () => {
+      await serve([restRoute('GET', '/v2', { eventType: 'httpApi', apiKeyRequired: true })]);
+      const res = await call('GET', '/v2');
+      expect(res.status).toBe(200);
+      expect(lookup).not.toHaveBeenCalled();
+    });
+
+    it('default lookup: without the engine\'s API Gateway control plane every key is unknown (403), warned once', async () => {
+      const fresh = new GatewayManager();
+      expect(await fresh.apiKeyLookup('us-east-1', 'good-key')).toBeUndefined();
+      expect(await fresh.apiKeyLookup('us-east-1', 'good-key')).toBeUndefined();
+      const warnings = warnSpy.mock.calls.filter(c => String(c[0]).includes('API Gateway control plane is not available'));
+      expect(warnings).toHaveLength(1);
+    });
+
+    it('default lookup: reaches the engine\'s API Gateway control plane through EngineManager.getApiGateway()', async () => {
+      const resolveApiKeyByValue = jest.fn().mockResolvedValue(key());
+      const spy = jest
+        .spyOn(EngineManager.prototype, 'getApiGateway')
+        .mockReturnValue({ resolveApiKeyByValue } as never);
+      try {
+        expect(await new GatewayManager().apiKeyLookup('eu-west-1', 'good-key')).toEqual(key());
+        expect(resolveApiKeyByValue).toHaveBeenCalledWith('eu-west-1', 'good-key');
+      } finally {
+        spy.mockRestore();
+      }
+    });
   });
 });

@@ -12,6 +12,7 @@ import { S3Explorer } from './s3-explorer.js';
 import { SecretsExplorer } from './secrets-explorer.js';
 import { OpenSearchExplorer } from './opensearch-explorer.js';
 import { QueueInspector } from './queue-inspector.js';
+import { ApiGatewayExplorer } from './apigateway-explorer.js';
 
 export function applyRegionToExplorers(region: string): void {
   if (!region) return;
@@ -20,4 +21,5 @@ export function applyRegionToExplorers(region: string): void {
   SecretsExplorer.getInstance().setDefaultRegion(region);
   OpenSearchExplorer.getInstance().setDefaultRegion(region);
   QueueInspector.getInstance().setDefaultRegion(region);
+  ApiGatewayExplorer.getInstance().setDefaultRegion(region);
 }

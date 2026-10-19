@@ -21,6 +21,7 @@ import {
   PARTITION,
   NO_VALUE,
   IntrinsicResolver,
+  restApiAttribute,
   createIntrinsicContext,
   intrinsicName,
   type TemplateResolveOptions,
@@ -38,10 +39,21 @@ export interface RuntimeAttributes {
   streamArns: Map<string, string>;
   secretArns: Map<string, string>;
   collections: Map<string, CollectionAttributes>;
+  // API Gateway usage plans and API keys have no unique physical name (names
+  // may repeat) — their engine-minted ids are keyed by LOGICAL id instead.
+  usagePlanIds: Map<string, string>;
+  apiKeyIds: Map<string, string>;
 }
 
 export function emptyRuntimeAttributes(): RuntimeAttributes {
-  return { queueUrls: new Map(), streamArns: new Map(), secretArns: new Map(), collections: new Map() };
+  return {
+    queueUrls: new Map(),
+    streamArns: new Map(),
+    secretArns: new Map(),
+    collections: new Map(),
+    usagePlanIds: new Map(),
+    apiKeyIds: new Map(),
+  };
 }
 
 export interface PhysicalContext {
@@ -139,6 +151,15 @@ export function physicalValue(
         CollectionEndpoint: collection.endpoint,
       } as Record<string, string | undefined>)[attr];
     }
+    case 'apigw-rest-api':
+      // Every local REST API answers as LOCAL_API_ID (see cfn-intrinsics.ts).
+      return restApiAttribute(attribute);
+    case 'apigw-usage-plan':
+      // Ref and GetAtt Id are the plan id, minted at CreateUsagePlan.
+      return attr === 'Ref' || attr === 'Id' ? runtime.usagePlanIds.get(resource.logicalId) : undefined;
+    case 'apigw-api-key':
+      // Ref and GetAtt APIKeyId are the key id (never the key VALUE).
+      return attr === 'Ref' || attr === 'APIKeyId' ? runtime.apiKeyIds.get(resource.logicalId) : undefined;
     default:
       return undefined;
   }

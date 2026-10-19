@@ -98,6 +98,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Secrets Manager' },
   },
   {
+    path: '/api-keys',
+    name: 'api-keys',
+    component: () => import('./pages/ApiKeysPage.vue'),
+    meta: { title: 'API Gateway API keys' },
+  },
+  {
     path: '/settings',
     name: 'settings',
     component: () => import('./pages/SettingsPage.vue'),

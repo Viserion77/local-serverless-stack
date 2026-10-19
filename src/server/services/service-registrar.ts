@@ -292,7 +292,7 @@ export class ServiceRegistrar {
       template,
       ...templateContext,
       resources,
-      runtime: await ResourceProvisioner.getInstance().lookupRuntimeAttributes(resources),
+      runtime: await ResourceProvisioner.getInstance().lookupRuntimeAttributes(resources, serviceName),
       exports: this.exportMap,
       warnings,
     });

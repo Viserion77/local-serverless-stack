@@ -250,6 +250,7 @@ describe('health endpoints', () => {
         secretsmanager: 'available',
         ssm: 'available',
         aoss: 'available',
+        apigateway: 'available',
       },
       edition: 'self',
       version: 'lss-self-engine',
@@ -796,6 +797,21 @@ describe('unsupported services answer in the caller protocol', () => {
     expect(res.json.message).toContain('selfEngine.fallbackEndpoints.kinesis');
   });
 
+  it('rest-json (an unemulated signing name, AppSync): JSON with __type and x-amzn-ErrorType — never XML', async () => {
+    const res = await request(engine.port, {
+      method: 'GET',
+      path: '/v1/apis',
+      headers: { authorization: auth('appsync') },
+    });
+    expect(res.status).toBe(400);
+    expect(res.headers['content-type']).toBe('application/json');
+    expect(res.headers['x-amzn-errortype']).toBe('NotImplemented');
+    expect(res.json).toMatchObject({ __type: 'NotImplemented', code: 'NotImplemented' });
+    expect(res.json.message).toContain('appsync.GET /v1/apis is not implemented');
+  });
+
+  // API Gateway is emulated by the real backend; this bare router has no
+  // apigateway emulator, so the service-level gap still answers rest-json.
   it('rest-json (API Gateway): JSON with __type and x-amzn-ErrorType — never XML', async () => {
     const res = await request(engine.port, {
       method: 'GET',
@@ -991,6 +1007,23 @@ describe('reset endpoint', () => {
     } finally {
       await lan.close();
       await mapped.close();
+    }
+  });
+
+  it('passes ?service= through and answers an AwsError with its own status and code', async () => {
+    const onReset = jest.fn(async (service?: string) => {
+      if (service === 'dynamodb') throw new AwsError('InvalidParameterValue', 'not per-service', { status: 400 });
+    });
+    const e = await withResetEngine(onReset);
+    try {
+      const scoped = await request(e.port, { ...confirmed, path: '/_lss/reset?service=apigateway' });
+      expect(scoped.status).toBe(200);
+      expect(scoped.json).toEqual({ status: 'reset', engine: 'self', persistence: false, service: 'apigateway' });
+      expect(onReset).toHaveBeenLastCalledWith('apigateway');
+      const refused = await request(e.port, { ...confirmed, path: '/_lss/reset?service=dynamodb' });
+      expect([refused.status, refused.json.__type, refused.json.message]).toEqual([400, 'InvalidParameterValue', 'not per-service']);
+    } finally {
+      await e.close();
     }
   });
 

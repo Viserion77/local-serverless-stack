@@ -323,6 +323,20 @@ export const TOOLS: ToolDefinition[] = [
     run: (a, http) => http('GET', `/api/secrets${region(a)}`),
   },
   {
+    name: 'lss_api_keys',
+    description:
+      'API Gateway API keys (id, name, enabled, customer id, the usage plans each belongs to). '
+      + 'Key values are NOT included.',
+    inputSchema: { type: 'object', properties: { ...REGION_PROP } },
+    run: (a, http) => http('GET', `/api/apigateway/keys${region(a)}`),
+  },
+  {
+    name: 'lss_usage_plans',
+    description: 'API Gateway usage plans: API stages (apiId/stage), throttle, quota and how many keys each holds.',
+    inputSchema: { type: 'object', properties: { ...REGION_PROP } },
+    run: (a, http) => http('GET', `/api/apigateway/plans${region(a)}`),
+  },
+  {
     name: 'lss_opensearch_search',
     description: 'Run an OpenSearch query against a collection. `body` is the raw search DSL.',
     inputSchema: {

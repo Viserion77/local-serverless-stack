@@ -62,6 +62,8 @@ describe('read-only tools', () => {
     await expectCall('lss_queues', {}, ['GET', '/api/queues']);
     await expectCall('lss_buckets', {}, ['GET', '/api/buckets']);
     await expectCall('lss_secrets', {}, ['GET', '/api/secrets']);
+    await expectCall('lss_api_keys', {}, ['GET', '/api/apigateway/keys']);
+    await expectCall('lss_usage_plans', {}, ['GET', '/api/apigateway/plans']);
     await expectCall('lss_seeds', {}, ['GET', '/api/seeds']);
   });
 

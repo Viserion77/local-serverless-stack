@@ -16,7 +16,10 @@ import {
   apiFlavor,
   routeFlavor,
   safeDecode,
+  checkApiKey,
+  LOCAL_API_ID,
   IncomingRequest,
+  type ResolvedApiKey,
 } from '../../../src/server/services/api-gateway-events';
 import type { HttpRoute } from '../../../src/server/services/serverless-state-parser';
 
@@ -538,5 +541,101 @@ describe('answersPreflight', () => {
     expect(answersPreflight(routes, '/users/7')).toBe(true);
     expect(answersPreflight(routes, '/plain')).toBe(false);
     expect(answersPreflight(routes, '/nowhere')).toBe(false);
+  });
+});
+
+describe('API keys', () => {
+  const resolved = (overrides: Partial<ResolvedApiKey> = {}): ResolvedApiKey => ({
+    id: 'k1abc',
+    name: 'partner-acme',
+    enabled: true,
+    usagePlans: [{ id: 'p1', name: 'basic', apiStages: [{ apiId: LOCAL_API_ID, stage: 'dev' }] }],
+    ...overrides,
+  });
+
+  it('INVALID_API_KEY: REST 403 Forbidden with ForbiddenException; HTTP API 403 Forbidden', () => {
+    const rest = gatewayErrorResponse('INVALID_API_KEY', 'rest');
+    expect(rest.statusCode).toBe(403);
+    expect(JSON.parse(rest.body.toString())).toEqual({ message: 'Forbidden' });
+    expect(rest.headers['x-amzn-errortype']).toBe('ForbiddenException');
+    const http = gatewayErrorResponse('INVALID_API_KEY', 'http');
+    expect(http.statusCode).toBe(403);
+    expect(JSON.parse(http.body.toString())).toEqual({ message: 'Forbidden' });
+  });
+
+  it('buildV1Event stamps identity.apiKey / apiKeyId when admitted with a key, null otherwise', () => {
+    const base = { request: req(), route: route('GET', '/users'), pathParameters: null, stage: 'dev' };
+    const keyed = buildV1Event({ ...base, apiKey: { apiKey: 'secret-value', apiKeyId: 'k1abc' } }) as any;
+    expect(keyed.requestContext.identity).toEqual(expect.objectContaining({ apiKey: 'secret-value', apiKeyId: 'k1abc' }));
+    const plain = buildV1Event(base) as any;
+    expect(plain.requestContext.identity.apiKey).toBeNull();
+    expect(plain.requestContext.identity).not.toHaveProperty('apiKeyId');
+  });
+
+  describe('checkApiKey', () => {
+    const run = (options: Partial<Parameters<typeof checkApiKey>[0]> & { key?: ResolvedApiKey | undefined }) => {
+      const lookup = jest.fn().mockResolvedValue('key' in options ? options.key : resolved());
+      const promise = checkApiKey({
+        route: { apiKeySourceType: 'HEADER' },
+        request: { headers: { 'x-api-key': 'secret-value' } },
+        stage: 'dev',
+        region: 'eu-west-1',
+        lookup,
+        ...options,
+      });
+      return { promise, lookup };
+    };
+
+    it('HEADER: reads x-api-key, looks it up in the region and admits a key whose plan covers the stage', async () => {
+      const { promise, lookup } = run({});
+      expect(await promise).toEqual({ ok: true, identity: { apiKey: 'secret-value', apiKeyId: 'k1abc' } });
+      expect(lookup).toHaveBeenCalledWith('eu-west-1', 'secret-value');
+    });
+
+    it('defaults to HEADER when the route carries no source', async () => {
+      expect(await run({ route: {} }).promise).toEqual(expect.objectContaining({ ok: true }));
+    });
+
+    it('missing key: no header (HEADER), no usageIdentifierKey (AUTHORIZER) — never looked up', async () => {
+      const header = run({ request: { headers: {} } });
+      expect(await header.promise).toEqual({ ok: false, reason: 'missing' });
+      expect(header.lookup).not.toHaveBeenCalled();
+      const authorizer = run({ route: { apiKeySourceType: 'AUTHORIZER' }, authorizer: { principalId: 'u' } });
+      expect(await authorizer.promise).toEqual({ ok: false, reason: 'missing' });
+      const noAuthorizer = run({ route: { apiKeySourceType: 'AUTHORIZER' } });
+      expect(await noAuthorizer.promise).toEqual({ ok: false, reason: 'missing' });
+    });
+
+    it('AUTHORIZER: the authorizer\'s usageIdentifierKey is the key, the header is ignored', async () => {
+      const { promise, lookup } = run({
+        route: { apiKeySourceType: 'AUTHORIZER' },
+        request: { headers: { 'x-api-key': 'header-value' } },
+        authorizer: { principalId: 'u', usageIdentifierKey: 'from-authorizer' },
+      });
+      expect(await promise).toEqual({ ok: true, identity: { apiKey: 'from-authorizer', apiKeyId: 'k1abc' } });
+      expect(lookup).toHaveBeenCalledWith('eu-west-1', 'from-authorizer');
+    });
+
+    it('unknown, disabled, in no plan, or in a plan without this stage → rejected', async () => {
+      expect(await run({ key: undefined }).promise).toEqual({ ok: false, reason: 'unknown' });
+      expect(await run({ key: resolved({ enabled: false }) }).promise).toEqual({ ok: false, reason: 'disabled' });
+      expect(await run({ key: resolved({ usagePlans: [] }) }).promise).toEqual({ ok: false, reason: 'no-usage-plan' });
+      expect(await run({ key: resolved({ usagePlans: [{ id: 'p', name: 'empty', apiStages: [] }] }) }).promise)
+        .toEqual({ ok: false, reason: 'no-usage-plan' });
+      expect(await run({ key: resolved({ usagePlans: [{ id: 'p', name: 'prod-only', apiStages: [{ apiId: LOCAL_API_ID, stage: 'prod' }] }] }) }).promise)
+        .toEqual({ ok: false, reason: 'no-usage-plan' });
+    });
+
+    it('matches apiId AND stage exactly: the right stage of another API covers nothing', async () => {
+      const other = resolved({ usagePlans: [{ id: 'p', name: 'other-api', apiStages: [{ apiId: 'restapi-xyz', stage: 'dev' }] }] });
+      expect(await run({ key: other }).promise).toEqual({ ok: false, reason: 'no-usage-plan' });
+      const mixed = resolved({
+        usagePlans: [
+          { id: 'p1', name: 'other-api', apiStages: [{ apiId: 'restapi-xyz', stage: 'dev' }] },
+          { id: 'p2', name: 'local', apiStages: [{ apiId: 'restapi-xyz', stage: 'prod' }, { apiId: LOCAL_API_ID, stage: 'dev' }] },
+        ],
+      });
+      expect(await run({ key: mixed }).promise).toEqual(expect.objectContaining({ ok: true }));
+    });
   });
 });

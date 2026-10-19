@@ -18,6 +18,8 @@ function runtime(): RuntimeAttributes {
   attrs.queueUrls.set('orders-jobs', 'http://localhost:14566/000000000000/orders-jobs');
   attrs.streamArns.set('orders', 'arn:aws:dynamodb:sa-east-1:000000000000:table/orders/stream/2026-01-01T00:00:00.000');
   attrs.secretArns.set('orders/db', 'arn:aws:secretsmanager:sa-east-1:000000000000:secret:orders/db-AbCdEf');
+  attrs.usagePlanIds.set('PartnersPlan', 'pl4n01');
+  attrs.apiKeyIds.set('PartnersKey', 'k3y0000001');
   attrs.collections.set('products', { id: 'col-1', arn: 'arn:aws:aoss:sa-east-1:000000000000:collection/col-1', endpoint: 'http://localhost:14566/_aoss/products' });
   return attrs;
 }
@@ -38,6 +40,9 @@ const RESOURCES: Resource[] = [
   { type: 'opensearch', logicalId: 'Search', name: 'products' },
   { type: 'apigw-api', logicalId: 'HttpApi', name: 'api', cors: false },
   { type: 'ssm-parameter', logicalId: 'FlagParam', name: '/acme/orders/flag', parameterType: 'String', value: 'on', tags: [] },
+  { type: 'apigw-rest-api', logicalId: 'ApiGatewayRestApi', name: 'dev-orders' },
+  { type: 'apigw-usage-plan', logicalId: 'PartnersPlan', name: 'partners', apiStages: [], tags: {} },
+  { type: 'apigw-api-key', logicalId: 'PartnersKey', name: 'partners-key', enabled: true, stageKeys: [], tags: {} },
 ];
 
 describe('physicalValue', () => {
@@ -83,6 +88,21 @@ describe('physicalValue', () => {
     expect(resolve('Search', 'Id')).toBe('col-1');
     expect(resolve('Search', 'Arn')).toBe('arn:aws:aoss:sa-east-1:000000000000:collection/col-1');
     expect(resolve('Search', 'CollectionEndpoint')).toBe('http://localhost:14566/_aoss/products');
+  });
+
+  it('answers the API Gateway ids: the local REST API, and the minted plan / key ids', () => {
+    expect(resolve('ApiGatewayRestApi')).toBe('lss-local');
+    expect(resolve('ApiGatewayRestApi', 'RootResourceId')).toBe('lss-local-root');
+    expect(resolve('PartnersPlan')).toBe('pl4n01');
+    expect(resolve('PartnersPlan', 'Id')).toBe('pl4n01');
+    expect(resolve('PartnersPlan', 'Arn')).toBeUndefined();
+    expect(resolve('PartnersKey')).toBe('k3y0000001');
+    expect(resolve('PartnersKey', 'APIKeyId')).toBe('k3y0000001');
+    // The key VALUE is never a CloudFormation attribute.
+    expect(resolve('PartnersKey', 'Value')).toBeUndefined();
+    const bare = createPhysicalResolver(RESOURCES, { region: REGION });
+    expect(bare('PartnersPlan')).toBeUndefined();
+    expect(bare('PartnersKey')).toBeUndefined();
   });
 
   it('returns undefined for what it cannot know', () => {

@@ -37,9 +37,12 @@ import {
 export interface EngineRouterDeps {
   ctx: EngineContext;
   emulators: AnyEmulator[];
-  // Wipes every emulator's state (POST /_lss/reset). Absent → the route
-  // answers 404, which is what a bare router in a unit test should do.
-  onReset?: () => Promise<void>;
+  // Wipes every emulator's state (POST /_lss/reset), or only one emulator's
+  // when `service` is given (`?service=<signing name>`). Absent → the route
+  // answers 404, which is what a bare router in a unit test should do. An
+  // AwsError thrown here (an unsupported `service`) is answered with its own
+  // status and code; anything else is a 500.
+  onReset?: (service?: string) => Promise<void>;
 }
 
 // Prefixes that do not belong to a TargetEmulator (OpenSearch Serverless is a
@@ -78,6 +81,7 @@ const LOCALSTACK_HEALTH = {
     secretsmanager: 'available',
     ssm: 'available',
     aoss: 'available',
+    apigateway: 'available',
   },
   edition: 'self',
   version: 'lss-self-engine',
@@ -154,7 +158,7 @@ async function handleRequest(
     return;
   }
   if (rawPath === RESET_PATH) {
-    await handleReset(deps, req, res, requestId, method);
+    await handleReset(deps, req, res, requestId, method, query.service);
     return;
   }
 
@@ -264,6 +268,7 @@ async function handleRequest(
       method,
       rawPath,
       query,
+      rawQuery: queryIndex === -1 ? '' : urlValue.slice(queryIndex + 1),
       headers,
       body,
       service: emulator.service,
@@ -365,6 +370,7 @@ async function handleReset(
   res: http.ServerResponse,
   requestId: string,
   method: string,
+  service: string | undefined,
 ): Promise<void> {
   // Drain the body first; nothing in it is read.
   await readBody(req);
@@ -387,13 +393,19 @@ async function handleReset(
     return;
   }
   try {
-    await deps.onReset();
+    await deps.onReset(service);
   } catch (err) {
+    if (err instanceof AwsError) {
+      fail(err.status, err.code, err.message);
+      return;
+    }
     console.error('[engine] reset failed:', err instanceof Error ? err.stack : err);
     fail(500, 'InternalFailure', `Engine reset failed: ${err instanceof Error ? err.message : String(err)}`);
     return;
   }
-  finish(res, requestId, false, jsonBody(200, { status: 'reset', engine: 'self', persistence: deps.ctx.config.persistence }));
+  finish(res, requestId, false, jsonBody(200, {
+    status: 'reset', engine: 'self', persistence: deps.ctx.config.persistence, service,
+  }));
 }
 
 function proxyToFallback(
@@ -525,6 +537,10 @@ function shapeForService(
       return { kind: 'query' };
     case 'lambda':
       return { kind: 'lambda' };
+    case 'apigateway':
+      // rest-json: x-amzn-ErrorType + JSON body. Stated outright rather than
+      // left to guessShape, whose answer also depends on the content type.
+      return { kind: 'restJson' };
     case 's3':
       return { kind: 's3' };
     default:

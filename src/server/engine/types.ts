@@ -22,6 +22,10 @@ export interface AwsRequest {
   // (S3 keys must preserve encoded slashes).
   rawPath: string;
   query: Record<string, string>;
+  // The undecoded query string (no leading `?`), for the members a parsed map
+  // cannot carry: a repeated key (`tagKeys=a&tagKeys=b`) keeps only its last
+  // value in `query`. Optional so hand-built requests in tests may omit it.
+  rawQuery?: string;
   // Header names lowercased; duplicate headers joined with ", ".
   headers: Record<string, string>;
   body: Buffer;
@@ -51,7 +55,9 @@ export type EngineServiceName =
   | 'ssm'
   // OpenSearch Serverless — the SigV4 signing name, shared by the control
   // plane (X-Amz-Target OpenSearchServerless.*) and the data plane REST API.
-  | 'aoss';
+  | 'aoss'
+  // API Gateway REST v1 control plane (rest-json): API keys and usage plans.
+  | 'apigateway';
 
 // DynamoDB wire-format attribute value (also reused for stream records and
 // SQS message-attribute shapes where noted). `B`/`BS` carry base64 strings —
@@ -102,6 +108,13 @@ export interface QueryEmulator {
 }
 
 export type AnyEmulator = TargetEmulator | RestEmulator | QueryEmulator;
+
+// An emulator that can wipe its own state in place, for the per-service
+// `POST /_lss/reset?service=<name>`. The whole-engine reset never needs it (it
+// rebuilds every emulator), so implementing it is optional.
+export interface ResettableEmulator {
+  resetState(): Promise<void>;
+}
 
 // ---------------------------------------------------------------------------
 // Dispatcher (event delivery into the LSS Lambda runtime)
