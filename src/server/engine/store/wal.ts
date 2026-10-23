@@ -178,18 +178,36 @@ export class JsonlItemTable implements ItemTable {
     await this.queueWalFlush();
   }
 
+  // Fold the WAL into the snapshot. The table state is captured synchronously
+  // (lastSeq plus the current entries) and the snapshot write + WAL truncation
+  // run as ONE link of the WAL append chain. That ordering is what makes it
+  // safe under concurrent writers: appends already queued land before the
+  // truncation and are covered by the captured state (their seq <= lastSeq),
+  // while every write made after the capture is appended only once the
+  // truncation is done, with a seq > lastSeq, and is replayed on the next boot.
+  // Truncating outside the chain — after awaiting it once and then spending
+  // several awaits on the snapshot — erased the appends that slipped in
+  // meanwhile, and a key the snapshot had already passed lost its newest value.
   async compact(): Promise<void> {
     const map = this.entriesMap;
     if (!map) return;
-    // Buffered appends are superseded by the snapshot written below.
+    const lastSeq = this.seq;
+    const rows: Array<[string, unknown]> = [];
+    for (const [key, entry] of map) rows.push([key, entry.item]);
+    // Buffered appends are covered by the captured state.
     this.dropBufferedWal();
-    await this.walChain; // let in-flight appends settle before truncating
     const tmpPath = `${this.snapshotPath}.tmp`;
-    await ensureDirFor(tmpPath);
-    await this.writeSnapshot(tmpPath, map);
-    await fsp.rename(tmpPath, this.snapshotPath);
-    await fsp.writeFile(this.walPath, '');
-    this.walBytesSinceCompact = 0;
+    const run = this.walChain.then(async () => {
+      await ensureDirFor(tmpPath);
+      await this.writeSnapshot(tmpPath, lastSeq, rows);
+      await fsp.rename(tmpPath, this.snapshotPath);
+      await fsp.writeFile(this.walPath, '');
+      this.walBytesSinceCompact = 0;
+    });
+    // Same discipline as appends: the chain itself stays resolved so a failed
+    // compaction never wedges later writes; the caller still sees the error.
+    this.walChain = run.catch(() => undefined);
+    await run;
   }
 
   async dehydrate(): Promise<void> {
@@ -380,12 +398,12 @@ export class JsonlItemTable implements ItemTable {
     this.walBufferBytes = 0;
   }
 
-  private async writeSnapshot(tmpPath: string, map: Map<string, StoredEntry>): Promise<void> {
+  private async writeSnapshot(tmpPath: string, lastSeq: number, rows: Array<[string, unknown]>): Promise<void> {
     const handle = await fsp.open(tmpPath, 'w');
     try {
-      let chunk = JSON.stringify({ header: true, lastSeq: this.seq }) + '\n';
-      for (const [key, entry] of map) {
-        chunk += JSON.stringify({ key, item: entry.item }) + '\n';
+      let chunk = JSON.stringify({ header: true, lastSeq }) + '\n';
+      for (const [key, item] of rows) {
+        chunk += JSON.stringify({ key, item }) + '\n';
         if (chunk.length >= SNAPSHOT_WRITE_CHUNK) {
           await handle.write(chunk);
           chunk = '';

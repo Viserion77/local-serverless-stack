@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-23
+
+### Fixed
+
+- **A write made during a WAL self-compaction could be lost.** The compaction waited for in-flight
+  appends once, then wrote the snapshot, renamed it and truncated the WAL outside the append chain;
+  a write that landed in between was appended and then erased by the truncation, so the table
+  replayed an older value on the next boot (a key the snapshot had already passed kept its stale
+  version). The table state is now captured synchronously and the snapshot + truncation run as one
+  link of the append chain: writes made meanwhile are appended after the truncation and replayed.
+  Only reproducible under load — it surfaced as an intermittent failure of the hot-table compaction
+  test on CI runners; a deterministic regression test now forces the interleaving.
+- **Body-less requests to `POST /api/services/register`, `PATCH /api/services/:name/status` and
+  `PUT /api/config` no longer depend on the body parser handing back `{}`** — Express 5 leaves
+  `req.body` undefined, which made those handlers throw (a 500) instead of answering 400 / an empty
+  patch.
+
+### Changed
+
+- **Express 5** (5.3.0, from 4.22). The HTTP API was adapted to the new path syntax and body handling: the SPA fallback
+  is a regex route instead of `'*'` (Express 5's path syntax has no bare wildcard), and
+  `/api/config/branding/:asset` checks `logo` / `favicon` in the handler instead of an inline regex
+  parameter (gone from Express 5). Any other asset name answers 404 without reading the config.
+  The code runs on both major versions.
+
 ## [1.2.0] - 2026-10-19
 
 ### Added
@@ -1099,6 +1124,8 @@ Not applicable (initial release)
 ---
 
 ## [Unreleased]
+
+## [1.2.1] - 2026-10-23
 
 ## [1.2.0] - 2026-10-19
 

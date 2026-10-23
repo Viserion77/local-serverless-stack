@@ -34,7 +34,9 @@ router.post('/register', async (req: Request, res: Response) => {
   try {
     await ensureCacheInit();
 
-    const { servicePath, invokePort, apiPort, region, repackage } = req.body;
+    // Object(): Express 5 leaves req.body undefined for a body-less request
+    // (4 handed back {}), and destructuring undefined would be a 500.
+    const { servicePath, invokePort, apiPort, region, repackage } = Object(req.body);
 
     if (!servicePath) {
       return res.status(400).json({ error: 'servicePath is required' });
@@ -496,7 +498,7 @@ router.patch('/:name/status', async (req: Request, res: Response) => {
     if (!serviceName || typeof serviceName !== 'string' || serviceName.includes('/') || serviceName.includes('..')) {
       return res.status(400).json({ error: 'Invalid service name' });
     }
-    const { status, pid } = req.body;
+    const { status, pid } = Object(req.body);
     
     // Validate status
     const validStatuses = ['registered', 'running', 'stopped', 'error'];

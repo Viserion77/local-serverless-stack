@@ -171,6 +171,16 @@ describe('GET /api/config', () => {
 });
 
 describe('PUT /api/config', () => {
+  it('treats a body-less PUT as an empty patch — Express 5 leaves req.body undefined', async () => {
+    const cm = stub();
+    const update = jest.spyOn(cm, 'updateConfig').mockReturnValue({ path: '/abs/lss.config.json', restartRequired: [], envOverridden: [] });
+    const app = express();
+    app.use('/api/config', configRouter);
+    const res = await request(app).put('/api/config');
+    expect(res.status).toBe(200);
+    expect(update).toHaveBeenCalledWith({});
+  });
+
   it('persists the patch and returns the fresh snapshot with restart/env-mask info', async () => {
     const cm = stub();
     const update = jest.spyOn(cm, 'updateConfig').mockReturnValue({
@@ -348,6 +358,14 @@ describe('GET /api/config/branding', () => {
     expect(res.text).toContain('logo-bytes');
     expect(spy).toHaveBeenCalledWith('logo');
     fs.rmSync(path.dirname(file), { recursive: true, force: true });
+  });
+
+  it('404s for anything but logo/favicon without touching the config', async () => {
+    const spy = jest.spyOn(ConfigManager.getInstance(), 'getBrandingAssetFile');
+    const res = await request(appWith()).get('/api/config/branding/passwd');
+    expect(res.status).toBe(404);
+    expect(res.body.error).toContain('passwd');
+    expect(spy).not.toHaveBeenCalled();
   });
 
   it('404s when no local favicon file is configured', async () => {

@@ -160,6 +160,12 @@ beforeEach(() => {
 });
 
 describe('POST /api/services/register', () => {
+  it('400 (not 500) when the request has no body at all — Express 5 leaves req.body undefined', async () => {
+    const res = await request(appNoBodyParser()).post('/api/services/register');
+    expect(res.status).toBe(400);
+    expect(res.body.error).toBe('servicePath is required');
+  });
+
   it('400 when servicePath is missing', async () => {
     const res = await request(appWith()).post('/api/services/register').send({});
     expect(res.status).toBe(400);
@@ -1042,6 +1048,14 @@ describe('PATCH /api/services/:name/status', () => {
   it('400 on invalid service name', async () => {
     const res = await request(appWith()).patch('/api/services/a..b/status').send({});
     expect(res.status).toBe(400);
+  });
+
+  it('a body-less request is handled like an empty one (not a 500) — Express 5 leaves req.body undefined', async () => {
+    const empty = await request(appWith()).patch('/api/services/my-service/status').send({});
+    const bodyless = await request(appNoBodyParser()).patch('/api/services/my-service/status');
+    expect(bodyless.status).toBe(empty.status);
+    expect(bodyless.status).not.toBe(500);
+    expect(bodyless.body).toEqual(empty.body);
   });
 
   it('400 on invalid status value', async () => {

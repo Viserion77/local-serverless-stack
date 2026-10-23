@@ -126,7 +126,9 @@ router.get('/', (_req: Request, res: Response) => {
 router.put('/', (req: Request, res: Response) => {
   const cm = ConfigManager.getInstance();
   try {
-    const result = cm.updateConfig(req.body);
+    // Object(): Express 5 leaves req.body undefined for a body-less PUT (4
+    // handed back {}); an empty patch is the same no-op either way.
+    const result = cm.updateConfig(Object(req.body));
     // `region` is lazily consumed, so a patch that changes it takes effect at
     // once — the explorers' default has to follow or they keep answering for
     // the previous region.
@@ -240,8 +242,16 @@ router.get('/branding', (_req: Request, res: Response) => {
 
 // Serve logo/favicon files referenced by path in the config, so branding
 // assets can live next to lss.config.json without a separate web server.
-router.get('/branding/:asset(logo|favicon)', (req: Request, res: Response) => {
-  const kind = req.params.asset as BrandingAssetKind;
+// The asset is checked in the handler: inline regex parameters
+// (`:asset(logo|favicon)`) are gone from Express 5's path syntax.
+const BRANDING_ASSETS: readonly string[] = ['logo', 'favicon'];
+router.get('/branding/:asset', (req: Request, res: Response) => {
+  const asset = String(req.params.asset);
+  if (!BRANDING_ASSETS.includes(asset)) {
+    res.status(404).json({ error: `Unknown branding asset: ${asset}` });
+    return;
+  }
+  const kind = asset as BrandingAssetKind;
   const file = ConfigManager.getInstance().getBrandingAssetFile(kind);
   if (!file) {
     res.status(404).json({ error: `No local ${kind} file configured` });
