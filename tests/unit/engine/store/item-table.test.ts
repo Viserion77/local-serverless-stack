@@ -2,6 +2,7 @@
 // (torn tail, seq skip after compaction), compaction, dehydrate/rehydrate,
 // destroy and exact approxBytes accounting.
 import fs from 'fs';
+import fsp from 'fs/promises';
 import os from 'os';
 import path from 'path';
 import { createEngineStore, EngineStoreOptions } from '../../../../src/server/engine/store/engine-store.js';
@@ -265,6 +266,60 @@ describe('compaction', () => {
     await replayed.hydrate();
     expect(replayed.size()).toBe(4);
     expect(replayed.get('k3')).toBe(`199:${payload}`);
+  });
+});
+
+describe('compaction under concurrent writes', () => {
+  // A write landing while a compaction is between its snapshot and its WAL
+  // truncation must survive: the truncation used to run outside the WAL append
+  // chain, so an append that slipped in meanwhile was erased and a key the
+  // snapshot had already passed lost its newest value. The rename is held open
+  // here to force exactly that interleaving, deterministically.
+  test('a write made mid-compaction is replayed after the truncation', async () => {
+    const table = makeStore().table('db/race');
+    await table.hydrate();
+    table.put('k', 'v1');
+    await table.flush();
+
+    const realRename = fsp.rename.bind(fsp);
+    let midFlush: Promise<void> | undefined;
+    const rename = jest.spyOn(fsp, 'rename').mockImplementation(async (from, to) => {
+      // The snapshot (holding v1) is written; now a writer gets in.
+      table.put('k', 'v2');
+      midFlush = table.flush();
+      // Give the append every chance to hit the file before the truncation.
+      // (It must NOT complete first: it is queued behind the compaction.)
+      await Promise.race([midFlush, sleep(50)]);
+      return realRename(from, to);
+    });
+    try {
+      await table.compact();
+    } finally {
+      rename.mockRestore();
+    }
+    await midFlush;
+
+    expect(table.get('k')).toBe('v2');
+    const replayed = makeStore().table('db/race');
+    await replayed.hydrate();
+    expect(replayed.get('k')).toBe('v2');
+  });
+
+  test('a failed compaction is reported to its caller and does not wedge later writes', async () => {
+    const table = makeStore().table('db/fail');
+    await table.hydrate();
+    table.put('a', 1);
+    const rename = jest.spyOn(fsp, 'rename').mockRejectedValueOnce(new Error('disk full'));
+    try {
+      await expect(table.compact()).rejects.toThrow('disk full');
+    } finally {
+      rename.mockRestore();
+    }
+    table.put('b', 2);
+    await table.flush();
+    const replayed = makeStore().table('db/fail');
+    await replayed.hydrate();
+    expect(replayed.get('b')).toBe(2);
   });
 });
 

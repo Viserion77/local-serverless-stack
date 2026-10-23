@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-10-23
+
+### Fixed
+
+- **A write made during a WAL self-compaction could be lost.** The compaction waited for in-flight
+  appends once, then wrote the snapshot, renamed it and truncated the WAL outside the append chain;
+  a write that landed in between was appended and then erased by the truncation, so the table
+  replayed an older value on the next boot (a key the snapshot had already passed kept its stale
+  version). The table state is now captured synchronously and the snapshot + truncation run as one
+  link of the append chain: writes made meanwhile are appended after the truncation and replayed.
+  Only reproducible under load — it surfaced as an intermittent failure of the hot-table compaction
+  test on CI runners; a deterministic regression test now forces the interleaving.
+
 ## [1.2.0] - 2026-10-19
 
 ### Added
@@ -1099,6 +1112,8 @@ Not applicable (initial release)
 ---
 
 ## [Unreleased]
+
+## [1.2.1] - 2026-10-23
 
 ## [1.2.0] - 2026-10-19
 
