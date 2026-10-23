@@ -127,7 +127,9 @@ app.use('/api', (req, res) => {
 // __dirname is dist/server, so ../ui points to dist/ui
 const uiBuildPath = path.join(__dirname, '../ui');
 app.use(express.static(uiBuildPath));
-app.get('*', (_req, res) => {
+// A regex, not '*': Express 5's path syntax has no bare wildcard, and a regex
+// route means the same thing on both major versions.
+app.get(/.*/, (_req, res) => {
   res.sendFile(path.join(uiBuildPath, 'index.html'));
 });
 
