@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.2.2] - 2026-11-09
+
+### Security
+
+- **`npm audit` is clean on the published package's dependency tree and on every example and
+  fixture.** Vite 6.4.3 → 6.4.5 in the dashboard (high: launch-editor command injection, cross-origin
+  script execution through custom middleware, `server.fs.allow` bypass). `minimatch` is pinned to
+  `^11.0.5` under `@typescript-eslint/typescript-estree` through an `overrides` entry (moderate:
+  globparts-amplification DoS, fixed only on the 11.x line). `fast-uri` 3.1.8 → 3.1.9 in the
+  `examples/self-hosted` services and the integration fixtures (scheme spoofing, host confusion,
+  path equivalence), together with the `fflate` fix those lockfiles pulled in. All of these are
+  dev-only — the runtime dependencies of `local-serverless-stack` were already clean.
+
 ## [1.2.1] - 2026-10-23
 
 ### Fixed
@@ -1124,6 +1137,8 @@ Not applicable (initial release)
 ---
 
 ## [Unreleased]
+
+## [1.2.2] - 2026-11-09
 
 ## [1.2.1] - 2026-10-23
 

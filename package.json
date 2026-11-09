@@ -1,6 +1,6 @@
 {
   "name": "local-serverless-stack",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "description": "Local control plane for serverless development — an in-process AWS emulator, no Docker required",
   "author": "LSS Contributors",
   "license": "MIT",
@@ -102,6 +102,11 @@
     "tsx": "^4.19.2",
     "typescript": "^5.7.3",
     "typescript-eslint": "^8.53.1"
+  },
+  "overrides": {
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.5"
+    }
   },
   "engines": {
     "node": ">=20.0.0"
