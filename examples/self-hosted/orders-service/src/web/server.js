@@ -43,7 +43,7 @@ function page(requestId) {
   h1 { margin: 0 0 4px; font-size: 26px; } .muted { color: #94a3b8; }
   .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 24px 0; }
   .card { background: #111a2e; border: 1px solid #1e293b; border-radius: 10px; padding: 14px 16px; }
-  .card b { display: block; font-size: 12px; color: #94a3b8; font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
+  .card > b { display: block; font-size: 12px; color: #94a3b8; font-weight: 500; text-transform: uppercase; letter-spacing: .04em; }
   code { font: 13px ui-monospace, monospace; color: #5eead4; }
   .tag { display: inline-block; padding: 1px 8px; border-radius: 999px; background: #134e4a; color: #5eead4; font-size: 12px; }
   ul { padding-left: 18px; } li { margin: 4px 0; }
