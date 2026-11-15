@@ -53,7 +53,7 @@ describe('vector indexes (via provisionResources)', () => {
 
   const describe_ = async (name = 'catalog-embeddings') =>
     (await (provisioner as any).dynamoClient.send(new DescribeTableCommand({ TableName: name }))).Table;
-  const calls = (type: Function) => send.mock.calls.filter(([cmd]) => cmd instanceof type);
+  const calls = (type: abstract new (...args: never[]) => unknown) => send.mock.calls.filter(([cmd]) => cmd instanceof type);
 
   beforeEach(async () => {
     dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lss-prov-vector-'));
