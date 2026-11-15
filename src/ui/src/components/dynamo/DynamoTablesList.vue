@@ -25,6 +25,7 @@ interface TableRow {
   streamOn: boolean;
   hasGsi: boolean;
   hasLsi: boolean;
+  hasVectorIndex: boolean;
   service: string;
   seedItemCount: number | null;
   exists: boolean;
@@ -66,6 +67,7 @@ const rows = computed<TableRow[]>(() => {
       streamOn: t.streamEnabled,
       hasGsi: t.hasGsi,
       hasLsi: t.hasLsi,
+      hasVectorIndex: t.hasVectorIndex,
       service: ownersByTable.value[t.name] || '',
       seedItemCount: seedEntry ? seedEntry.itemCount : null,
       exists: true,
@@ -84,6 +86,7 @@ const rows = computed<TableRow[]>(() => {
         streamOn: false,
         hasGsi: false,
         hasLsi: false,
+        hasVectorIndex: false,
         service: ownersByTable.value[s.tableName] || '',
         seedItemCount: s.itemCount,
         exists: false,
@@ -323,6 +326,7 @@ onBeforeUnmount(() => {
             <TTag v-if="row.streamOn" size="sm" variant="solid">Streams</TTag>
             <TTag v-if="row.hasGsi" size="sm" variant="soft">GSI</TTag>
             <TTag v-if="row.hasLsi" size="sm" variant="soft">LSI</TTag>
+            <TTag v-if="row.hasVectorIndex" size="sm" variant="soft" tone="accent">{{ t('dynamo.vectorTag') }}</TTag>
           </TStack>
         </template>
 
