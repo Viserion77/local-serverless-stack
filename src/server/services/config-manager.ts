@@ -150,7 +150,30 @@ export interface ServiceRuntimeConfig {
   execArgv?: string[];
   // Per-function overrides keyed by the function's short name (the key under
   // `functions:`) or its full name. `env` here beats the service-level `env`.
+  // A Lambda Web Function's FunctionName works here too.
   functions?: Record<string, { env?: Record<string, string> }>;
+  // Pinned local ports for Lambda Web Function endpoints:
+  // `webFunctions.<FunctionName>.<EndpointName>.port`. Without one, an endpoint
+  // gets the next free port of `webFunctions.portRange`, remembered across
+  // restarts in the service cache.
+  webFunctions?: Record<string, Record<string, { port?: number }>>;
+}
+
+// Lambda Web Functions — the local front door and execution environments.
+export interface WebFunctionsConfig {
+  // "<from>-<to>": where endpoints without a pinned port get theirs. Default
+  // "15000-15999" — clear of the orchestrator (14566), the 30xx API ports, the
+  // 130xx invoke ports and Linux's ephemeral range (32768+).
+  portRange?: string;
+  // Rewrite `https://localhost:<web port>` to `http://` inside environment
+  // values (default true). A template builds a sibling's URL as
+  // `!Sub 'https://${Endpoint.DomainName}'` — right on AWS, where TLS is
+  // terminated at the endpoint, and a guaranteed handshake failure against the
+  // plain-HTTP local listener.
+  rewriteHttpsInEnv?: boolean;
+  // How many requests may wait for a busy environment, as a multiple of its
+  // MaxConcurrencyPerEnvironment (default 4). Beyond that, 429.
+  queueFactor?: number;
 }
 
 // The worker-process overrides resolved for one service (see
@@ -308,6 +331,9 @@ export interface LSSConfig {
   // Per-service runtime overrides (ports, execution mode, watch).
   serviceRuntime?: Record<string, ServiceRuntimeConfig>;
 
+  // Lambda Web Functions (ports, https rewrite, queue depth).
+  webFunctions?: WebFunctionsConfig;
+
   // Self-engine settings.
   selfEngine?: SelfEngineConfig;
 
@@ -331,7 +357,7 @@ interface ConfigKeySpec {
   // and it is spawned, so the shape check and the flag screen travel together.
   kind: 'port' | 'positiveInt' | 'nonNegativeInt' | 'boolean' | 'string'
     | 'stringRecord' | 'envRecord' | 'packageCommand' | 'packageArgs'
-    | 'stringArray' | 'projectRelativePath' | 'execArgv' | 'object';
+    | 'stringArray' | 'projectRelativePath' | 'execArgv' | 'portRange' | 'object';
   enum?: readonly string[];
   // Fixed-shape object blocks: every subkey is validated against its own spec
   // and unknown subkeys are rejected — a garbage nested value would otherwise
@@ -340,6 +366,10 @@ interface ConfigKeySpec {
   // Map-shaped object blocks keyed by service name (servicePackaging,
   // serviceRuntime): each entry must be an object whose subkeys match these.
   entrySubKeys?: Record<string, ConfigKeySpec>;
+  // Map-shaped object blocks whose entries are themselves maps with free keys
+  // (serviceRuntime.<svc>.webFunctions.<fn>.<endpoint>): each entry value is
+  // validated against this one spec.
+  entrySpec?: ConfigKeySpec;
 }
 
 // `secrets` is deliberately absent (and rejected on write): it holds seed
@@ -593,6 +623,24 @@ const EDITABLE_CONFIG_KEYS: Record<string, ConfigKeySpec> = {
           env: { kind: 'envRecord' },
         },
       },
+      // <FunctionName> → <EndpointName> → { port }.
+      webFunctions: {
+        kind: 'object',
+        entrySpec: {
+          kind: 'object',
+          entrySubKeys: {
+            port: { kind: 'port' },
+          },
+        },
+      },
+    },
+  },
+  webFunctions: {
+    kind: 'object',
+    subKeys: {
+      portRange: { kind: 'portRange' },
+      rewriteHttpsInEnv: { kind: 'boolean' },
+      queueFactor: { kind: 'positiveInt' },
     },
   },
   selfEngine: {
@@ -650,6 +698,17 @@ const CONFIG_ENV_OVERRIDES: Record<string, string[]> = {
   lambdaRuntime: ['LSS_LAMBDA_RUNTIME', 'LSS_LAMBDA_EXECUTION', 'LSS_LAMBDA_WATCH', 'LSS_INVOKE_HOST'],
   selfEngine: ['LSS_ENGINE_PORT', 'LSS_ENGINE_DATA_DIR', 'LSS_FALLBACK_ENDPOINT'],
 };
+
+const DEFAULT_WEB_PORT_RANGE: [number, number] = [15000, 15999];
+
+/** `"15000-15999"` → `[15000, 15999]`, or null when it is not a valid range. */
+export function parsePortRange(value: unknown): [number, number] | null {
+  const match = typeof value === 'string' ? /^\s*(\d+)\s*-\s*(\d+)\s*$/.exec(value) : null;
+  if (!match) return null;
+  const from = Number(match[1]);
+  const to = Number(match[2]);
+  return from >= 1 && to <= 65535 && from <= to ? [from, to] : null;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
@@ -818,6 +877,8 @@ function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string
     // single `--import`/`--require` is code execution. See execArgvError().
     case 'execArgv':
       return execArgvError(key, value);
+    case 'portRange':
+      return parsePortRange(value) ? null : `"${key}" must be a port range "<from>-<to>" (1..65535, from <= to)`;
     case 'stringRecord':
       return isPlainObject(value) && Object.values(value).every(v => typeof v === 'string')
         ? null
@@ -876,6 +937,13 @@ function validateValue(key: string, value: unknown, spec: ConfigKeySpec): string
             const error = validateValue(`${key}.${entryKey}.${subKey}`, subValue, subSpec);
             if (error) return error;
           }
+        }
+      }
+      if (spec.entrySpec) {
+        for (const [entryKey, entryValue] of Object.entries(value)) {
+          if (entryValue === null) continue;
+          const error = validateValue(`${key}.${entryKey}`, entryValue, spec.entrySpec);
+          if (error) return error;
         }
       }
       return null;
@@ -1344,6 +1412,33 @@ export class ConfigManager {
       execArgv: Array.isArray(perService.execArgv) ? [...perService.execArgv] : [],
       functions: isPlainObject(perService.functions) ? { ...perService.functions } : {},
     };
+  }
+
+  // Where an endpoint without a pinned port gets one. A malformed hand-edited
+  // value reads as the default rather than taking registration down.
+  getWebFunctionPortRange(): [number, number] {
+    return parsePortRange(this.config.webFunctions?.portRange) ?? [...DEFAULT_WEB_PORT_RANGE];
+  }
+
+  isWebFunctionHttpsRewrite(): boolean {
+    return this.config.webFunctions?.rewriteHttpsInEnv ?? true;
+  }
+
+  getWebFunctionQueueFactor(): number {
+    const raw = this.config.webFunctions?.queueFactor;
+    return typeof raw === 'number' && Number.isInteger(raw) && raw > 0 ? raw : 4;
+  }
+
+  /**
+   * The pinned port of one web-function endpoint
+   * (`serviceRuntime.<svc>.webFunctions.<fn>.<endpoint>.port`), looked up with
+   * the same key spellings as the rest of the service entry.
+   */
+  getWebEndpointPortOverride(servicePath: string, functionName: string, endpointName: string): number | undefined {
+    const perService: ServiceRuntimeConfig = this.lookupServiceEntry(this.config.serviceRuntime, servicePath);
+    const fnEntry = isPlainObject(perService.webFunctions) ? perService.webFunctions[functionName] : undefined;
+    const port = isPlainObject(fnEntry) && isPlainObject(fnEntry[endpointName]) ? fnEntry[endpointName].port : undefined;
+    return Number.isInteger(port) && (port as number) >= 1 && (port as number) <= 65535 ? port : undefined;
   }
 
   getSelfEngineConfig(): ResolvedSelfEngineConfig {

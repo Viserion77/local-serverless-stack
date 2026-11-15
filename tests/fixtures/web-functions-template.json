@@ -1,0 +1,83 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Lambda Web Functions in every spelling LSS reads: the three resource types, Ref and Fn::GetAtt (array and dotted string), a literal FunctionName, two weighted revisions and an IamAuth endpoint, plus a sibling event function whose environment points at the endpoint.",
+  "Resources": {
+    "OrdersTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "TableName": "acme-orders",
+        "BillingMode": "PAY_PER_REQUEST",
+        "AttributeDefinitions": [{ "AttributeName": "id", "AttributeType": "S" }],
+        "KeySchema": [{ "AttributeName": "id", "KeyType": "HASH" }]
+      }
+    },
+    "OrdersWeb": {
+      "Type": "AWS::Lambda::WebFunction",
+      "Properties": {
+        "FunctionName": "orders-web",
+        "Tags": [{ "Key": "team", "Value": "orders" }]
+      }
+    },
+    "OrdersWebStable": {
+      "Type": "AWS::Lambda::WebFunctionRevision",
+      "Properties": {
+        "FunctionName": { "Ref": "OrdersWeb" },
+        "Description": "stable",
+        "BuildConfig": {
+          "CodeConfig": { "S3Object": { "Bucket": "acme-artifacts", "Key": "builds/orders-web.zip" } },
+          "RuntimeConfig": { "Runtime": "nodejs24.x" }
+        },
+        "ServiceConfig": {
+          "ExecutionRoleArn": "arn:aws:iam::000000000000:role/orders-web",
+          "TimeoutSeconds": 10,
+          "MaxConcurrencyPerEnvironment": 8,
+          "EnvironmentVariables": {
+            "AWS_LAMBDA_NODEJS_ENTRYPOINT": "app.js",
+            "ORDERS_TABLE": { "Ref": "OrdersTable" },
+            "RELEASE": "stable"
+          }
+        }
+      }
+    },
+    "OrdersWebCanary": {
+      "Type": "AWS::Lambda::WebFunctionRevision",
+      "Properties": {
+        "FunctionName": "orders-web",
+        "BuildConfig": {
+          "CodeConfig": { "S3Object": { "Bucket": "acme-artifacts", "Key": "builds/orders-web-canary.zip" } },
+          "RuntimeConfig": { "Runtime": "nodejs24.x" }
+        }
+      }
+    },
+    "OrdersWebLive": {
+      "Type": "AWS::Lambda::WebFunctionEndpoint",
+      "Properties": {
+        "FunctionName": { "Fn::GetAtt": ["OrdersWeb", "FunctionArn"] },
+        "EndpointName": "live",
+        "EndpointType": "HomeRegion",
+        "AuthType": "IamAuth",
+        "RevisionWeights": [
+          { "RevisionId": { "Fn::GetAtt": ["OrdersWebStable", "RevisionId"] }, "Weight": 90 },
+          { "RevisionId": { "Fn::GetAtt": "OrdersWebCanary.RevisionId" }, "Weight": 10 }
+        ]
+      }
+    },
+    "CheckWebFunction": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "orders-check-web",
+        "Handler": "check.handler",
+        "Runtime": "nodejs20.x",
+        "Environment": {
+          "Variables": {
+            "ORDERS_WEB_URL": { "Fn::Sub": "https://${OrdersWebLive.DomainName}" },
+            "ORDERS_WEB_ARN": { "Ref": "OrdersWeb" },
+            "ORDERS_WEB_ENDPOINT_ARN": { "Fn::GetAtt": ["OrdersWebLive", "EndpointArn"] },
+            "STABLE_REVISION": { "Fn::GetAtt": ["OrdersWebStable", "RevisionId"] },
+            "STABLE_REVISION_ARN": { "Ref": "OrdersWebStable" }
+          }
+        }
+      }
+    }
+  }
+}

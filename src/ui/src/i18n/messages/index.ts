@@ -9,6 +9,7 @@ import { onboarding } from './onboarding';
 import { overview } from './overview';
 import { services } from './services';
 import { lambdas } from './lambdas';
+import { webFunctions } from './webFunctions';
 import { apis } from './apis';
 import { queues } from './queues';
 import { dynamo } from './dynamo';
@@ -31,6 +32,7 @@ const AREAS: Record<string, AreaMessages> = {
   overview,
   services,
   lambdas,
+  webFunctions,
   apis,
   queues,
   dynamo,

@@ -1,0 +1,17 @@
+{
+  "//": "A serverless-state.json FRAGMENT with a Serverless Framework v4 `webApps` block. DERIVED FROM THE PUBLISHED DOCS (the Framework's Web Apps guide), not captured from a real `serverless package` run — replace it with real output when one is available. LSS reads only `webApps.<name>.entry`.",
+  "service": {
+    "service": "orders-service",
+    "provider": { "name": "aws", "stage": "dev", "region": "us-east-1" },
+    "functions": {},
+    "webApps": {
+      "orders-web": {
+        "entry": "src/web/server.js",
+        "dev": { "command": "node src/web/server.js" }
+      },
+      "reports-web": {
+        "entry": "src/reports/index.js"
+      }
+    }
+  }
+}

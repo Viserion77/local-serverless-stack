@@ -4,8 +4,153 @@ import { FunctionRegistry } from '../services/function-registry.js';
 import { LambdaRuntimeManager } from '../services/lambda-runtime-manager.js';
 import { ConfigManager } from '../services/config-manager.js';
 import { InvocationActivity } from '../services/invocation-activity.js';
+import { WebFunctionManager, type WebServiceInfo } from '../services/web-function-manager.js';
+import { WebFunctionGateway, PIN_HEADER } from '../services/web-function-gateway.js';
+import { getBindHost } from '../services/bind-host.js';
+import type { RegisteredWebFunction } from '../services/web-function-assembler.js';
 
 const router = Router();
+
+// The address to reach a local listener at from this process: the bind host,
+// unless it is a wildcard (then the loopback answers).
+function connectHost(): string {
+  const host = getBindHost();
+  if (host === '0.0.0.0' || host === '::') return '127.0.0.1';
+  return host.includes(':') ? `[${host}]` : host;
+}
+
+// One web function as the list shows it: endpoints with their local URLs and
+// listener state, revisions with their environment state, and the totals.
+function describeWebFunction(service: WebServiceInfo, fn: RegisteredWebFunction) {
+  const manager = WebFunctionManager.getInstance();
+  const gateway = WebFunctionGateway.getInstance();
+  const totals = manager.getTotals(service.name, fn.name);
+  return {
+    service: service.name,
+    name: fn.name,
+    logicalId: fn.logicalId,
+    arn: fn.arn,
+    state: manager.functionState(service.name, fn.name),
+    endpoints: fn.endpoints.map(ep => ({
+      name: ep.name,
+      logicalId: ep.logicalId,
+      arn: ep.arn,
+      authType: ep.authType,
+      endpointType: ep.endpointType,
+      port: ep.port,
+      // `DomainName` as Fn::GetAtt resolves it, and the URL to open. Plain
+      // http: TLS is terminated at the endpoint on AWS, and nothing locally.
+      domainName: ep.port === undefined ? undefined : `localhost:${ep.port}`,
+      url: ep.port === undefined ? undefined : `http://localhost:${ep.port}`,
+      weights: ep.weights,
+      listener: gateway.getListenerStatus(service.name, fn.name, ep.name),
+    })),
+    revisions: fn.revisions.map(rev => ({
+      logicalId: rev.logicalId,
+      arn: rev.arn,
+      runtime: rev.runtime,
+      description: rev.description,
+      timeoutSeconds: rev.timeoutSeconds,
+      maxConcurrency: rev.maxConcurrency,
+      code: rev.code,
+      ...manager.revisionStatus(service.name, fn.name, rev.revisionId),
+    })),
+    warnings: fn.warnings,
+    requests: totals.requests,
+    errors: totals.errors,
+    lastRequestAt: totals.lastRequestAt,
+  };
+}
+
+function findWebFunction(req: Request): { service: WebServiceInfo; fn: RegisteredWebFunction } | undefined {
+  return WebFunctionManager.getInstance()
+    .listFunctions()
+    .find(ref => ref.service.name === String(req.params.service) && ref.fn.name === String(req.params.name));
+}
+
+// Lambda Web Functions. Registered BEFORE /:name, which would otherwise claim
+// `/web` as a function name (the same precedent as /activity).
+router.get('/web', (_req: Request, res: Response) => {
+  return res.json(WebFunctionManager.getInstance().listFunctions().map(ref => describeWebFunction(ref.service, ref.fn)));
+});
+
+router.get('/web/:service/:name', (req: Request, res: Response) => {
+  const ref = findWebFunction(req);
+  if (!ref) {
+    return res.status(404).json({ error: `Web function not found: ${req.params.service}/${req.params.name}` });
+  }
+  const manager = WebFunctionManager.getInstance();
+  return res.json({
+    ...describeWebFunction(ref.service, ref.fn),
+    environment: Object.fromEntries(ref.fn.revisions.map(rev => [rev.revisionId, rev.environment])),
+    recentRequests: manager.getRequests(ref.service.name, ref.fn.name).reverse(),
+    logs: manager.getLogs(ref.service.name, ref.fn.name),
+  });
+});
+
+// Stop the function's environments (AWS shutdown sequence); the next request
+// starts them again — the button for "pick up what I just changed" when the
+// watcher is off.
+router.post('/web/:service/:name/restart', async (req: Request, res: Response) => {
+  const restarted = await WebFunctionManager.getInstance().restartFunction(String(req.params.service), String(req.params.name));
+  if (!restarted) {
+    return res.status(404).json({ error: `Web function not found: ${req.params.service}/${req.params.name}` });
+  }
+  return res.json({ restarted: true });
+});
+
+// Send one HTTP request to a web function endpoint and return what came back
+// (status, headers, body — text, capped). This is how the MCP server lets an
+// agent exercise the app without a network tool of its own; it goes through
+// the real endpoint listener, so auth, revision weights and the request id all
+// apply.
+const BODY_LIMIT = 64 * 1024;
+router.post('/web/:service/:name/request', async (req: Request, res: Response) => {
+  const ref = findWebFunction(req);
+  if (!ref) {
+    return res.status(404).json({ error: `Web function not found: ${req.params.service}/${req.params.name}` });
+  }
+  const input = (req.body ?? {}) as {
+    method?: unknown; path?: unknown; headers?: unknown; body?: unknown; endpoint?: unknown; revision?: unknown;
+  };
+  const endpoint = typeof input.endpoint === 'string'
+    ? ref.fn.endpoints.find(ep => ep.name === input.endpoint)
+    : ref.fn.endpoints.find(ep => ep.port !== undefined);
+  if (!endpoint?.port) {
+    return res.status(404).json({ error: `No served endpoint ${typeof input.endpoint === 'string' ? `"${input.endpoint}" ` : ''}on ${ref.fn.name}` });
+  }
+  const method = typeof input.method === 'string' && input.method ? input.method.toUpperCase() : 'GET';
+  const rawPath = typeof input.path === 'string' && input.path ? input.path : '/';
+  const headers: Record<string, string> = {};
+  if (input.headers && typeof input.headers === 'object') {
+    for (const [key, value] of Object.entries(input.headers as Record<string, unknown>)) headers[key] = String(value);
+  }
+  if (typeof input.revision === 'string' && input.revision) headers[PIN_HEADER] = input.revision;
+  const body = input.body === undefined || method === 'GET' || method === 'HEAD'
+    ? undefined
+    : typeof input.body === 'string' ? input.body : JSON.stringify(input.body);
+  // The longest timeout of the function's revisions, plus slack for a cold start.
+  const timeoutMs = (Math.max(...ref.fn.revisions.map(rev => rev.timeoutSeconds), 30) + 15) * 1000;
+  const startedAt = Date.now();
+  try {
+    const answer = await fetch(`http://${connectHost()}:${endpoint.port}${rawPath.startsWith('/') ? rawPath : `/${rawPath}`}`, {
+      method,
+      headers,
+      body,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const text = await answer.text();
+    return res.json({
+      status: answer.status,
+      headers: Object.fromEntries(answer.headers.entries()),
+      body: text.length > BODY_LIMIT ? text.slice(0, BODY_LIMIT) : text,
+      truncated: text.length > BODY_LIMIT,
+      durationMs: Date.now() - startedAt,
+    });
+  } catch (error) {
+    return res.status(502).json({ error: `Request to ${endpoint.name} failed: ${error instanceof Error ? error.message : String(error)}` });
+  }
+});
 
 function describeFunction(ref: ReturnType<FunctionRegistry['listFunctions']>[number]) {
   const runtimeManager = LambdaRuntimeManager.getInstance();

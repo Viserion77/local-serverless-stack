@@ -338,6 +338,84 @@ export interface UsagePlanKeyResource {
   keyType: string;
 }
 
+// --- Lambda Web Functions (AWS::Lambda::WebFunction*) ------------------------
+// The second Lambda function type: an ordinary HTTP server Lambda starts and
+// proxies to, instead of a handler it calls per event. Three resources make
+// one: the function (a container that serves nothing on its own), immutable
+// revisions (code + config) and endpoints (an HTTPS URL weighted over at most
+// two revisions). The parser records them raw-ish — references reduced to
+// logical ids the way the Lambda/ESM arms do — and web-function-assembler.ts
+// turns the three into one RegisteredWebFunction per function.
+
+export interface WebFunctionResource {
+  type: 'web-function';
+  logicalId: string;
+  // FunctionName, else the logical id (AWS would mint a name; the logical id
+  // is the stable local stand-in every other arm uses).
+  name: string;
+  tags: Record<string, string>;
+}
+
+export interface WebFunctionRevisionResource {
+  type: 'web-function-revision';
+  logicalId: string;
+  // Revisions have no name of their own in AWS — the logical id, so the shared
+  // `'name' in resource` narrowing keeps typing.
+  name: string;
+  // FunctionName: a same-template WebFunction's logical id (from `Ref`/
+  // `Fn::GetAtt`), a literal function name, or a web-function ARN.
+  functionRef: string;
+  // Deterministic stand-in for the id AWS mints at creation (see
+  // webRevisionId): stable across boots, new whenever the code key moves —
+  // which is when AWS would have created a new revision too.
+  revisionId: string;
+  codeBucket?: string;
+  codeKey?: string;
+  runtime: string;
+  // ServiceConfig.EnvironmentVariables after the static pass — Ref/GetAtt to a
+  // resource still in place, resolved to physical values at registration.
+  environment: Record<string, unknown>;
+  timeoutSeconds: number;
+  maxConcurrency: number;
+  description?: string;
+}
+
+export interface WebFunctionRevisionWeight {
+  // A same-template revision's logical id (from `Fn::GetAtt Rev.RevisionId` or
+  // `Ref Rev`), or a literal revision id.
+  revisionRef: string;
+  weight: number;
+}
+
+export interface WebFunctionEndpointResource {
+  type: 'web-function-endpoint';
+  logicalId: string;
+  // EndpointName, else the logical id.
+  name: string;
+  functionRef: string;
+  // HomeRegion | MultiRegion | PerRegion — recorded, served once locally.
+  endpointType: string;
+  // ApplicationManaged | IamAuth.
+  authType: string;
+  revisionWeights: WebFunctionRevisionWeight[];
+}
+
+// The documented ranges of the two ServiceConfig numbers a local environment
+// honours (Lambda Developer Guide, "Configuring Lambda Web Functions").
+export const WEB_TIMEOUT_RANGE = { min: 3, max: 900, default: 30 } as const;
+export const WEB_CONCURRENCY_RANGE = { min: 1, max: 128, default: 64 } as const;
+
+/**
+ * The local RevisionId: a short hash of the revision's logical id and its code
+ * key. AWS mints the id when the revision is created; locally it has to be the
+ * same value on every boot (it is what `x-lss-web-revision` pins and what
+ * `Fn::GetAtt Rev.RevisionId` resolves to), and it has to change when the code
+ * it points at does.
+ */
+export function webRevisionId(logicalId: string, codeKey: string | undefined): string {
+  return crypto.createHash('sha256').update(`${logicalId}\u0000${codeKey ?? ''}`).digest('hex').slice(0, 12);
+}
+
 export type Resource =
   | LambdaResource
   | DynamoDBResource
@@ -358,7 +436,10 @@ export type Resource =
   | RestApiResource
   | UsagePlanResource
   | ApiKeyResource
-  | UsagePlanKeyResource;
+  | UsagePlanKeyResource
+  | WebFunctionResource
+  | WebFunctionRevisionResource
+  | WebFunctionEndpointResource;
 
 // Context threaded into resolveArnLike so cross-stack IntegrationUri/AuthorizerUri/
 // Permission.FunctionName reduce to concrete Lambda ARNs. `region`/`accountId`/
@@ -528,6 +609,12 @@ export class CloudFormationParser {
         return this.parseApiKey(key, resource, warnings);
       case 'AWS::ApiGateway::UsagePlanKey':
         return this.parseUsagePlanKey(key, resource);
+      case 'AWS::Lambda::WebFunction':
+        return this.parseWebFunction(key, resource);
+      case 'AWS::Lambda::WebFunctionRevision':
+        return this.parseWebFunctionRevision(key, resource, warnings);
+      case 'AWS::Lambda::WebFunctionEndpoint':
+        return this.parseWebFunctionEndpoint(key, resource, warnings);
       case 'AWS::OpenSearchServerless::SecurityPolicy':
       case 'AWS::OpenSearchServerless::AccessPolicy':
       case 'AWS::OpenSearchServerless::VpcEndpoint':
@@ -1033,6 +1120,80 @@ export class CloudFormationParser {
     };
   }
 
+  private parseWebFunction(key: string, resource: CloudFormationResource): WebFunctionResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    return {
+      type: 'web-function',
+      logicalId: key,
+      name: typeof props.FunctionName === 'string' && props.FunctionName ? props.FunctionName : key,
+      tags: readTagList(props.Tags),
+    };
+  }
+
+  private parseWebFunctionRevision(
+    key: string,
+    resource: CloudFormationResource,
+    warnings?: string[],
+  ): WebFunctionRevisionResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    const build = isRecord(props.BuildConfig) ? props.BuildConfig : {};
+    const code = isRecord(build.CodeConfig) && isRecord(build.CodeConfig.S3Object) ? build.CodeConfig.S3Object : {};
+    const runtimeConfig = isRecord(build.RuntimeConfig) ? build.RuntimeConfig : {};
+    const service = isRecord(props.ServiceConfig) ? props.ServiceConfig : {};
+    const codeKey = typeof code.Key === 'string' ? code.Key : undefined;
+    const parsed: WebFunctionRevisionResource = {
+      type: 'web-function-revision',
+      logicalId: key,
+      name: key,
+      functionRef: this.extractReference(props.FunctionName),
+      revisionId: webRevisionId(key, codeKey),
+      // nodejs24.x is the one runtime AWS documents for web functions.
+      runtime: typeof runtimeConfig.Runtime === 'string' ? runtimeConfig.Runtime : 'nodejs24.x',
+      environment: isRecord(service.EnvironmentVariables) ? service.EnvironmentVariables : {},
+      timeoutSeconds: clampSetting(service.TimeoutSeconds, WEB_TIMEOUT_RANGE, `${key}.ServiceConfig.TimeoutSeconds`, warnings),
+      maxConcurrency: clampSetting(
+        service.MaxConcurrencyPerEnvironment,
+        WEB_CONCURRENCY_RANGE,
+        `${key}.ServiceConfig.MaxConcurrencyPerEnvironment`,
+        warnings,
+      ),
+    };
+    if (typeof code.Bucket === 'string') parsed.codeBucket = code.Bucket;
+    if (codeKey !== undefined) parsed.codeKey = codeKey;
+    if (typeof props.Description === 'string') parsed.description = props.Description;
+    return parsed;
+  }
+
+  private parseWebFunctionEndpoint(
+    key: string,
+    resource: CloudFormationResource,
+    warnings?: string[],
+  ): WebFunctionEndpointResource {
+    const props = (resource.Properties || {}) as Record<string, unknown>;
+    const revisionWeights: WebFunctionRevisionWeight[] = [];
+    for (const raw of Array.isArray(props.RevisionWeights) ? props.RevisionWeights : []) {
+      const entry = isRecord(raw) ? raw : {};
+      const revisionRef = this.extractReference(entry.RevisionId);
+      const weight = readNumber(entry.Weight);
+      if (!revisionRef || weight === undefined) {
+        warnings?.push(
+          `AWS::Lambda::WebFunctionEndpoint "${key}": RevisionWeights entry ${JSON.stringify(raw)} names no revision and weight — skipped.`,
+        );
+        continue;
+      }
+      revisionWeights.push({ revisionRef, weight });
+    }
+    return {
+      type: 'web-function-endpoint',
+      logicalId: key,
+      name: typeof props.EndpointName === 'string' && props.EndpointName ? props.EndpointName : key,
+      functionRef: this.extractReference(props.FunctionName),
+      endpointType: typeof props.EndpointType === 'string' ? props.EndpointType : 'HomeRegion',
+      authType: typeof props.AuthType === 'string' ? props.AuthType : 'ApplicationManaged',
+      revisionWeights,
+    };
+  }
+
   // RouteKey → { method, path }. '$default' (and '*') become an ANY catch-all;
   // otherwise "METHOD /path" splits into an uppercase method + normalized path.
   private parseRouteKey(routeKey: string): { method: string; path: string } {
@@ -1206,6 +1367,19 @@ export class CloudFormationParser {
     return '';
   }
 
+  // The logical id a Ref / Fn::GetAtt names — GetAtt in both of its spellings,
+  // `[Id, Attr]` and the dotted `"Id.Attr"` — or a literal string as is. ''
+  // for anything else (an import, a join).
+  private extractReference(ref: unknown): string {
+    if (typeof ref === 'string') return ref;
+    if (!isRecord(ref)) return '';
+    if (typeof ref.Ref === 'string') return ref.Ref;
+    const getAtt = ref['Fn::GetAtt'];
+    if (Array.isArray(getAtt) && typeof getAtt[0] === 'string') return getAtt[0];
+    if (typeof getAtt === 'string') return getAtt.split('.')[0];
+    return '';
+  }
+
   private extractArn(ref: unknown): string {
     if (typeof ref === 'string') return ref;
     if (ref && typeof ref === 'object') {
@@ -1236,6 +1410,24 @@ function readNumber(value: unknown): number | undefined {
 function readThrottle(raw: unknown): ApiGatewayThrottle | undefined {
   if (!isRecord(raw)) return undefined;
   return { burstLimit: readNumber(raw.BurstLimit), rateLimit: readNumber(raw.RateLimit) };
+}
+
+// A documented numeric setting: absent → the AWS default; outside the range →
+// clamped to it with a warning (CloudFormation would reject the template, but a
+// local stack that refuses to boot over a timeout helps nobody).
+function clampSetting(
+  raw: unknown,
+  range: { min: number; max: number; default: number },
+  label: string,
+  warnings?: string[],
+): number {
+  const value = readNumber(raw);
+  if (value === undefined) return range.default;
+  const clamped = Math.min(range.max, Math.max(range.min, Math.trunc(value)));
+  if (clamped !== value) {
+    warnings?.push(`${label} = ${JSON.stringify(raw)} is outside ${range.min}..${range.max} — using ${clamped}.`);
+  }
+  return clamped;
 }
 
 // API Gateway Tags are a [{Key, Value}] list in CFN and a map on the wire.

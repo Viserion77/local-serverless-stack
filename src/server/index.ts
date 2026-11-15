@@ -23,6 +23,8 @@ import { SeedManager } from './services/seed-manager.js';
 import { LambdaRuntimeManager } from './services/lambda-runtime-manager.js';
 import { GatewayManager } from './services/gateway-manager.js';
 import { SourceWatcher } from './services/source-watcher.js';
+import { WebFunctionManager } from './services/web-function-manager.js';
+import { WebFunctionGateway } from './services/web-function-gateway.js';
 import { startDynamoProxy } from './dev/dynamo-proxy.js';
 import { applyRegionToExplorers } from './services/explorer-region.js';
 import { getBindHost, isOriginAllowed, getExposureWarning } from './services/bind-host.js';
@@ -219,8 +221,18 @@ async function start() {
 
     // Hot reload: source changes restart the service worker; serverless.yml
     // changes re-package + re-register.
+    //
+    // Lambda Web Functions reload alongside: their running servers go through
+    // the shutdown sequence and the next request starts the new code. LSS's own
+    // TypeScript loaders (for `.ts` web entries) resolve from this install.
+    WebFunctionManager.getInstance().setLssResolveBase(__filename);
     SourceWatcher.getInstance().setHandlers({
-      onRuntimeReload: name => LambdaRuntimeManager.getInstance().restartRuntime(name),
+      onRuntimeReload: async name => {
+        await Promise.all([
+          LambdaRuntimeManager.getInstance().restartRuntime(name),
+          WebFunctionManager.getInstance().reloadService(name),
+        ]);
+      },
       onFullReload: name => ServiceRegistrar.getInstance().reregister(name),
     });
 
@@ -285,7 +297,9 @@ async function shutdown(code = 0) {
   QueueInspector.getInstance().stopPolling();
   SourceWatcher.getInstance().unwatchAll();
   await GatewayManager.getInstance().stopAll();
+  await WebFunctionGateway.getInstance().stopAll();
   await LambdaRuntimeManager.getInstance().stopAll();
+  await WebFunctionManager.getInstance().stopAll();
   processManager.stopAll();
   await processManager.cleanup();
   await EngineManager.getInstance().stop();

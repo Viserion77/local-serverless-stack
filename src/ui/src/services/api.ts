@@ -825,6 +825,83 @@ export interface LambdaInvocationRecord {
   logs: string[];
 }
 
+// --- Lambda Web Functions (GET /api/lambdas/web) ----------------------------
+
+export type WebFunctionState = 'cold' | 'starting' | 'ready' | 'error';
+
+export interface WebFunctionEndpointInfo {
+  name: string;
+  logicalId: string;
+  arn: string;
+  authType: 'ApplicationManaged' | 'IamAuth';
+  endpointType: string;
+  port?: number;
+  domainName?: string;
+  url?: string;
+  weights: Array<{ revisionId: string; weight: number }>;
+  listener: 'online' | 'port-conflict' | 'stopped';
+}
+
+export interface WebFunctionRevisionInfo {
+  revisionId: string;
+  logicalId: string;
+  arn: string;
+  runtime: string;
+  description?: string;
+  timeoutSeconds: number;
+  maxConcurrency: number;
+  code: { source: 'state-entry' | 'artifact' | 'source' | 'missing'; reason: string; root: string; entry: string };
+  state: WebFunctionState;
+  pid?: number;
+  inFlight: number;
+  queued: number;
+  startedAt?: number;
+  readyAt?: number;
+  coldStartMs?: number;
+  error?: string;
+  errorType?: string;
+}
+
+export interface WebFunctionSummary {
+  service: string;
+  name: string;
+  logicalId: string;
+  arn: string;
+  state: WebFunctionState;
+  endpoints: WebFunctionEndpointInfo[];
+  revisions: WebFunctionRevisionInfo[];
+  warnings: string[];
+  requests: number;
+  errors: number;
+  lastRequestAt?: number;
+}
+
+export interface WebFunctionRequestRecord {
+  at: number;
+  method: string;
+  path: string;
+  status: number;
+  durationMs: number;
+  revisionId?: string;
+  requestId: string;
+  endpoint: string;
+  coldStart: boolean;
+  errorType?: string;
+}
+
+export interface WebFunctionLogLine {
+  at: number;
+  stream: 'stdout' | 'stderr' | 'lss';
+  revisionId: string;
+  text: string;
+}
+
+export interface WebFunctionDetailInfo extends WebFunctionSummary {
+  environment: Record<string, Record<string, string>>;
+  recentRequests: WebFunctionRequestRecord[];
+  logs: WebFunctionLogLine[];
+}
+
 export type GatewayListenerStatus = 'online' | 'port-conflict' | 'stopped' | 'disabled';
 
 export interface ApiRouteInfo {
@@ -938,6 +1015,14 @@ export const api = {
   getLambdaLogs: (name: string) =>
     request<{ invocations: LambdaInvocationRecord[] }>(
       `/api/lambdas/${encodeURIComponent(name)}/logs`,
+    ),
+  listWebFunctions: () => request<WebFunctionSummary[]>('/api/lambdas/web'),
+  getWebFunction: (service: string, name: string) =>
+    request<WebFunctionDetailInfo>(`/api/lambdas/web/${encodeURIComponent(service)}/${encodeURIComponent(name)}`),
+  restartWebFunction: (service: string, name: string) =>
+    request<{ restarted: boolean }>(
+      `/api/lambdas/web/${encodeURIComponent(service)}/${encodeURIComponent(name)}/restart`,
+      { method: 'POST', body: '{}' },
     ),
 
   // HTTP APIs
