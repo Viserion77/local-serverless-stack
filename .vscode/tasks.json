@@ -175,6 +175,15 @@
       "problemMatcher": []
     },
     {
+      "label": "example self-hosted: drive vector search (DynamoDB)",
+      "detail": "SearchVectors through the catalog handlers — asserts p-101 is the nearest neighbour of p-100 and p-103 of p-102",
+      "type": "shell",
+      "command": "echo '--- SIMILAR TO p-100 (Wireless Mouse):' && curl -s 'http://localhost:3634/products/p-100/similar?k=3' && echo && echo '--- SIMILAR TO p-102 (Mechanical Keyboard):' && curl -s 'http://localhost:3634/products/p-102/similar?k=3' && echo && curl -s 'http://localhost:3634/products/p-100/similar?k=1' | grep -q '\"productId\":\"p-101\"' && curl -s 'http://localhost:3634/products/p-102/similar?k=1' | grep -q '\"productId\":\"p-103\"' && echo 'OK: neighbours ranked as expected'",
+      "options": { "cwd": "${workspaceFolder}/examples/self-hosted" },
+      "icon": { "id": "search", "color": "terminal.ansiMagenta" },
+      "problemMatcher": []
+    },
+    {
       "label": "example self-hosted: stop",
       "type": "shell",
       "command": "npm run lss:stop",
@@ -196,13 +205,14 @@
     },
     {
       "label": "example self-hosted: full demo",
-      "detail": "start > register > pipeline > catalog — what sets LSS apart, in one task",
+      "detail": "start > register > pipeline > catalog > vector search — what sets LSS apart, in one task",
       "dependsOrder": "sequence",
       "dependsOn": [
         "example self-hosted: start (no Docker)",
         "example self-hosted: register services",
         "example self-hosted: drive pipeline",
-        "example self-hosted: drive catalog (OpenSearch)"
+        "example self-hosted: drive catalog (OpenSearch)",
+        "example self-hosted: drive vector search (DynamoDB)"
       ],
       "icon": { "id": "rocket", "color": "terminal.ansiYellow" },
       "problemMatcher": []

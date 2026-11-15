@@ -11,7 +11,7 @@ real AWS wire protocols, so the services below use plain `@aws-sdk` v3 clients (
 | `orders-service` | `POST /orders` stores the order in DynamoDB and enqueues it on SQS; `GET /orders` lists them. Owns the `orders-Orders` table and the `orders-to-process` queue. | `3631` | `13631` |
 | `billing-service` | SQS consumer (cross-service ESM **by ARN**) writes a receipt to S3 and publishes `OrderBilled` to the `billing-events` bus; `GET /receipts` lists receipts, `GET /attachments/upload-url` returns a presigned POST, `GET /receipts/{id}/signature` signs with a Secrets Manager key. Owns the bucket and the bus. | `3632` | `13632` |
 | `notifications-service` | EventBridge rule (`source: billing`, `detail-type: OrderBilled`) stores a notification in DynamoDB; `GET /notifications` lists them. | `3633` | `13633` |
-| `catalog-service` | `POST /products` indexes documents; `GET /products/{id}` / `DELETE /products/{id}` read and remove them; `GET /search` runs full-text + filtered queries; `GET /stats` aggregates by category. Owns the `products-catalog` OpenSearch Serverless collection. | `3634` | `13634` |
+| `catalog-service` | `POST /products` indexes documents; `GET /products/{id}` / `DELETE /products/{id}` read and remove them; `GET /search` runs full-text + filtered queries; `GET /stats` aggregates by category. `PUT /products/{id}/embedding` / `GET /products/{id}/similar` run **DynamoDB vector search**. Owns the `products-catalog` OpenSearch Serverless collection and the `catalog-embeddings` table. | `3634` | `13634` |
 
 The order pipeline, end to end:
 
@@ -56,6 +56,11 @@ What this exercises on the self engine:
   resources are accepted and skipped with a registration warning, so the template stays
   deployable to real AWS); document CRUD with versioning; `multi_match` + `bool` +
   `term`/`range` search DSL with `sort` and pagination; `terms`/`avg` aggregations.
+- **DynamoDB vector search** — `catalog-embeddings` declares a `VectorIndexes` entry
+  (`ProductEmbeddingIndex`: 8 dimensions, `COSINE`, `category` as the `HASH`) in
+  `resources:`; the handlers store a deterministic toy embedding with `PutCommand` and
+  query it with the DocumentClient's `SearchVectorsCommand`. Seeded from
+  `seeds/catalog-embeddings.json`. See [Drive vector search](#drive-vector-search).
 - **API Gateway + Lambda runtime** — the native LSS emulation (payload v2 `httpApi`
   routes on 36xx ports, CORS answered by the LSS gateway, handlers in per-service
   workers, `source` mode with hot reload).
@@ -168,6 +173,32 @@ curl -s 'http://localhost:14566/_aoss/products-catalog/_cat/indices'
 curl -s 'http://localhost:14566/_aoss/products-catalog/products/_search?q=name:mouse'
 curl -s 'http://localhost:14566/_aoss/products-catalog/products/_count'
 ```
+
+## Drive vector search
+
+```bash
+# Nearest neighbours of a seeded product, within its category (lower score = closer)
+curl -s 'localhost:3634/products/p-100/similar?k=3'
+# → {"productId":"p-100","category":"peripherals","similar":[{"productId":"p-101","name":"Silent Wireless Mouse","score":0.22…},…]}
+#   "Wireless Earbuds" shares the word "wireless" but lives in the audio partition, so it never shows up.
+
+# Add a product: the handler derives the embedding from the text and stores it
+curl -s -X PUT localhost:3634/products/p-105/embedding \
+  -d '{"name":"Ergonomic Wireless Mouse","category":"peripherals","description":"wireless optical mouse with usb receiver"}'
+curl -s 'localhost:3634/products/p-105/similar?k=2'
+
+# The same search through the orchestrator (what the dashboard's Vector search tab calls)
+curl -s -X POST localhost:14566/api/dynamo/tables/catalog-embeddings/vector-search \
+  -H 'content-type: application/json' -d '{"similarTo":{"productId":"p-102"},"topK":3}'
+```
+
+In the dashboard, open **DynamoDB → catalog-embeddings → Vector search**: pick an item, see its
+ranked neighbours with their scores, and click **Find similar** on any row to hop to its own.
+
+> The vector handlers import `@aws-sdk/client-dynamodb` / `lib-dynamodb` from the repository's root
+> `node_modules` (>= 3.1169, the first release with `SearchVectorsCommand`), which works because
+> this example runs handlers in `source` mode. Copied out of the repository, add them to
+> `catalog-service` with `npm install`.
 
 ## Validation console
 
