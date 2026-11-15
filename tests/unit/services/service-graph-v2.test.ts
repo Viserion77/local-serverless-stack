@@ -173,6 +173,53 @@ describe('access on edges', () => {
   });
 });
 
+describe('event-source plumbing on a shared role', () => {
+  it('drops the grant osls writes for a mapping, and the hub with it when nothing else is granted', () => {
+    const graph = graphOf({
+      Resources: {
+        IamRoleLambdaExecution: {
+          Type: 'AWS::IAM::Role',
+          Properties: {
+            Policies: [{
+              PolicyDocument: {
+                Statement: [{ Effect: 'Allow', Action: ['sqs:ReceiveMessage', 'sqs:DeleteMessage'], Resource: { 'Fn::GetAtt': ['Jobs', 'Arn'] } }],
+              },
+            }],
+          },
+        },
+        AFnLambdaFunction: LAMBDA('orders-dev-a', { Role: { 'Fn::GetAtt': ['IamRoleLambdaExecution', 'Arn'] } }),
+        BFnLambdaFunction: LAMBDA('orders-dev-b', { Role: { 'Fn::GetAtt': ['IamRoleLambdaExecution', 'Arn'] } }),
+        Jobs: { Type: 'AWS::SQS::Queue', Properties: { QueueName: 'orders-jobs' } },
+        Mapping: {
+          Type: 'AWS::Lambda::EventSourceMapping',
+          Properties: { FunctionName: { Ref: 'AFnLambdaFunction' }, EventSourceArn: { 'Fn::GetAtt': ['Jobs', 'Arn'] } },
+        },
+      },
+    });
+    expect(graph.nodes.some(n => n.kind === 'iam-role')).toBe(false);
+    expect(graph.edges.map(e => e.kind)).toEqual(['event-source']);
+  });
+
+  it('keeps the same actions on a queue no function of the role is triggered by', () => {
+    const graph = graphOf({
+      Resources: {
+        IamRoleLambdaExecution: {
+          Type: 'AWS::IAM::Role',
+          Properties: {
+            Policies: [{
+              PolicyDocument: { Statement: [{ Effect: 'Allow', Action: 'sqs:ReceiveMessage', Resource: { 'Fn::GetAtt': ['Jobs', 'Arn'] } }] },
+            }],
+          },
+        },
+        AFnLambdaFunction: LAMBDA('orders-dev-a', { Role: { 'Fn::GetAtt': ['IamRoleLambdaExecution', 'Arn'] } }),
+        BFnLambdaFunction: LAMBDA('orders-dev-b', { Role: { 'Fn::GetAtt': ['IamRoleLambdaExecution', 'Arn'] } }),
+        Jobs: { Type: 'AWS::SQS::Queue', Properties: { QueueName: 'orders-jobs' } },
+      },
+    });
+    expect(edge(graph, 'iam-role:IamRoleLambdaExecution', 'sqs:Jobs')).toMatchObject({ access: 'consume' });
+  });
+});
+
 describe('card facts', () => {
   it('lambda: runtime, timeout and memory from the template', () => {
     const graph = graphOf({

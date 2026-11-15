@@ -528,6 +528,19 @@ const IGNORED_ACTIONS = new Set([
   'lambda:GetDurableExecutionState',
 ]);
 
+// What osls grants a function for each event-source mapping it compiles: the
+// poller's own rights on the queue or the stream, never a data-plane intent.
+const EVENT_SOURCE_PLUMBING = new Set([
+  'sqs:ReceiveMessage',
+  'sqs:DeleteMessage',
+  'sqs:GetQueueAttributes',
+  'sqs:ChangeMessageVisibility',
+  'dynamodb:GetRecords',
+  'dynamodb:GetShardIterator',
+  'dynamodb:DescribeStream',
+  'dynamodb:ListStreams',
+]);
+
 // Env vars whose value is infrastructure, not a resource reference. Without
 // this list `AWS_ENDPOINT=http://localhost:14566` matches a "resource" called
 // `14566` on three of the four bundled examples.
@@ -1295,6 +1308,16 @@ function addIamEdges(rawResources: Record<string, RawResource>, iam: IamContext)
       continue;
     }
 
+    // The statements osls writes FOR an event-source mapping (the poller's
+    // receive/stream-read rights) restate that mapping; on a shared role the
+    // single-function `connected` check above never runs, so without this the
+    // hub would draw a second arrow to every queue or stream that already
+    // triggers one of its functions.
+    const meaningful = grants.filter(grant => !(
+      grant.actions.every(action => EVENT_SOURCE_PLUMBING.has(action))
+      && bound.some(lambda => connected(iam.edges, lambda, grant.node))));
+    if (meaningful.length === 0) continue;
+
     const roleNode = nodeId('iam-role', roleLogicalId);
     iam.nodes.set(roleNode, {
       id: roleNode,
@@ -1306,7 +1329,7 @@ function addIamEdges(rawResources: Record<string, RawResource>, iam: IamContext)
     for (const lambda of bound) {
       addEdge(iam.edges, { from: lambda, to: roleNode, kind: 'iam', confidence: 'declared' });
     }
-    for (const grant of grants) {
+    for (const grant of meaningful) {
       addEdge(iam.edges, {
         from: roleNode,
         to: grant.node,

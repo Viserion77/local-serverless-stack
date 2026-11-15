@@ -14,6 +14,16 @@ provider:
     # On real AWS you would read it from GetAtt ProductsCollection.CollectionEndpoint.
     OPENSEARCH_ENDPOINT: http://localhost:14566/_aoss/products-catalog
     PRODUCTS_INDEX: products
+  # Declaration, not enforcement: OpenSearch Serverless has one data-plane
+  # action, so the stack map draws this grant as read & write.
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - aoss:APIAccessAll
+          Resource:
+            Fn::GetAtt: [ProductsCollection, Arn]
 
 custom:
   lss:

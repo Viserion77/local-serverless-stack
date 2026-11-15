@@ -21,6 +21,12 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Services' },
   },
   {
+    path: '/stack',
+    name: 'stack',
+    component: () => import('./pages/StackMapPage.vue'),
+    meta: { title: 'Stack map' },
+  },
+  {
     path: '/services/:name',
     name: 'service-detail',
     component: () => import('./pages/ServiceDetailPage.vue'),

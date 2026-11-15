@@ -71,8 +71,13 @@ export const graphNodeIcons: Readonly<Record<GraphNodeKind, TIconName>> = {
   'event-rule': 'aws-eventbridge',
   opensearch: 'aws-opensearch',
   secret: 'aws-secrets-manager',
+  ssm: 'aws-systems-manager',
   route: 'aws-api-gateway',
+  api: 'aws-api-gateway',
   'iam-role': 'aws-iam',
+  // A whole service drawn collapsed on the stack map is one CloudFormation
+  // stack — the unit AWS itself draws it as.
+  service: 'aws-cloudformation',
   external: 'external-link',
 };
 

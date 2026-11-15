@@ -1428,23 +1428,18 @@ describe('fixtures (end-to-end)', () => {
       functions,
     });
 
-    // Nodes: nine lambdas, three tables, a queue, a topic, one bucket (the
-    // Serverless deployment bucket is dropped by the parser) and the role hub.
+    // Nodes: nine lambdas, three tables, a queue, a topic and one bucket (the
+    // Serverless deployment bucket is dropped by the parser). No role hub: the
+    // shared IamRoleLambdaExecution's only real statements are the ones osls
+    // writes FOR the two event-source mappings (stream reads on the table,
+    // receive/delete on the queue), which restate those mappings, and the four
+    // logs statements are noise.
     const byKind = graph.nodes.reduce<Record<string, number>>((acc, n) => {
       acc[n.kind] = (acc[n.kind] ?? 0) + 1;
       return acc;
     }, {});
-    expect(byKind).toEqual({ lambda: 9, dynamodb: 3, sqs: 1, sns: 1, s3: 1, 'iam-role': 1 });
-
-    // Nine functions share IamRoleLambdaExecution → the hub rendering, with the
-    // role's two real statements (the dynamodb-stream one and the sqs one) as
-    // grants and the four logs statements dropped as noise.
-    expect(edgesOfKind(graph, 'iam')).toHaveLength(9 + 2);
-    expect(edge(graph, 'lambda:HealthLambdaFunction', 'iam-role:IamRoleLambdaExecution')).toBeDefined();
-    expect(edge(graph, 'iam-role:IamRoleLambdaExecution', 'dynamodb:OrdersTable')!.detail)
-      .toBe('dynamodb:GetRecords, dynamodb:GetShardIterator, dynamodb:DescribeStream, dynamodb:ListStreams');
-    expect(edge(graph, 'iam-role:IamRoleLambdaExecution', 'sqs:OrderProcessingQueue')!.detail)
-      .toBe('sqs:ReceiveMessage, sqs:DeleteMessage, sqs:GetQueueAttributes');
+    expect(byKind).toEqual({ lambda: 9, dynamodb: 3, sqs: 1, sns: 1, s3: 1 });
+    expect(edgesOfKind(graph, 'iam')).toHaveLength(0);
 
     // The two event-source mappings and the bucket notification.
     expect(edge(graph, 'dynamodb:OrdersTable', 'lambda:OnOrderStreamLambdaFunction')!.detail).toBe('stream ×10');
@@ -1453,15 +1448,12 @@ describe('fixtures (end-to-end)', () => {
 
     // Six of the seven environment variables name a declared resource
     // (AWS_ENDPOINT is denylisted); all nine functions carry the same block, so
-    // every one of them is serviceWide. Two of the six (ORDERS_TABLE and
-    // ORDER_QUEUE_URL) name a resource the SHARED role already grants to every
-    // function, so they restate a CloudFormation-wired link through the hub
-    // and are suppressed for all nine: 9 × 4 left, minus the one bucket pair a
-    // structural edge (the S3 notification) already connects.
+    // every one of them is serviceWide. Three are suppressed because a
+    // structural edge already connects the pair.
     const env = edgesOfKind(graph, 'env');
-    expect(env).toHaveLength(9 * 4 - 1);
+    expect(env).toHaveLength(9 * 6 - 3);
     expect(env.every(e => e.serviceWide && e.confidence === 'inferred')).toBe(true);
-    expect(edge(graph, 'lambda:HealthLambdaFunction', 'sqs:OrderProcessingQueue')).toBeUndefined();
+    expect(edge(graph, 'lambda:HealthLambdaFunction', 'sqs:OrderProcessingQueue')!.detail).toBe('ORDER_QUEUE_URL');
     expect(edge(graph, 'lambda:HealthLambdaFunction', 'sns:OrderEventsTopic')!.detail).toBe('ORDER_EVENTS_TOPIC_ARN');
     expect(edge(graph, 'lambda:OnOrderStreamLambdaFunction', 'dynamodb:OrdersTable')).toBeUndefined();
     expect(edge(graph, 'lambda:ProcessOrderQueueLambdaFunction', 'sqs:OrderProcessingQueue')).toBeUndefined();
@@ -1469,7 +1461,7 @@ describe('fixtures (end-to-end)', () => {
 
     // Insertion order is the pass order, and nothing in this template is
     // ambiguous enough to warn about.
-    expect(graph.edgeKinds).toEqual(['event-source', 's3-notification', 'iam', 'env']);
+    expect(graph.edgeKinds).toEqual(['event-source', 's3-notification', 'env']);
     expect(graph.warnings).toEqual([]);
   });
 });

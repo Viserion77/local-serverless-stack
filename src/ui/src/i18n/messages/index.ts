@@ -17,6 +17,7 @@ import { opensearch } from './opensearch';
 import { secrets } from './secrets';
 import { apiKeys } from './apiKeys';
 import { settings } from './settings';
+import { graph } from './graph';
 
 // One area's messages: the same key set in every language. Keeping the three
 // side by side is what makes a missing translation visible in review.
@@ -39,6 +40,7 @@ const AREAS: Record<string, AreaMessages> = {
   secrets,
   apiKeys,
   settings,
+  graph,
 };
 
 function flatten(locale: Locale): Catalogue {

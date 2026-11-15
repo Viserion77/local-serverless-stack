@@ -46,6 +46,12 @@ functions:
   # in-process to this handler: no LocalStack, no proxy Lambdas.
   processOrder:
     handler: src/handlers/processOrder.handler
+    environment:
+      # A third-party dependency, declared so the stack map can draw it in its
+      # "outside the stack" column (any absolute URL to a host that is neither
+      # LSS nor AWS). The demo handler never calls it — the example stays
+      # fully offline.
+      PAYMENTS_API_URL: https://api.payments.example.com/v1/charges
     events:
       - sqs:
           arn: arn:aws:sqs:${self:provider.region}:${self:custom.accountId}:orders-to-process
