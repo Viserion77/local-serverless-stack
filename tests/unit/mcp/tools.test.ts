@@ -54,6 +54,7 @@ describe('read-only tools', () => {
     await expectCall('lss_ports', {}, ['GET', '/api/config/ports']);
     await expectCall('lss_services', {}, ['GET', '/api/services']);
     await expectCall('lss_service_graph', { name: 'svc' }, ['GET', '/api/services/svc/graph']);
+    await expectCall('lss_stack_graph', {}, ['GET', '/api/stack/graph']);
     await expectCall('lss_lambdas', {}, ['GET', '/api/lambdas']);
     await expectCall('lss_apis', {}, ['GET', '/api/apis']);
     await expectCall('lss_resources', {}, ['GET', '/api/resources']);
@@ -65,6 +66,12 @@ describe('read-only tools', () => {
     await expectCall('lss_api_keys', {}, ['GET', '/api/apigateway/keys']);
     await expectCall('lss_usage_plans', {}, ['GET', '/api/apigateway/plans']);
     await expectCall('lss_seeds', {}, ['GET', '/api/seeds']);
+  });
+
+  it('lss_stack_graph forwards expand verbatim (encoded), including the empty "collapse everything" form', async () => {
+    await expectCall('lss_stack_graph', { expand: 'orders,billing' }, ['GET', '/api/stack/graph?expand=orders%2Cbilling']);
+    await expectCall('lss_stack_graph', { expand: '' }, ['GET', '/api/stack/graph?expand=']);
+    await expectCall('lss_stack_graph', { expand: '*' }, ['GET', '/api/stack/graph?expand=*']);
   });
 
   it('appends ?region= only when a region is given', async () => {

@@ -15,6 +15,7 @@ import { apiGatewayRouter } from './routes/apigateway.js';
 import { configRouter } from './routes/config.js';
 import { lambdasRouter } from './routes/lambdas.js';
 import { apisRouter } from './routes/apis.js';
+import { stackRouter } from './routes/stack.js';
 import { EngineManager } from './engine/engine-manager.js';
 import { ConfigManager } from './services/config-manager.js';
 import { QueueInspector } from './services/queue-inspector.js';
@@ -98,6 +99,7 @@ app.use('/api/apigateway', apiGatewayRouter);
 app.use('/api/config', configRouter);
 app.use('/api/lambdas', lambdasRouter);
 app.use('/api/apis', apisRouter);
+app.use('/api/stack', stackRouter);
 
 // Health check
 app.get('/api/health', (_req, res) => {

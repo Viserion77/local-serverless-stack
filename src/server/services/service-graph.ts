@@ -29,6 +29,10 @@ import type {
   OpenSearchCollectionResource,
   EventSourceMapping,
   ArnResolutionContext,
+  SsmParameterResource,
+  ApiResource,
+  RestApiResource,
+  ApiRouteResource,
 } from './cloudformation-parser.js';
 import { CloudFormationParser } from './cloudformation-parser.js';
 import type { RegisteredFunction, HttpRoute, AuthorizerConfig } from './serverless-state-parser.js';
@@ -52,6 +56,18 @@ const CUSTOM_RESOURCES_ROLE = 'IamRoleCustomResourcesLambdaExecution';
  * (never as a CFN resource LSS parses), and a role is deliberately not parsed.
  * `external` is anything this service references but does not declare — the
  * cross-service edges, which are the whole reason a monorepo needs one stack.
+ *
+ * Graph model v2 (the stack map) added three kinds, all additive:
+ * - `api` — one node per API the routes are served by (`AWS::ApiGatewayV2::Api`,
+ *   `AWS::ApiGateway::RestApi`, or the implicit Framework API when the template
+ *   carries none). It is the "front door" box the architecture diagram puts at
+ *   the top of each service frame; the per-route nodes stay for the table and
+ *   for the MCP tool, and point at their API through `GraphNode.api`.
+ * - `ssm` — an `AWS::SSM::Parameter`, so a `ssm:GetParameter` grant lands on a
+ *   box instead of an external stub.
+ * - `service` — only in the STACK graph: a whole service collapsed into one node
+ *   carrying aggregate counts (`stack-graph.ts`). `buildServiceGraph` never
+ *   emits it.
  */
 export type GraphNodeKind =
   | 'lambda'
@@ -63,9 +79,36 @@ export type GraphNodeKind =
   | 'event-rule'
   | 'opensearch'
   | 'secret'
+  | 'ssm'
   | 'route'
+  | 'api'
   | 'iam-role'
+  | 'service'
   | 'external';
+
+/**
+ * Which way data moves along an edge, so a diagram can point the arrowhead at
+ * the right end: a `read` points at the function (data flows out of the
+ * store), a `write` points at the store. The rest describe control rather than
+ * data — `invoke` (a synchronous call), `publish` (fire-and-forget into a
+ * queue/topic/bus), `consume` (pulling from a queue), `trigger` (the platform
+ * calls the function on an event).
+ *
+ * Derived, never declared by the user: from the granted IAM actions for `iam`
+ * edges (`classifyIamAccess`) and from the edge kind for every structural one
+ * (`STRUCTURAL_ACCESS`). An `env` edge is a name match and gets none — a guess
+ * about WHETHER two things talk cannot also claim to know the direction.
+ */
+export type EdgeAccess = 'read' | 'write' | 'readwrite' | 'invoke' | 'publish' | 'consume' | 'trigger';
+
+/** A display-only fact a card shows (`runtime: nodejs20.x`, `gsis: 2`). */
+export type GraphFactValue = string | number | boolean;
+
+/** One route a function serves, folded onto its card (`GET /orders/{id}`). */
+export interface GraphRouteFact {
+  method: string;
+  path: string;
+}
 
 export interface GraphNode {
   // Stable within one graph: `<kind>:<logicalId>` for declared resources,
@@ -86,9 +129,28 @@ export interface GraphNode {
   fullName?: string;
   handler?: string;
   // External nodes only: the ARN (or bare name) that could not be attributed
-  // to anything this service declares, plus the AWS service it names.
+  // to anything this service declares, plus the AWS service it names. A
+  // third-party HTTP dependency (an env var holding `https://api.example.com/…`)
+  // is an external with `service: 'http'` and the host as its label.
   arn?: string;
   service?: string;
+  // The owning service, or `external` for an external node. The stack map turns
+  // it into a frame; a single-service graph sets it too, so one layout code
+  // path serves both screens.
+  group?: string;
+  // Route nodes only: the id of the `api` node that serves the route. The
+  // architecture layout folds route nodes into that API box plus the function
+  // card, and this is the join it folds along.
+  api?: string;
+  // Lambda nodes only: every route the function serves, so its card can carry
+  // `GET /orders/{id}` without a separate box. A list does not fit `facts`
+  // (scalars only), so it is a field of its own.
+  routes?: GraphRouteFact[];
+  // What a card prints under the title — small, display-only, derived from the
+  // template (runtime/timeout/memory, key schema, FIFO, visibility timeout…).
+  // Never something a consumer should branch on: the keys are documented per
+  // kind in `docs/FEATURES.md`, the values are for humans.
+  facts?: Record<string, GraphFactValue>;
 }
 
 /**
@@ -106,7 +168,11 @@ export type GraphEdgeKind =
   | 'sns-subscription'
   | 'redrive'
   | 'iam'
-  | 'env';
+  | 'env'
+  // Stack graph only: an edge whose far end is a resource ANOTHER service
+  // declares, resolved from the external stub a single-service graph draws.
+  // `via` keeps the kind of evidence it was resolved from.
+  | 'cross-service';
 
 export interface GraphEdge {
   id: string;
@@ -126,6 +192,14 @@ export interface GraphEdge {
   // particular. Without this flag a four-function service draws four identical
   // arrows and the dominant signal on the canvas is an artefact.
   serviceWide?: boolean;
+  // Direction of the data/control flow — see `EdgeAccess`.
+  access?: EdgeAccess;
+  // Stack graph only. `via`: the original kind of a `cross-service` edge (an
+  // event-source mapping, an IAM grant…), so the diagram can still draw it
+  // solid or dashed. `weight`: how many underlying edges an aggregated edge
+  // between collapsed services stands for.
+  via?: GraphEdgeKind;
+  weight?: number;
 }
 
 export interface ServiceGraph {
@@ -243,6 +317,10 @@ export function parseResourceArn(arn: string): { service: string; name: string }
     ? colonSegments.slice(1).join(':')
     : raw;
   if (!tail) return null;
+  // A secret's name may itself contain slashes (`acme/orders/hmac`), and the
+  // colon form puts the WHOLE name after the discriminator — splitting it on
+  // `/` like a table ARN would cut it down to its first path segment.
+  if (colonSegments.length > 1 && colonSegments[0] === 'secret') return { service, name: tail };
 
   const segments = tail.split('/');
   // `table/Orders`, `event-bus/billing`, `collection/abc`, `domain/search`: the
@@ -251,6 +329,14 @@ export function parseResourceArn(arn: string): { service: string; name: string }
   // `function` appears in BOTH lists on purpose: AWS accepts `function:name`
   // and `function/name`, and templates in the wild carry each.
   const prefixed = ['table', 'event-bus', 'rule', 'collection', 'domain', 'stream', 'function'];
+  // An SSM parameter name is itself a path (`/acme/orders/db-url`), so the
+  // whole rest of the ARN is the name — and AWS drops the name's leading slash
+  // when it builds the ARN (`parameter/acme/orders/db-url`), which
+  // `kindNameKey` undoes on the declared side so the two still meet.
+  if (segments[0] === 'parameter') {
+    const parameter = segments.slice(1).join('/');
+    return parameter ? { service, name: parameter } : null;
+  }
   if (segments.length > 1 && prefixed.includes(segments[0])) {
     return segments[1] ? { service, name: segments[1] } : null;
   }
@@ -272,6 +358,7 @@ const ACTION_SERVICE_TO_KIND: Readonly<Record<string, GraphNodeKind>> = {
   aoss: 'opensearch',
   events: 'eventbus',
   lambda: 'lambda',
+  ssm: 'ssm',
 };
 
 // The ARN service segment uses the same vocabulary as the action prefix, with
@@ -279,6 +366,158 @@ const ACTION_SERVICE_TO_KIND: Readonly<Record<string, GraphNodeKind>> = {
 // models as routes rather than as a node kind of its own.
 function kindForAwsService(service: string): GraphNodeKind | null {
   return ACTION_SERVICE_TO_KIND[service] ?? null;
+}
+
+// --- Access direction ----------------------------------------------------------
+
+type AccessCategory = 'read' | 'write' | 'publish' | 'consume' | 'invoke';
+
+/**
+ * The single classification table behind `EdgeAccess` for IAM edges: per
+ * action prefix, which actions READ, WRITE, PUBLISH, CONSUME or INVOKE.
+ *
+ * Exported so the unit suite can walk it row by row, and so the table is the
+ * documentation — `docs/FEATURES.md` points here rather than restating it.
+ *
+ * Deliberately an allowlist of the data-plane verbs that say which way data
+ * moves. Everything absent is NEUTRAL, not an error: `sqs:GetQueueAttributes`,
+ * `sqs:GetQueueUrl`, `dynamodb:DescribeStream` are plumbing every consumer
+ * carries, and counting them would turn every grant into `readwrite`.
+ *
+ * Two entries look odd and are not:
+ * - `aoss:APIAccessAll` appears under BOTH read and write. It is the one action
+ *   OpenSearch Serverless has for its whole data plane, so it genuinely means
+ *   both, and listing it twice is how the combiner below says `readwrite`.
+ * - `dynamodb:SearchVectors` is a read: the vector-search API queries an index,
+ *   it never writes one.
+ */
+export const IAM_ACCESS_TABLE: Readonly<Record<string, Readonly<Partial<Record<AccessCategory, readonly string[]>>>>> = {
+  dynamodb: {
+    read: [
+      'GetItem', 'BatchGetItem', 'Query', 'Scan', 'SearchVectors', 'DescribeTable',
+      'TransactGetItems', 'ConditionCheckItem', 'PartiQLSelect', 'GetRecords', 'GetShardIterator',
+    ],
+    write: [
+      'PutItem', 'UpdateItem', 'DeleteItem', 'BatchWriteItem', 'TransactWriteItems',
+      'PartiQLInsert', 'PartiQLUpdate', 'PartiQLDelete',
+    ],
+  },
+  s3: {
+    read: [
+      'GetObject', 'GetObjectVersion', 'GetObjectAcl', 'GetObjectTagging', 'GetObjectAttributes',
+      'ListBucket', 'ListBucketVersions', 'GetBucketLocation',
+    ],
+    write: [
+      'PutObject', 'PutObjectAcl', 'PutObjectTagging', 'DeleteObject', 'DeleteObjectVersion',
+      'DeleteObjectTagging', 'AbortMultipartUpload',
+    ],
+  },
+  sqs: {
+    publish: ['SendMessage', 'SendMessageBatch'],
+    consume: [
+      'ReceiveMessage', 'DeleteMessage', 'DeleteMessageBatch',
+      'ChangeMessageVisibility', 'ChangeMessageVisibilityBatch',
+    ],
+  },
+  sns: { publish: ['Publish', 'PublishBatch'] },
+  events: { publish: ['PutEvents'] },
+  secretsmanager: {
+    read: ['GetSecretValue', 'BatchGetSecretValue', 'DescribeSecret'],
+    write: ['PutSecretValue', 'UpdateSecret', 'CreateSecret', 'DeleteSecret'],
+  },
+  ssm: {
+    read: ['GetParameter', 'GetParameters', 'GetParametersByPath', 'GetParameterHistory', 'DescribeParameters'],
+    write: ['PutParameter', 'DeleteParameter', 'DeleteParameters', 'LabelParameterVersion'],
+  },
+  lambda: { invoke: ['InvokeFunction', 'InvokeFunctionUrl', 'InvokeAsync'] },
+  aoss: { read: ['APIAccessAll'], write: ['APIAccessAll'] },
+  es: {
+    read: ['ESHttpGet', 'ESHttpHead'],
+    write: ['ESHttpPut', 'ESHttpPost', 'ESHttpDelete', 'ESHttpPatch'],
+  },
+};
+
+// IAM action names are case-insensitive and may carry `*`/`?` wildcards. A
+// wildcard is EXPANDED against the table's vocabulary for that prefix, so
+// `dynamodb:Get*` is a read, `dynamodb:*` hits both columns and comes out
+// `readwrite`, and `sqs:*` (publish + consume) comes out `readwrite` too.
+function globToRegExp(glob: string): RegExp {
+  const body = glob.replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+  return new RegExp(`^${body}$`, 'i');
+}
+
+/**
+ * The direction a set of granted actions implies, or undefined when none of
+ * them is a data-plane verb the table knows.
+ *
+ * One category → that category. More than one → `readwrite`: a function that
+ * both reads and writes a table, or both sends to and consumes a queue, moves
+ * data both ways and the diagram draws a double-headed arrow.
+ */
+export function classifyIamAccess(actions: readonly string[]): EdgeAccess | undefined {
+  const categories = new Set<AccessCategory>();
+  for (const action of actions) {
+    const colon = action.indexOf(':');
+    if (colon <= 0) continue;
+    const row = IAM_ACCESS_TABLE[action.slice(0, colon).toLowerCase()];
+    if (!row) continue;
+    const matcher = globToRegExp(action.slice(colon + 1));
+    for (const [category, verbs] of Object.entries(row) as Array<[AccessCategory, readonly string[]]>) {
+      if (verbs.some(verb => matcher.test(verb))) categories.add(category);
+    }
+  }
+  if (categories.size === 0) return undefined;
+  if (categories.size === 1) return [...categories][0];
+  return 'readwrite';
+}
+
+/**
+ * Access implied by the KIND of a structural edge — no IAM involved. A route
+ * invokes its function synchronously; an event-source mapping, a notification,
+ * a rule target and a subscription are the platform triggering it; a redrive is
+ * the queue publishing into its DLQ. `iam` is computed per edge, `env` and
+ * `cross-service` carry whatever they were built with.
+ */
+export const STRUCTURAL_ACCESS: Readonly<Partial<Record<GraphEdgeKind, EdgeAccess>>> = {
+  'http-route': 'invoke',
+  authorizer: 'invoke',
+  'event-source': 'trigger',
+  's3-notification': 'trigger',
+  'event-rule-target': 'trigger',
+  'event-bus-rule': 'trigger',
+  'sns-subscription': 'trigger',
+  redrive: 'publish',
+};
+
+/**
+ * The (kind, name) an external node stands for, so the stack graph can look it
+ * up among the resources the OTHER services declare. Two spellings exist: an
+ * ARN-built external carries the AWS service prefix (`events`, `sqs`), a
+ * name-built one carries the graph kind (`eventbus`); both reduce here.
+ * Third-party HTTP hosts (`service: 'http'`) are never resolvable.
+ */
+export function externalTarget(node: GraphNode): { kind: GraphNodeKind; name: string } | null {
+  if (node.kind !== 'external' || !node.service || node.service === 'http') return null;
+  const parsed = node.arn ? parseResourceArn(node.arn) : null;
+  const kind = kindForAwsService(parsed?.service ?? node.service)
+    ?? (RESOLVABLE_KINDS.has(node.service as GraphNodeKind) ? node.service as GraphNodeKind : null);
+  if (!kind) return null;
+  return { kind, name: parsed?.name ?? node.label };
+}
+
+// The kinds a name or an ARN can point at — what the stack graph indexes.
+const RESOLVABLE_KINDS: ReadonlySet<GraphNodeKind> = new Set<GraphNodeKind>([
+  'lambda', 'dynamodb', 'sqs', 'sns', 's3', 'eventbus', 'opensearch', 'secret', 'ssm',
+]);
+
+/**
+ * The name another service would use to reference a declared node — the
+ * physical name, which for a Lambda is the full `<service>-<stage>-<fn>` name
+ * (its label is the short one). Null for kinds nothing references by name.
+ */
+export function physicalName(node: GraphNode): string | null {
+  if (!RESOLVABLE_KINDS.has(node.kind)) return null;
+  return node.kind === 'lambda' ? node.fullName ?? node.label : node.label;
 }
 
 // `lambda:CheckpointDurableExecution` and its sibling are an osls self-grant
@@ -345,7 +584,7 @@ export function buildServiceGraph(input: BuildServiceGraphInput): ServiceGraph {
   for (const resource of input.resources) {
     const kind = nodeKindFor(resource);
     if (!kind) continue;
-    addResourceNode(nodes, resource, kind, input.functions);
+    addResourceNode(nodes, resource, kind, input.functions, rawResources);
   }
 
   // --- Nodes: one per declared HTTP route ------------------------------------
@@ -354,11 +593,18 @@ export function buildServiceGraph(input: BuildServiceGraphInput): ServiceGraph {
   // function serves which path, which is the first thing this screen is for.
   const routes = input.routes ?? [];
   const functions = input.functions ?? [];
+  const apis = new ApiIndex(input.resources);
+  // Routes per local function, folded onto its card afterwards.
+  const routesByLambda = new Map<string, GraphRouteFact[]>();
   for (const route of routes) {
     const node = routeNode(route);
+    node.api = apis.nodeFor(route, nodes);
     nodes.set(node.id, node);
     const target = lambdaNodeIdForShortName(route.functionName, functions, byLogicalId);
     if (target && nodes.has(target)) {
+      const served = routesByLambda.get(target) ?? [];
+      served.push({ method: route.method, path: route.path });
+      routesByLambda.set(target, served);
       addEdge(edges, {
         from: node.id,
         to: target,
@@ -383,6 +629,14 @@ export function buildServiceGraph(input: BuildServiceGraphInput): ServiceGraph {
       }
     }
   }
+
+  for (const [lambdaId, served] of routesByLambda) {
+    // Path first, then verb: the card lists `/orders` GET above `/orders` POST
+    // above `/orders/{id}` GET — reading order, and stable across refetches.
+    nodes.get(lambdaId)!.routes = served.sort((a, b) =>
+      a.path.localeCompare(b.path) || a.method.localeCompare(b.method));
+  }
+  apis.finish(nodes, routes);
 
   // --- Edges: authorizer Lambda guards a route -------------------------------
   const authorizers = new Map<string, AuthorizerConfig>();
@@ -438,12 +692,23 @@ export function buildServiceGraph(input: BuildServiceGraphInput): ServiceGraph {
     partition: PARTITION,
     lambdas,
   };
+  // (function, resource) pairs a SHARED role grants. Drawn as role-hub edges,
+  // never as direct arrows, but they are still a CloudFormation-wired link —
+  // so the env pass below must not restate them as a weaker guess.
+  const implied = new Set<string>();
   addIamEdges(rawResources, {
-    nodes, edges, byLogicalId, byKindAndName, warnings, parser, ctx,
+    nodes, edges, byLogicalId, byKindAndName, warnings, parser, ctx, implied,
   });
 
   // --- Edges: environment variables naming a declared resource ---------------
-  addEnvEdges(functions, { nodes, edges, byKindAndName, byLogicalId, warnings });
+  addEnvEdges(functions, { nodes, edges, byKindAndName, byLogicalId, warnings, implied });
+
+  // --- Group membership --------------------------------------------------------
+  // Every node of this graph belongs to this service's frame, except the
+  // externals, which the layout gathers into one column outside every frame.
+  for (const node of nodes.values()) {
+    node.group = node.kind === 'external' ? 'external' : input.serviceName;
+  }
 
   const edgeList = [...edges.values()];
   return {
@@ -474,13 +739,15 @@ function nodeKindFor(resource: Resource): GraphNodeKind | null {
     case 'eventbus': return 'eventbus';
     case 'event-rule': return 'event-rule';
     case 'opensearch': return 'opensearch';
+    case 'ssm-parameter': return 'ssm';
     default: return null;
   }
 }
 
 type DeclaredResource =
   | LambdaResource | DynamoDBResource | SQSResource | SNSResource | S3Resource
-  | SecretsManagerResource | EventBusResource | EventRuleResource | OpenSearchCollectionResource;
+  | SecretsManagerResource | EventBusResource | EventRuleResource | OpenSearchCollectionResource
+  | SsmParameterResource;
 
 function nodeId(kind: GraphNodeKind, key: string): string {
   return `${kind}:${key}`;
@@ -490,14 +757,21 @@ function nodeId(kind: GraphNodeKind, key: string): string {
 // space because it must never occur inside an AWS resource name — splitting on
 // a space would truncate any name that contains one.
 function kindNameKey(kind: GraphNodeKind, name: string): string {
-  return `${kind}\u0000${name}`;
+  return `${kind}\u0000${normaliseName(kind, name)}`;
+}
+
+// SSM is the one service whose ARN and declared name disagree by construction:
+// `/acme/db-url` is `…:parameter/acme/db-url`. Both sides drop the slash.
+function normaliseName(kind: GraphNodeKind, name: string): string {
+  return kind === 'ssm' ? name.replace(/^\//, '') : name;
 }
 
 function addResourceNode(
   nodes: Map<string, GraphNode>,
   resource: Resource,
   kind: GraphNodeKind,
-  functions?: RegisteredFunction[],
+  functions: RegisteredFunction[] | undefined,
+  rawResources: Record<string, RawResource>,
 ): void {
   const declared = resource as DeclaredResource;
   const id = nodeId(kind, declared.logicalId);
@@ -521,7 +795,154 @@ function addResourceNode(
     const match = functions.find(fn => fn.fullName === (resource as LambdaResource).name);
     if (match) node.label = match.name;
   }
+  const facts = factsFor(declared, rawResources[declared.logicalId]);
+  if (facts) node.facts = facts;
   nodes.set(id, node);
+}
+
+/**
+ * The few facts a card prints under its title, read from what the template
+ * declares. Display-only and deliberately small — the detail screens own the
+ * full picture; a card answers "what kind of X is this" at a glance.
+ *
+ * Absent values are omitted rather than written as `undefined`, so an empty
+ * set of facts leaves the node without the field at all.
+ */
+function factsFor(resource: DeclaredResource, raw: RawResource | undefined): Record<string, GraphFactValue> | undefined {
+  const facts: Record<string, GraphFactValue | undefined> = {};
+  switch (resource.type) {
+    case 'lambda':
+      facts.runtime = resource.runtime || undefined;
+      facts.timeout = resource.timeout || undefined;
+      facts.memory = resource.memorySize || undefined;
+      break;
+    case 'dynamodb': {
+      facts.pk = resource.keySchema.find(key => key.KeyType === 'HASH')?.AttributeName;
+      facts.sk = resource.keySchema.find(key => key.KeyType === 'RANGE')?.AttributeName;
+      facts.gsis = resource.globalSecondaryIndexes?.length || undefined;
+      facts.lsis = resource.localSecondaryIndexes?.length || undefined;
+      facts.stream = resource.streamEnabled ? resource.streamViewType ?? true : undefined;
+      facts.ttl = resource.ttl?.enabled ? resource.ttl.attributeName : undefined;
+      // Read from the RAW template, not the parsed resource: vector indexes are
+      // a newer table property, and reading the raw `VectorIndexes` list keeps
+      // this card independent of whether the parser has learnt it yet.
+      const vectors = raw?.Properties?.VectorIndexes;
+      facts.vectorIndexes = Array.isArray(vectors) && vectors.length ? vectors.length : undefined;
+      break;
+    }
+    case 'sqs':
+      facts.fifo = resource.fifoQueue || undefined;
+      facts.visibilityTimeout = resource.visibilityTimeout;
+      facts.maxReceiveCount = resource.redrivePolicy?.maxReceiveCount;
+      break;
+    case 's3': {
+      const events = [...new Set(resource.notifications.flatMap(notification => notification.events))];
+      facts.events = events.length ? events.join(', ') : undefined;
+      break;
+    }
+    case 'event-rule':
+      facts.schedule = resource.scheduleExpression || undefined;
+      facts.pattern = resource.eventPattern ? summarisePattern(resource.eventPattern) : undefined;
+      break;
+    case 'opensearch':
+      facts.type = resource.collectionType;
+      break;
+    case 'ssm-parameter':
+      facts.type = resource.parameterType;
+      break;
+    default:
+      break;
+  }
+  const present = Object.entries(facts).filter((entry): entry is [string, GraphFactValue] => entry[1] !== undefined);
+  return present.length ? Object.fromEntries(present) : undefined;
+}
+
+/**
+ * `{source: ['billing'], 'detail-type': ['OrderBilled']}` →
+ * `source=billing · detail-type=OrderBilled`. Nested objects (a `detail`
+ * filter) are summarised by key only — the card has one line, and the rule's
+ * own screen is where the full pattern belongs.
+ */
+export function summarisePattern(pattern: Record<string, unknown>): string {
+  return Object.entries(pattern).map(([key, value]) => {
+    if (Array.isArray(value)) {
+      return `${key}=${value.map(item => (typeof item === 'object' && item !== null ? '{…}' : String(item))).join('|')}`;
+    }
+    if (typeof value === 'object' && value !== null) return `${key}={…}`;
+    return `${key}=${String(value)}`;
+  }).join(' · ');
+}
+
+/**
+ * Which API each route is served by, and the `api` nodes that stand for them.
+ *
+ * Three sources, in order of how much they prove:
+ *  1. a parsed `AWS::ApiGatewayV2::Route` with the same verb and path names its
+ *     `ApiId` — osls compiles every `httpApi` event to one, and hand-written
+ *     topologies declare them directly;
+ *  2. the template's first API of the matching flavour (`AWS::ApiGateway::RestApi`
+ *     for a REST `http` route, `AWS::ApiGatewayV2::Api` for an `httpApi` one);
+ *  3. the implicit Framework API, when the template carries none of either —
+ *     the routes are still served by SOMETHING, and the diagram needs the box.
+ *
+ * Only APIs that serve at least one route become nodes: an API with nothing
+ * behind it is plumbing, and the node pass drops plumbing.
+ */
+class ApiIndex {
+  private readonly apis = new Map<string, ApiResource | RestApiResource>();
+  private readonly httpApis: ApiResource[] = [];
+  private readonly restApis: RestApiResource[] = [];
+  private readonly declaredRoutes: ApiRouteResource[] = [];
+
+  constructor(resources: Resource[]) {
+    for (const resource of resources) {
+      if (resource.type === 'apigw-api') {
+        this.apis.set(resource.logicalId, resource);
+        this.httpApis.push(resource);
+      } else if (resource.type === 'apigw-rest-api') {
+        this.apis.set(resource.logicalId, resource);
+        this.restApis.push(resource);
+      } else if (resource.type === 'apigw-route') {
+        this.declaredRoutes.push(resource);
+      }
+    }
+  }
+
+  /** The api node id for a route, creating the node on first use. */
+  nodeFor(route: HttpRoute, nodes: Map<string, GraphNode>): string {
+    const declared = this.declaredRoutes.find(candidate =>
+      candidate.method === route.method && candidate.path === route.path
+      && candidate.apiRef !== undefined && this.apis.has(candidate.apiRef));
+    const rest = route.eventType === 'http';
+    const resource = declared
+      ? this.apis.get(declared.apiRef!)!
+      : (rest ? this.restApis[0] : this.httpApis[0]);
+    const id = resource ? nodeId('api', resource.logicalId) : nodeId('api', rest ? 'implicit-rest' : 'implicit-http');
+    if (!nodes.has(id)) {
+      nodes.set(id, {
+        id,
+        kind: 'api',
+        // The declared `Name` (osls writes `<stage>-<service>`), else a plain
+        // "HTTP API" / "REST API" — the frame around it already names the
+        // service, so repeating it here would only crowd the card.
+        label: resource ? resource.name : (rest ? 'REST API' : 'HTTP API'),
+        logicalId: resource?.logicalId,
+        facts: { protocol: rest ? 'REST' : 'HTTP' },
+      });
+    }
+    return id;
+  }
+
+  /** Route counts and authorizer names, once every route is assigned. */
+  finish(nodes: Map<string, GraphNode>, routes: HttpRoute[]): void {
+    for (const node of nodes.values()) {
+      if (node.kind !== 'api') continue;
+      const served = routes.filter(route => nodes.get(routeNode(route).id)?.api === node.id);
+      node.facts!.routes = served.length;
+      const authorizers = [...new Set(served.map(route => route.authorizerName).filter(Boolean))].sort();
+      if (authorizers.length) node.facts!.authorizers = authorizers.join(', ');
+    }
+  }
 }
 
 function routeNode(route: HttpRoute): GraphNode {
@@ -612,7 +1033,13 @@ interface EdgeContext {
 function addEdge(edges: Map<string, GraphEdge>, edge: Omit<GraphEdge, 'id'>): void {
   const id = `${edge.from}\u0000${edge.to}\u0000${edge.kind}`;
   if (edges.has(id)) return;
-  edges.set(id, { ...edge, id });
+  // A structural edge's direction follows from its kind; an IAM edge brings its
+  // own (or none, when no granted action is a data-plane verb). The key is left
+  // off entirely rather than written as `undefined`, so the payload stays as
+  // small as v1's for an edge that has nothing to say.
+  const { access: own, ...rest } = edge;
+  const access = own ?? STRUCTURAL_ACCESS[edge.kind];
+  edges.set(id, access ? { ...rest, id, access } : { ...rest, id });
 }
 
 // True when some edge already connects this pair, whatever its kind — used to
@@ -750,13 +1177,20 @@ function addRedriveEdge(queue: SQSResource, ctx: EdgeContext): void {
     warnUnresolved(ctx, `Queue ${queue.name} redrives to ${queue.redrivePolicy.deadLetterTargetRef}`);
     return;
   }
+  const source = nodeId('sqs', queue.logicalId);
   addEdge(ctx.edges, {
-    from: nodeId('sqs', queue.logicalId),
+    from: source,
     to: dlq,
     kind: 'redrive',
     detail: `after ${queue.redrivePolicy.maxReceiveCount}`,
     confidence: 'declared',
   });
+  // Tell the DLQ which queue it serves: the layout tucks it directly under
+  // that queue, and its card says `DLQ` instead of repeating its settings.
+  // Only a LOCAL queue gets the fact — an external DLQ is another service's
+  // card, and annotating it from here would be writing on someone else's box.
+  const target = ctx.nodes.get(dlq)!;
+  if (target.kind === 'sqs') target.facts = { ...target.facts, dlqOf: source };
 }
 
 /**
@@ -792,6 +1226,7 @@ interface IamContext extends EdgeContext {
   byKindAndName: Map<string, Resource>;
   parser: CloudFormationParser;
   ctx: ArnResolutionContext;
+  implied: Set<string>;
 }
 
 /**
@@ -854,6 +1289,7 @@ function addIamEdges(rawResources: Record<string, RawResource>, iam: IamContext)
           kind: 'iam',
           detail: grant.actions.join(', '),
           confidence: 'declared',
+          access: classifyIamAccess(grant.actions),
         });
       }
       continue;
@@ -865,6 +1301,7 @@ function addIamEdges(rawResources: Record<string, RawResource>, iam: IamContext)
       kind: 'iam-role',
       label: roleLogicalId,
       logicalId: roleLogicalId,
+      facts: { functions: bound.length },
     });
     for (const lambda of bound) {
       addEdge(iam.edges, { from: lambda, to: roleNode, kind: 'iam', confidence: 'declared' });
@@ -876,7 +1313,9 @@ function addIamEdges(rawResources: Record<string, RawResource>, iam: IamContext)
         kind: 'iam',
         detail: grant.actions.join(', '),
         confidence: 'declared',
+        access: classifyIamAccess(grant.actions),
       });
+      for (const lambda of bound) iam.implied.add(`${lambda}\u0000${grant.node}`);
     }
   }
 }
@@ -997,6 +1436,7 @@ interface EnvContext {
   byKindAndName: Map<string, Resource>;
   byLogicalId: Map<string, Resource>;
   warnings: string[];
+  implied: Set<string>;
 }
 
 /**
@@ -1028,7 +1468,7 @@ function addEnvEdges(functions: RegisteredFunction[], env: EnvContext): void {
   // of the whole builder (functions x variables), and at the scale LSS targets
   // — 60 functions, each carrying the provider's environment — a linear scan
   // per check would be the only quadratic thing here.
-  const linked = new Set<string>();
+  const linked = new Set<string>(env.implied);
   for (const edge of env.edges.values()) {
     linked.add(`${edge.from}\u0000${edge.to}`);
     linked.add(`${edge.to}\u0000${edge.from}`);
@@ -1039,7 +1479,7 @@ function addEnvEdges(functions: RegisteredFunction[], env: EnvContext): void {
     if (!source || !env.nodes.has(source)) continue;
     for (const [key, value] of Object.entries(fn.environment ?? {})) {
       if (ENV_KEY_DENYLIST.has(key)) continue;
-      const target = matchEnvValue(value, env);
+      const target = matchEnvValue(value, env) ?? httpExternalNode(value, env.nodes);
       if (!target || target === source) continue;
       // An env var that merely restates a link CloudFormation already wires
       // adds a weaker duplicate of a stronger fact.
@@ -1116,13 +1556,53 @@ function matchEnvValue(value: string, env: EnvContext): string | null {
   return null;
 }
 
+/**
+ * A third-party HTTP dependency: an env value that is an absolute `http(s)://`
+ * URL to a host that is neither LSS nor AWS. One node per HOST, labelled with
+ * it, `service: 'http'` — the "payment provider" box on the right of an
+ * architecture diagram. Like every env edge it is `inferred`: the variable
+ * proves the function KNOWS the URL, not that it calls it.
+ *
+ * Only reached when `matchEnvValue` found no declared resource, so a queue URL
+ * served by the engine never gets here; the host test below is for the URLs
+ * that name nothing declared.
+ */
+function httpExternalNode(value: string, nodes: Map<string, GraphNode>): string | null {
+  if (!/^https?:\/\//i.test(value)) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  // `new URL` refuses an http(s) URL with an empty host, so a parsed one
+  // always has a hostname.
+  const host = url.hostname.toLowerCase();
+  if (isLssOrAwsHost(host, url.port)) return null;
+  const id = nodeId('external', `http:${host}`);
+  if (!nodes.has(id)) nodes.set(id, { id, kind: 'external', label: host, service: 'http' });
+  return id;
+}
+
+// LSS itself (the loopback names, the docker host alias, and the two port
+// blocks the per-service listeners are allocated from: 3xxx for the API
+// gateway, 13xxx for the invoke API) and AWS (`*.amazonaws.com`, a real
+// endpoint for a resource rather than a third party). Everything else is
+// somebody else's service.
+function isLssOrAwsHost(host: string, port: string): boolean {
+  if (['localhost', '127.0.0.1', '0.0.0.0', '[::1]', 'host.docker.internal'].includes(host)) return true;
+  if (host.endsWith('.localhost') || host.endsWith('.amazonaws.com')) return true;
+  const portNumber = Number(port);
+  return (portNumber >= 3000 && portNumber <= 3999) || (portNumber >= 13000 && portNumber <= 13999);
+}
+
 // A name is matched against every kind, because an env var does not say which
 // service it points at. A name colliding across two kinds is vanishingly rare
 // and the first match is deterministic (insertion order = template order).
 function findByName(byKindAndName: Map<string, Resource>, name: string): string | null {
   for (const [key, resource] of byKindAndName) {
     const [kind, declared] = key.split('\u0000');
-    if (declared === name && 'logicalId' in resource && resource.logicalId) {
+    if (declared === normaliseName(kind as GraphNodeKind, name) && 'logicalId' in resource && resource.logicalId) {
       return nodeId(kind as GraphNodeKind, resource.logicalId);
     }
   }

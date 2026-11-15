@@ -127,6 +127,7 @@ describe('client data-plane — every namespace method maps to the right route',
     { name: 'services.list', run: (c) => c.services.list(), method: 'GET', path: '/api/services' },
     { name: 'services.get', run: (c) => c.services.get('s'), method: 'GET', path: '/api/services/s' },
     { name: 'services.graph', run: (c) => c.services.graph('s'), method: 'GET', path: '/api/services/s/graph' },
+    { name: 'stack.graph', run: (c) => c.stack.graph(), method: 'GET', path: '/api/stack/graph' },
     { name: 'services.remove', run: (c) => c.services.remove('s'), method: 'DELETE', path: '/api/services/s' },
     { name: 'services.setStatus', run: (c) => c.services.setStatus('s', { status: 'running' }), method: 'PATCH', path: '/api/services/s/status' },
     { name: 'services.start', run: (c) => c.services.start('s'), method: 'POST', path: '/api/services/s/start' },
@@ -176,6 +177,18 @@ describe('client data-plane — request shaping', () => {
     expect(queryOf(lastReq().url).get('region')).toBe('sa-east-1');
     await c.resources.list('us-west-1');
     expect(queryOf(lastReq().url).get('region')).toBe('us-west-1');
+  });
+
+  it('shapes stack.graph({ expand }) as one comma-joined query value, "*" verbatim', async () => {
+    const c = new LssClient({ baseUrl });
+    await c.stack.graph({ expand: ['orders', 'billing'] });
+    expect(queryOf(lastReq().url).get('expand')).toBe('orders,billing');
+    await c.stack.graph({ expand: '*' });
+    expect(queryOf(lastReq().url).get('expand')).toBe('*');
+    await c.stack.graph({ expand: [] });
+    expect(queryOf(lastReq().url).get('expand')).toBe('');
+    await c.stack.graph({});
+    expect(lastReq().url).toBe('/api/stack/graph');
   });
 
   it('omits the region query entirely when there is no default and none passed', async () => {

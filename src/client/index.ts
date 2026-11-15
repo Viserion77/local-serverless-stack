@@ -21,6 +21,7 @@ import { createConfigApi, type ConfigApi } from './namespaces/config';
 import { createHealthApi, type HealthApi } from './namespaces/health';
 import { createLambdasApi, type LambdasApi } from './namespaces/lambdas';
 import { createApisApi, type ApisApi } from './namespaces/apis';
+import { createStackApi, type StackApi } from './namespaces/stack';
 import type { LssClientOptions } from './types';
 
 export class LssClient {
@@ -36,6 +37,7 @@ export class LssClient {
   readonly health: HealthApi;
   readonly lambdas: LambdasApi;
   readonly apis: ApisApi;
+  readonly stack: StackApi;
   readonly lifecycle: LifecycleApi;
 
   private readonly http: Http;
@@ -55,6 +57,7 @@ export class LssClient {
     this.health = createHealthApi(this.http);
     this.lambdas = createLambdasApi(this.http);
     this.apis = createApisApi(this.http);
+    this.stack = createStackApi(this.http);
     this.lifecycle = new Lifecycle({ health: this.health, cwd: cfg.cwd, configPath: cfg.configPath });
   }
 
@@ -100,7 +103,9 @@ export type {
   ServiceGraphEdge,
   ServiceGraphNodeKind,
   ServiceGraphEdgeKind,
+  ServiceGraphEdgeAccess,
 } from './namespaces/services';
+export type { StackApi, StackGraph, StackGraphOptions, StackServiceSummary } from './namespaces/stack';
 export type {
   LifecycleApi,
   StartOptions,

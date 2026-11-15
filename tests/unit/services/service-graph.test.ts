@@ -204,6 +204,9 @@ describe('nodes', () => {
       logicalId: 'CreateUserLambdaFunction',
       fullName: 'svc-dev-createUser',
       handler: 'src/handlers/users.create',
+      group: 'svc',
+      // The parser's defaults for an unspecified runtime/timeout/memory.
+      facts: expect.any(Object),
     });
 
     // With it, the SHORT name — the key the dashboard's Lambda screen uses.
@@ -242,6 +245,9 @@ describe('http routes', () => {
       label: 'POST /users',
       method: 'POST',
       path: '/users',
+      // No API resource in the template: the implicit Framework API serves it.
+      api: 'api:implicit-http',
+      group: 'svc',
     });
     expect(edge(graph, 'route:POST /users', 'lambda:CreateUserLambdaFunction')).toMatchObject({
       kind: 'http-route',
@@ -578,6 +584,7 @@ describe('EventBridge rules', () => {
       kind: 'external',
       label: 'billing-events',
       service: 'eventbus',
+      group: 'external',
     });
     // One node, two rules hanging off it.
     expect(crossService.nodes.filter(n => n.kind === 'external')).toHaveLength(1);
@@ -737,6 +744,7 @@ describe('IAM grants', () => {
       kind: 'iam',
       detail: 'dynamodb:GetItem, dynamodb:PutItem',
       confidence: 'declared',
+      access: 'readwrite',
     }]);
   });
 
@@ -758,6 +766,8 @@ describe('IAM grants', () => {
       kind: 'iam-role',
       label: 'IamRoleLambdaExecution',
       logicalId: 'IamRoleLambdaExecution',
+      group: 'svc',
+      facts: { functions: 3 },
     });
     expect(graph.edges.map(e => `${e.from} → ${e.to}`)).toEqual([
       'lambda:ALambdaFunction → iam-role:IamRoleLambdaExecution',
@@ -1443,12 +1453,15 @@ describe('fixtures (end-to-end)', () => {
 
     // Six of the seven environment variables name a declared resource
     // (AWS_ENDPOINT is denylisted); all nine functions carry the same block, so
-    // every one of them is serviceWide. Three are suppressed because a
-    // structural edge already connects the pair.
+    // every one of them is serviceWide. Two of the six (ORDERS_TABLE and
+    // ORDER_QUEUE_URL) name a resource the SHARED role already grants to every
+    // function, so they restate a CloudFormation-wired link through the hub
+    // and are suppressed for all nine: 9 × 4 left, minus the one bucket pair a
+    // structural edge (the S3 notification) already connects.
     const env = edgesOfKind(graph, 'env');
-    expect(env).toHaveLength(9 * 6 - 3);
+    expect(env).toHaveLength(9 * 4 - 1);
     expect(env.every(e => e.serviceWide && e.confidence === 'inferred')).toBe(true);
-    expect(edge(graph, 'lambda:HealthLambdaFunction', 'sqs:OrderProcessingQueue')!.detail).toBe('ORDER_QUEUE_URL');
+    expect(edge(graph, 'lambda:HealthLambdaFunction', 'sqs:OrderProcessingQueue')).toBeUndefined();
     expect(edge(graph, 'lambda:HealthLambdaFunction', 'sns:OrderEventsTopic')!.detail).toBe('ORDER_EVENTS_TOPIC_ARN');
     expect(edge(graph, 'lambda:OnOrderStreamLambdaFunction', 'dynamodb:OrdersTable')).toBeUndefined();
     expect(edge(graph, 'lambda:ProcessOrderQueueLambdaFunction', 'sqs:OrderProcessingQueue')).toBeUndefined();

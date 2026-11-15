@@ -98,6 +98,27 @@ export const TOOLS: ToolDefinition[] = [
     run: (a, http) => http('GET', `/api/services/${name(a)}/graph`),
   },
   {
+    name: 'lss_stack_graph',
+    description:
+      'How the WHOLE stack is wired: every registered service\'s graph (as lss_service_graph) on one map, '
+      + 'with references to another service\'s resources resolved into `cross-service` edges between the two real '
+      + 'nodes (`via` keeps the evidence: event-source, iam, env…). Edges carry `access` (read/write/readwrite/'
+      + 'invoke/publish/consume/trigger) derived from IAM actions or the edge kind. With more than 8 services every '
+      + 'service is collapsed to one `service` node with aggregate counts and weighted edges; pass `expand` '
+      + '(comma-separated service names, or "*") to draw some in full. Use it to answer "which services depend on '
+      + 'this queue" or "what calls into billing" across the monorepo.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        expand: str('Comma-separated service names to draw in full, "*" for all, "" for none. Omit for the default.'),
+      },
+    },
+    run: (a, http) => http(
+      'GET',
+      typeof a.expand === 'string' ? `/api/stack/graph?expand=${encodeURIComponent(a.expand)}` : '/api/stack/graph',
+    ),
+  },
+  {
     name: 'lss_scan_services',
     description:
       'Discover Serverless Framework / osls services under the project root that could be registered: '
