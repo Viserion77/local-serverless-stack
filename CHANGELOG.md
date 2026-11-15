@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-15
+
+### Added
+
+- **Lambda Web Functions on the LSS runtime.** AWS's second Lambda function type — an ordinary HTTP
+  server (Express, Fastify, Next.js, plain `node:http`) that Lambda starts and proxies to — now runs
+  locally. `AWS::Lambda::WebFunction`, `::WebFunctionRevision` and `::WebFunctionEndpoint` are read
+  from the packaged template (osls passes them through from `resources.Resources`; a Framework v4
+  `webApps.<name>.entry` in `serverless-state.json` is honoured). Each endpoint is served on a
+  **stable local URL** — a pinned `serviceRuntime.<svc>.webFunctions.<fn>.<endpoint>.port`, else the
+  next free port of `webFunctions.portRange` (default `15000-15999`), remembered across restarts.
+  The first request starts the app as a child process listening on `AWS_LAMBDA_HTTP_ENDPOINT`
+  (10 s readiness), and the request and response are piped unbuffered, so SSE and chunked bodies
+  stream. `lambda-web-request-id` on every request and response, `x-forwarded-*`, `TimeoutSeconds`
+  (504 `Runtime.RequestTimeout`), `MaxConcurrencyPerEnvironment` with a bounded queue (429),
+  `IamAuth` (SigV4 for `lambda` + `X-Amz-Content-SHA256`, else 403), weighted revisions with an
+  `x-lss-web-revision` pin, and AWS's shutdown sequence (drain → `SIGTERM` → 1 s → `SIGKILL`) for idle
+  unload, hot reload, re-register and shutdown. LSS-made errors carry the documented
+  `lambda-web-error-type` and a JSON body naming LSS as the source.
+- **`Ref` / `Fn::GetAtt` for the three types**, including `DomainName` → `localhost:<port>`, so a
+  sibling function's `!Sub 'https://${Endpoint.DomainName}'` reaches the local app; `https://` is
+  rewritten to `http://` in env values (`webFunctions.rewriteHttpsInEnv`, default on).
+- **Web functions everywhere else**: a *Web functions* section on the Lambdas screen and a detail page
+  (endpoints, revisions and weights, environment state, recent requests, logs, restart) in en /
+  pt-BR / es; `GET /api/lambdas/web`, `GET /api/lambdas/web/:service/:name`,
+  `POST …/restart`, `POST …/request`; web endpoints in `GET /api/config/ports`;
+  `client.lambdas.web.list/get/restart`; MCP tools `lss_web_functions` and `lss_web_request`;
+  every request in the stack-wide activity.
+- **Config**: `webFunctions.portRange`, `webFunctions.rewriteHttpsInEnv`, `webFunctions.queueFactor`
+  and `serviceRuntime.<svc>.webFunctions.<fn>.<endpoint>.port`, editable through `PUT /api/config`.
+- **Example**: `examples/self-hosted/orders-service` gains `orders-web` (plain `node:http`: a status
+  page, `GET /api/orders/:id` reading DynamoDB, an SSE feed, two revisions split 90/10) and
+  `GET /orders/web-check`, an event function calling it through the resolved `DomainName`; the
+  `example self-hosted: full demo` task drives it, and a new integration suite asserts it end to end.
+
 ## [1.2.2] - 2026-11-09
 
 ### Security

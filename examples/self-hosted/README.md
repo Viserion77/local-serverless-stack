@@ -169,6 +169,35 @@ curl -s 'http://localhost:14566/_aoss/products-catalog/products/_search?q=name:m
 curl -s 'http://localhost:14566/_aoss/products-catalog/products/_count'
 ```
 
+## Drive the web function (Lambda Web Functions)
+
+`orders-service` also ships **`orders-web`**, a Lambda Web Function: an ordinary HTTP server on plain
+`node:http` (`orders-service/src/web/server.js`), declared as raw `AWS::Lambda::WebFunction` /
+`::WebFunctionRevision` / `::WebFunctionEndpoint` resources in its `serverless.yml`. Nothing runs
+until its URL is hit; the first request starts the server (a cold start of ~100 ms).
+
+```bash
+# The endpoint's stable local URL (port from webFunctions.portRange, 15000-15999 by default)
+curl -s http://localhost:14566/api/lambdas/web | grep -o '"url":"[^"]*"'
+# → "url":"http://localhost:15000"
+
+curl -si http://localhost:15000/api/health      # lambda-web-request-id on the response
+curl -sN http://localhost:15000/api/stream      # SSE: three events, ~400 ms apart
+curl -s  http://localhost:15000/api/orders      # reads the orders table through the SDK
+curl -si 'http://localhost:15000/api/slow?ms=15000'   # past TimeoutSeconds (10 s) → 504
+
+# Two revisions split 90/10 — pin one:
+curl -s http://localhost:15000/api/health -H 'x-lss-web-revision: OrdersWebRevisionCanary'
+
+# An event function calling the web function through the URL CloudFormation gives it
+# (Fn::GetAtt OrdersWebEndpoint.DomainName → localhost:<port>, https rewritten to http):
+curl -s http://localhost:3631/orders/web-check
+```
+
+Open the URL in a browser for the status page (live SSE feed + stored orders); the dashboard's
+**Lambdas** screen lists the web function, and its detail page shows endpoints, revisions,
+environment state, recent requests and logs.
+
 ## Validation console
 
 `index.html` at the example root is a small browser console that pings every port and

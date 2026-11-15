@@ -84,6 +84,8 @@ that text before asking a human to approve the call.
 | `lss_resources` / `lss_resource_owners` | Provisioned resources, and which service declared each |
 | `lss_lambdas` / `lss_lambda_logs` | Functions with triggers and counters; per-invocation logs |
 | `lss_invoke` | **MUTATES.** Run a handler with a JSON event, sync or `Event` |
+| `lss_web_functions` | Lambda Web Functions: endpoints with their local URLs (and the `DomainName` `Fn::GetAtt` resolves to), auth type, revision weights, per-revision environment state |
+| `lss_web_request` | **MUTATES.** Send one HTTP request to a web function endpoint (optionally pinning a revision); returns status, headers and body |
 | `lss_apis` | HTTP routes per service, with authorizer and listener status |
 | `lss_dynamo_tables` / `lss_dynamo_scan` / `lss_dynamo_query` | Table metadata and reads (full AWS expression language) |
 | `lss_dynamo_put_item` | **MUTATES.** Write one plain-JSON item |

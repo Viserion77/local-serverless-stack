@@ -175,6 +175,15 @@
       "problemMatcher": []
     },
     {
+      "label": "example self-hosted: drive web function",
+      "detail": "Hits the orders-web Lambda Web Function: cold start, request id, SSE stream, and a sibling event function calling it",
+      "type": "shell",
+      "command": "URL=$(curl -s http://localhost:14566/api/lambdas/web | node -e \"let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).find(f=>f.name==='orders-web').endpoints[0].url))\") && echo \"orders-web: $URL\" && echo '--- GET /api/health (cold start, lambda-web-request-id):' && curl -si $URL/api/health && echo && echo '--- GET /api/stream (SSE, 3 events):' && curl -sN $URL/api/stream && echo '--- GET /orders/web-check (event function -> web function via DomainName):' && curl -s http://localhost:3631/orders/web-check && echo",
+      "options": { "cwd": "${workspaceFolder}/examples/self-hosted" },
+      "icon": { "id": "globe", "color": "terminal.ansiCyan" },
+      "problemMatcher": []
+    },
+    {
       "label": "example self-hosted: stop",
       "type": "shell",
       "command": "npm run lss:stop",
@@ -196,13 +205,14 @@
     },
     {
       "label": "example self-hosted: full demo",
-      "detail": "start > register > pipeline > catalog — what sets LSS apart, in one task",
+      "detail": "start > register > pipeline > catalog > web function — what sets LSS apart, in one task",
       "dependsOrder": "sequence",
       "dependsOn": [
         "example self-hosted: start (no Docker)",
         "example self-hosted: register services",
         "example self-hosted: drive pipeline",
-        "example self-hosted: drive catalog (OpenSearch)"
+        "example self-hosted: drive catalog (OpenSearch)",
+        "example self-hosted: drive web function"
       ],
       "icon": { "id": "rocket", "color": "terminal.ansiYellow" },
       "problemMatcher": []
