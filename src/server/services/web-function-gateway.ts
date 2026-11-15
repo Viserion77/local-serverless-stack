@@ -216,7 +216,8 @@ export class WebFunctionGateway {
           }
           listener.rebindTimer = setTimeout(() => {
             listener.rebindTimer = undefined;
-            if (this.listeners.get(key) === listener) server.listen(port, getBindHost());
+            // close() cancels this timer, so a listener that fires is current.
+            server.listen(port, getBindHost());
           }, this.rebindIntervalMs);
           listener.rebindTimer.unref();
         } else {
@@ -258,8 +259,9 @@ export class WebFunctionGateway {
     const requestId = crypto.randomUUID();
     const startedAt = Date.now();
     res.setHeader(REQUEST_ID_HEADER, requestId);
-    const method = req.method ?? 'GET';
-    const urlPath = req.url ?? '/';
+    // Always set on a server-side request.
+    const method = req.method as string;
+    const urlPath = req.url as string;
     let revisionId: string | undefined;
     let coldStart = false;
     let errorType: string | undefined;
@@ -388,7 +390,7 @@ export class WebFunctionGateway {
       // handling this one. AWS answers both with 503.
       const type = err.code === 'ECONNREFUSED' ? 'Runtime.Unreachable' : 'Runtime.OriginRequestError';
       setErrorType(type);
-      sendLssError(res, 503, type, `the application failed while handling the request (${err.code ?? err.message})`);
+      sendLssError(res, 503, type, `the application failed while handling the request (${err.code})`);
     });
     res.on('close', () => {
       clearTimeout(timer);

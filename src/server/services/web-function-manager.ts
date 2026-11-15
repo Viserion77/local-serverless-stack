@@ -180,7 +180,7 @@ export class WebFunctionManager {
       // AWS: "After SIGTERM, the process has up to 1 second to finish cleanup".
       killGraceMs: options.killGraceMs ?? 1_000,
       runtimeDir: options.runtimeDir,
-      lssResolveBase: options.lssResolveBase ?? process.argv[1] ?? process.cwd(),
+      lssResolveBase: options.lssResolveBase ?? process.argv[1],
       nativeTypeScript: options.nativeTypeScript ?? hasNativeTypeScript(),
       echo: options.echo ?? true,
     };

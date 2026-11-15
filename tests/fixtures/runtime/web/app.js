@@ -40,6 +40,12 @@ const server = http.createServer((req, res) => {
     res.write('partial');
     return;
   }
+  if (url.pathname === '/head-then-reset') {
+    res.writeHead(200, { 'content-type': 'text/plain' });
+    res.write('partial');
+    setTimeout(() => req.socket.destroy(), 50);
+    return;
+  }
   if (url.pathname === '/crash') {
     process.exit(1);
   }
@@ -55,6 +61,7 @@ const [host, port] = process.env.AWS_LAMBDA_HTTP_ENDPOINT.split(':');
 server.listen(Number(port), host, () => {
   console.log(`app listening on ${host}:${port}`);
   console.error('a line on stderr');
+  for (let i = 0; i < Number(process.env.LOG_LINES || 0); i++) console.log(`line ${i}`);
   process.stdout.write('partial line without newline');
 });
 process.on('SIGTERM', () => process.exit(0));
