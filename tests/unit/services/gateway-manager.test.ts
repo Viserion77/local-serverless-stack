@@ -31,6 +31,7 @@ function entryFor(name: string, apiPort?: number, invokePort?: number): ServiceE
   return {
     name,
     root: `/proj/${name}`,
+    webFunctions: [],
     stage: 'dev',
     apiPort,
     invokePort,

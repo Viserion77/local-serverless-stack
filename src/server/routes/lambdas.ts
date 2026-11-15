@@ -105,6 +105,12 @@ router.post('/web/:service/:name/restart', async (req: Request, res: Response) =
 // the real endpoint listener, so auth, revision weights and the request id all
 // apply.
 const BODY_LIMIT = 64 * 1024;
+
+function headersOf(headers: Headers): Record<string, string> {
+  const result: Record<string, string> = {};
+  headers.forEach((value, key) => { result[key] = value; });
+  return result;
+}
 router.post('/web/:service/:name/request', async (req: Request, res: Response) => {
   const ref = findWebFunction(req);
   if (!ref) {
@@ -142,13 +148,13 @@ router.post('/web/:service/:name/request', async (req: Request, res: Response) =
     const text = await answer.text();
     return res.json({
       status: answer.status,
-      headers: Object.fromEntries(answer.headers.entries()),
+      headers: headersOf(answer.headers),
       body: text.length > BODY_LIMIT ? text.slice(0, BODY_LIMIT) : text,
       truncated: text.length > BODY_LIMIT,
       durationMs: Date.now() - startedAt,
     });
   } catch (error) {
-    return res.status(502).json({ error: `Request to ${endpoint.name} failed: ${error instanceof Error ? error.message : String(error)}` });
+    return res.status(502).json({ error: `Request to ${endpoint.name} failed: ${(error as Error).message}` });
   }
 });
 

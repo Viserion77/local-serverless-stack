@@ -189,12 +189,12 @@ describe('pickRevision', () => {
     expect(pickRevision(fn, endpoint, undefined, () => 0.95)?.revisionId).toBe(CANARY);
     // The upper edge of the roll lands on the last weighted revision.
     expect(pickRevision(fn, endpoint, undefined, () => 1)?.revisionId).toBe(CANARY);
-    expect(pickRevision(fn, endpoint)).toBeDefined();
+    expect(pickRevision(fn, endpoint, undefined)).toBeDefined();
   });
 
   it('falls back to the newest revision without usable weights, or nothing at all', () => {
-    expect(pickRevision(fn, { ...endpoint, weights: [{ revisionId: STABLE, weight: 0 }, { revisionId: 'gone', weight: 50 }] })?.revisionId).toBe(CANARY);
-    expect(pickRevision({ ...fn, revisions: [] }, { ...endpoint, weights: [] })).toBeUndefined();
+    expect(pickRevision(fn, { ...endpoint, weights: [{ revisionId: STABLE, weight: 0 }, { revisionId: 'gone', weight: 50 }] }, undefined)?.revisionId).toBe(CANARY);
+    expect(pickRevision({ ...fn, revisions: [] }, { ...endpoint, weights: [] }, undefined)).toBeUndefined();
   });
 });
 

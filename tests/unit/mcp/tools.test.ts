@@ -168,6 +168,20 @@ describe('invoke', () => {
   });
 });
 
+describe('web functions', () => {
+  it('lists web functions', async () => {
+    await expectCall('lss_web_functions', {}, ['GET', '/api/lambdas/web']);
+  });
+
+  it('sends a request through an endpoint', async () => {
+    await expectCall('lss_web_request', { service: 'orders', name: 'orders-web', path: '/api/health', revision: 'r1' }, [
+      'POST', '/api/lambdas/web/orders/orders-web/request',
+      { method: undefined, path: '/api/health', headers: undefined, body: undefined, endpoint: undefined, revision: 'r1' },
+    ]);
+    await expect(call('lss_web_request', { name: 'orders-web' }).promise).rejects.toThrow('"service" is required');
+  });
+});
+
 describe('bucket objects', () => {
   it('builds the query string from prefix, delimiter and region', async () => {
     await expectCall('lss_bucket_objects', { bucket: 'b' }, ['GET', '/api/buckets/b/objects']);

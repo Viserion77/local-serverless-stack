@@ -83,6 +83,7 @@ import type {
   OpenSearchCollectionResource,
   EventSourceMapping,
   LambdaResource,
+  Resource,
 } from '../../../src/server/services/cloudformation-parser';
 
 const dynamoMock = mockClient(DynamoDBClient);
@@ -1447,6 +1448,24 @@ describe('listAllResources', () => {
     expect(await p.listSNSTopics()).toEqual([]);
     expect(await p.listS3Buckets()).toEqual([]);
     expect(await p.listOpenSearchCollections()).toEqual([]);
+  });
+});
+
+// Lambda Web Functions create nothing in the engine — the registrar hands them
+// to the web-function manager — so both passes walk past them without a call.
+describe('web function resources', () => {
+  const web = [
+    { type: 'web-function', logicalId: 'Web', name: 'orders-web', tags: {} },
+    { type: 'web-function-revision', logicalId: 'Rev', name: 'Rev', functionRef: 'Web', revisionId: 'r1', runtime: 'nodejs24.x', environment: {}, timeoutSeconds: 30, maxConcurrency: 64 },
+    { type: 'web-function-endpoint', logicalId: 'Ep', name: 'live', functionRef: 'Web', endpointType: 'HomeRegion', authType: 'ApplicationManaged', revisionWeights: [] },
+  ] as Resource[];
+
+  it('provisions and cleans up nothing for them', async () => {
+    const result = await provisioner.provisionResources('svc', web);
+    expect(result.warnings).toEqual([]);
+    await provisioner.cleanupResources('svc', web);
+    expect(dynamoMock.calls()).toHaveLength(0);
+    expect(sqsMock.calls()).toHaveLength(0);
   });
 });
 
