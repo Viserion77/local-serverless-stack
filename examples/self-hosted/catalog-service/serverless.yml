@@ -14,6 +14,9 @@ provider:
     # On real AWS you would read it from GetAtt ProductsCollection.CollectionEndpoint.
     OPENSEARCH_ENDPOINT: http://localhost:14566/_aoss/products-catalog
     PRODUCTS_INDEX: products
+    # DynamoDB vector search: the embeddings table and its vector index.
+    EMBEDDINGS_TABLE: catalog-embeddings
+    EMBEDDINGS_INDEX: ProductEmbeddingIndex
 
 custom:
   lss:
@@ -61,8 +64,55 @@ functions:
           path: /stats
           method: get
 
+  # PUT /products/{id}/embedding — derives a (toy) embedding from the product
+  # text and stores it in DynamoDB.
+  putEmbedding:
+    handler: src/handlers/putEmbedding.handler
+    events:
+      - httpApi:
+          path: /products/{id}/embedding
+          method: put
+
+  # GET /products/{id}/similar?k=5 — SearchVectors over the vector index,
+  # scoped to the product's category.
+  similarProducts:
+    handler: src/handlers/similarProducts.handler
+    events:
+      - httpApi:
+          path: /products/{id}/similar
+          method: get
+
 resources:
   Resources:
+    # DynamoDB vector index (GA on AWS 2026-08-05): the embedding is a plain
+    # list attribute; SearchVectors ranks items by cosine distance to a query
+    # vector, within one `category` (the index's HASH). Vector indexes are
+    # on-demand only — PAY_PER_REQUEST is required.
+    CatalogEmbeddingsTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: catalog-embeddings
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - AttributeName: productId
+            AttributeType: S
+          - AttributeName: category
+            AttributeType: S
+        KeySchema:
+          - AttributeName: productId
+            KeyType: HASH
+        VectorIndexes:
+          - IndexName: ProductEmbeddingIndex
+            VectorAttribute:
+              AttributeName: embedding
+            SearchSchema:
+              - AttributeName: category
+                SearchSchemaElementType: HASH
+            Projection:
+              ProjectionType: ALL
+            Dimensions: 8
+            DistanceFunction: COSINE
+
     ProductsCollection:
       Type: AWS::OpenSearchServerless::Collection
       Properties:
