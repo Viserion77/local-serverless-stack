@@ -3,9 +3,11 @@
 // explicit fallback keeps a bare `node` run pointed at the default port.
 //
 // @aws-sdk/* is resolved from the repository's root node_modules (Node walks
-// up from this file), which carries a client recent enough for
-// SearchVectorsCommand (>= 3.1169). Copied out of the repo, the service needs
-// its own `npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb`.
+// up from this file — the example runs handlers in `source` mode, see
+// ../../lss.config.json), which carries a client recent enough for
+// SearchVectorsCommand (>= 3.1169). Copied out of the repo, or run from the
+// packaged artifact, the service needs its own
+// `npm install @aws-sdk/client-dynamodb @aws-sdk/lib-dynamodb`.
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');
 const { DynamoDBDocumentClient } = require('@aws-sdk/lib-dynamodb');
 
