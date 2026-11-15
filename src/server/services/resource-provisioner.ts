@@ -1,4 +1,7 @@
-import { DynamoDBClient, CreateTableCommand, ListTablesCommand, DeleteTableCommand, DescribeTableCommand, UpdateTimeToLiveCommand } from '@aws-sdk/client-dynamodb';
+import {
+  DynamoDBClient, CreateTableCommand, ListTablesCommand, DeleteTableCommand, DescribeTableCommand, UpdateTableCommand,
+  UpdateTimeToLiveCommand,
+} from '@aws-sdk/client-dynamodb';
 import { SQSClient, CreateQueueCommand, ListQueuesCommand, GetQueueAttributesCommand, SetQueueAttributesCommand, DeleteQueueCommand, GetQueueUrlCommand } from '@aws-sdk/client-sqs';
 import { SNSClient, CreateTopicCommand, ListTopicsCommand, DeleteTopicCommand } from '@aws-sdk/client-sns';
 import {
@@ -83,6 +86,11 @@ interface DeferredEventRule {
 function errorMessageOf(error: unknown): string {
   const message = (error as { message?: unknown })?.message;
   return typeof message === 'string' && message.trim() ? message : 'Unknown error';
+}
+
+function errorNameOf(error: unknown): string | undefined {
+  const name = (error as { name?: unknown })?.name;
+  return typeof name === 'string' ? name : undefined;
 }
 
 /**
@@ -289,7 +297,7 @@ export class ResourceProvisioner {
       try {
         switch (resource.type) {
           case 'dynamodb':
-            await this.createDynamoDBTable(resource);
+            await this.createDynamoDBTable(resource, warnings);
             provisionedCount++;
             break;
           case 'sqs':
@@ -454,10 +462,27 @@ export class ResourceProvisioner {
     }
   }
 
-  private async createDynamoDBTable(resource: DynamoDBResource): Promise<void> {
+  private async createDynamoDBTable(resource: DynamoDBResource, warnings: string[]): Promise<void> {
+    // Vector indexes are on-demand only: AWS rejects them on a PROVISIONED
+    // table (and an absent BillingMode means PROVISIONED). The engine does
+    // too, so rather than fail the whole table — and the boot with it — the
+    // table is created without them and the warning says how to fix the
+    // template (PRD §4.6, non-fatal provisioning).
+    let vectorIndexes = resource.vectorIndexes ?? [];
+    if (vectorIndexes.length > 0 && resource.billingMode !== 'PAY_PER_REQUEST') {
+      this.warnVectorIndexes(
+        warnings,
+        `DynamoDB table "${resource.name}" declares vector index(es) ${vectorIndexes.map(i => i.IndexName).join(', ')} ` +
+          `but its BillingMode is ${resource.billingMode ?? 'PROVISIONED (the default)'}; vector indexes require ` +
+          'BillingMode: PAY_PER_REQUEST, so the table was provisioned WITHOUT them — set BillingMode: PAY_PER_REQUEST in the template',
+      );
+      vectorIndexes = [];
+    }
+    let attributeDefinitions: Array<{ AttributeName: string; AttributeType: string }> = [];
     try {
-      // Ensure attribute definitions include all attributes referenced by KeySchema and GSIs/LSIs
-      const attributeDefinitions = [...(resource.attributeDefinitions || [])];
+      // Ensure attribute definitions include all attributes referenced by
+      // KeySchema, GSIs/LSIs and vector-index SearchSchemas
+      attributeDefinitions = [...(resource.attributeDefinitions || [])];
       const defined = new Set(attributeDefinitions.map(a => a.AttributeName));
 
       const required = new Set<string>();
@@ -475,6 +500,7 @@ export class ResourceProvisioner {
       };
       collectIndexKeys(gsiList);
       collectIndexKeys(lsiList);
+      vectorIndexes.forEach(idx => (idx.SearchSchema || []).forEach(el => required.add(el.AttributeName)));
 
       for (const attr of required) {
         if (!defined.has(attr)) {
@@ -482,32 +508,48 @@ export class ResourceProvisioner {
         }
       }
 
-      await this.dynamoClient.send(
-        new CreateTableCommand({
-          TableName: resource.name,
-          KeySchema: resource.keySchema as any,
-          AttributeDefinitions: attributeDefinitions as any,
-          BillingMode: resource.billingMode as any,
-          GlobalSecondaryIndexes: (resource.globalSecondaryIndexes || []).length
-            ? (resource.globalSecondaryIndexes as any)
-            : undefined,
-          LocalSecondaryIndexes: (resource.localSecondaryIndexes || []).length
-            ? (resource.localSecondaryIndexes as any)
-            : undefined,
-          StreamSpecification: resource.streamEnabled
-            ? {
-                StreamEnabled: true,
-                StreamViewType: resource.streamViewType || 'NEW_AND_OLD_IMAGES',
-              }
-            : undefined,
-        }),
-      );
+      const createInput = {
+        TableName: resource.name,
+        KeySchema: resource.keySchema as any,
+        AttributeDefinitions: attributeDefinitions as any,
+        BillingMode: resource.billingMode as any,
+        GlobalSecondaryIndexes: (resource.globalSecondaryIndexes || []).length
+          ? (resource.globalSecondaryIndexes as any)
+          : undefined,
+        LocalSecondaryIndexes: (resource.localSecondaryIndexes || []).length
+          ? (resource.localSecondaryIndexes as any)
+          : undefined,
+        StreamSpecification: resource.streamEnabled
+          ? {
+              StreamEnabled: true,
+              StreamViewType: resource.streamViewType || 'NEW_AND_OLD_IMAGES',
+            }
+          : undefined,
+      };
+      try {
+        await this.dynamoClient.send(
+          new CreateTableCommand({ ...createInput, VectorIndexes: vectorIndexes.length ? (vectorIndexes as any) : undefined }),
+        );
+      } catch (error) {
+        // A vector index the engine refuses (bad Dimensions, an undefined
+        // SearchSchema attribute…) must not cost the table itself: retry
+        // without the vector indexes and say why.
+        if (vectorIndexes.length === 0 || errorNameOf(error) !== 'ValidationException') throw error;
+        this.warnVectorIndexes(
+          warnings,
+          `DynamoDB table "${resource.name}": vector index(es) ${vectorIndexes.map(i => i.IndexName).join(', ')} were rejected ` +
+            `(${errorMessageOf(error)}); the table was provisioned WITHOUT them`,
+        );
+        vectorIndexes = [];
+        await this.dynamoClient.send(new CreateTableCommand(createInput));
+      }
       console.log(`  ✓ Created DynamoDB table: ${resource.name}`);
       SeedManager.getInstance().seedOnTableCreated(resource.name, this.currentRegion);
   } catch (error) {
     const errorName = error instanceof Error && 'name' in error ? (error as {name: string}).name : '';
     if (errorName === 'ResourceInUseException') {
-        // Table already exists, ignore
+        // Table already exists: bring its vector indexes up to the template.
+        await this.syncVectorIndexes(resource, vectorIndexes, attributeDefinitions, warnings);
       } else {
         throw error;
       }
@@ -515,6 +557,67 @@ export class ResourceProvisioner {
     // Applied to pre-existing tables too, so tables created before LSS knew
     // about TTL pick it up on re-registration.
     await this.applyTimeToLive(resource);
+  }
+
+  private warnVectorIndexes(warnings: string[], message: string): void {
+    console.warn(`  ⚠ ${message}`);
+    warnings.push(message);
+  }
+
+  /**
+   * Re-registration of a table that already exists: add every declared
+   * vector index it lacks, ONE UpdateTable per index (AWS allows a single
+   * index creation per table at a time, and per call). The policy is
+   * additive like the rest of the provisioner — an index the template no
+   * longer declares is reported, never deleted, so a stray edit cannot drop
+   * data a developer is working with. Every failure is a warning.
+   */
+  private async syncVectorIndexes(
+    resource: DynamoDBResource,
+    declared: NonNullable<DynamoDBResource['vectorIndexes']>,
+    attributeDefinitions: Array<{ AttributeName: string; AttributeType: string }>,
+    warnings: string[],
+  ): Promise<void> {
+    let present: string[];
+    try {
+      const described = await this.dynamoClient.send(new DescribeTableCommand({ TableName: resource.name }));
+      // A table described without a body (no engine reply) has nothing to diff.
+      if (!described?.Table) return;
+      present = (described.Table.VectorIndexes ?? []).map(index => index.IndexName!);
+    } catch (error) {
+      this.warnVectorIndexes(warnings, `DynamoDB table "${resource.name}": could not read its vector indexes (${errorMessageOf(error)})`);
+      return;
+    }
+    for (const index of declared) {
+      if (present.includes(index.IndexName)) continue;
+      const needed = new Set((index.SearchSchema || []).map(el => el.AttributeName));
+      try {
+        await this.dynamoClient.send(new UpdateTableCommand({
+          TableName: resource.name,
+          AttributeDefinitions: needed.size
+            ? (attributeDefinitions.filter(def => needed.has(def.AttributeName)) as any)
+            : undefined,
+          VectorIndexUpdates: [{ Create: index as any }],
+        }));
+        console.log(`  ✓ Added vector index ${index.IndexName} to ${resource.name}`);
+      } catch (error) {
+        // A concurrent registration may have added it first.
+        if (/Duplicate index name/i.test(errorMessageOf(error))) continue;
+        this.warnVectorIndexes(
+          warnings,
+          `DynamoDB table "${resource.name}": vector index ${index.IndexName} was NOT added (${errorMessageOf(error)})`,
+        );
+      }
+    }
+    const declaredNames = new Set(declared.map(index => index.IndexName));
+    const stale = present.filter(name => !declaredNames.has(name));
+    if (stale.length > 0) {
+      this.warnVectorIndexes(
+        warnings,
+        `DynamoDB table "${resource.name}" has vector index(es) ${stale.join(', ')} that the template no longer declares; ` +
+          'LSS never deletes an index on re-registration — delete the table (or the index through UpdateTable) to drop it',
+      );
+    }
   }
 
   private async applyTimeToLive(resource: DynamoDBResource): Promise<void> {

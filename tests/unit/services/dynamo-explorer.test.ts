@@ -15,6 +15,7 @@ import {
   GetItemCommand,
   PutItemCommand,
   DeleteItemCommand,
+  SearchVectorsCommand,
 } from '@aws-sdk/client-dynamodb';
 import { marshall } from '@aws-sdk/util-dynamodb';
 import { DynamoExplorer } from '../../../src/server/services/dynamo-explorer';
@@ -96,6 +97,7 @@ describe('listTables / summarize', () => {
         AttributeDefinitions: [{ AttributeName: 'pk', AttributeType: 'S' }],
         GlobalSecondaryIndexes: [{ IndexName: 'gsi1' }],
         LocalSecondaryIndexes: [{ IndexName: 'lsi1' }],
+        VectorIndexes: [{ IndexName: 'vec1' }],
         StreamSpecification: { StreamEnabled: true, StreamViewType: 'NEW_IMAGE' },
         BillingModeSummary: { BillingMode: 'PAY_PER_REQUEST' },
         CreationDateTime: new Date('2024-01-01T00:00:00.000Z'),
@@ -114,6 +116,7 @@ describe('listTables / summarize', () => {
       sizeBytes: 128,
       hasGsi: true,
       hasLsi: true,
+      hasVectorIndex: true,
       streamEnabled: true,
       billingMode: 'PAY_PER_REQUEST',
       createdAt: '2024-01-01T00:00:00.000Z',
@@ -141,6 +144,7 @@ describe('listTables / summarize', () => {
       attributeDefinitions: [],
       hasGsi: false,
       hasLsi: false,
+      hasVectorIndex: false,
       streamEnabled: false,
       billingMode: 'PROVISIONED',
       createdAt: undefined,
@@ -201,6 +205,7 @@ describe('describeTable', () => {
         TableArn: 'arn:aws:dynamodb:us-east-1:000:table/t',
         GlobalSecondaryIndexes: [{ IndexName: 'gsi1' }],
         LocalSecondaryIndexes: [{ IndexName: 'lsi1' }],
+        VectorIndexes: [{ IndexName: 'vec1', Dimensions: 8 }],
         LatestStreamArn: 'arn:aws:dynamodb:us-east-1:000:table/t/stream/x',
         StreamSpecification: { StreamEnabled: true, StreamViewType: 'NEW_AND_OLD_IMAGES' },
       },
@@ -215,6 +220,7 @@ describe('describeTable', () => {
       arn: 'arn:aws:dynamodb:us-east-1:000:table/t',
       gsis: [{ IndexName: 'gsi1' }],
       lsis: [{ IndexName: 'lsi1' }],
+      vectorIndexes: [{ IndexName: 'vec1', Dimensions: 8 }],
       streamArn: 'arn:aws:dynamodb:us-east-1:000:table/t/stream/x',
       streamViewType: 'NEW_AND_OLD_IMAGES',
     });
@@ -227,6 +233,7 @@ describe('describeTable', () => {
     expect(detail).toMatchObject({
       gsis: [],
       lsis: [],
+      vectorIndexes: [],
       arn: undefined,
       streamArn: undefined,
       streamViewType: undefined,
@@ -448,5 +455,134 @@ describe('deleteItem', () => {
     await expect(explorer.deleteItem('t', { pk: 'a' })).resolves.toBeUndefined();
     const input = ddbMock.commandCalls(DeleteItemCommand)[0].args[0].input as any;
     expect(input.Key).toEqual(marshall({ pk: 'a' }));
+  });
+});
+
+describe('searchVectors', () => {
+  const embeddingIndex = {
+    IndexName: 'ProductEmbeddingIndex',
+    VectorAttribute: { AttributeName: 'embedding' },
+    SearchSchema: [
+      { AttributeName: 'category', SearchSchemaElementType: 'HASH' as const },
+      { AttributeName: 'brand', SearchSchemaElementType: 'INLINE_FILTER' as const },
+    ],
+    Dimensions: 2,
+    DistanceFunction: 'COSINE' as const,
+  };
+  const describeWith = (vectorIndexes: unknown[] | undefined) =>
+    ddbMock.on(DescribeTableCommand).resolves({
+      Table: { KeySchema: [{ AttributeName: 'productId', KeyType: 'HASH' }], VectorIndexes: vectorIndexes as never },
+    });
+  const hit = (id: string, score: number) => ({ Item: marshall({ productId: id, category: 'mice' }), Score: score });
+
+  it('runs a vector query on the only index, turning `filter` into a SearchConditionExpression', async () => {
+    describeWith([embeddingIndex]);
+    ddbMock.on(SearchVectorsCommand).resolves({ SearchResults: [hit('p1', 0.01), hit('p2', 0.4)] });
+    const out = await explorer.searchVectors('catalog', { vector: [1, 0], topK: 2, filter: { category: 'mice', brand: 'acme' } });
+    expect(out).toEqual({
+      indexName: 'ProductEmbeddingIndex',
+      distanceFunction: 'COSINE',
+      source: 'vector',
+      results: [
+        { item: { productId: 'p1', category: 'mice' }, score: 0.01 },
+        { item: { productId: 'p2', category: 'mice' }, score: 0.4 },
+      ],
+    });
+    const input = ddbMock.commandCalls(SearchVectorsCommand)[0].args[0].input;
+    expect(input).toEqual({
+      TableName: 'catalog',
+      IndexName: 'ProductEmbeddingIndex',
+      SearchVector: [{ N: '1' }, { N: '0' }],
+      TopK: 2,
+      SearchConditionExpression: '#f0 = :f0 AND #f1 = :f1',
+      ExpressionAttributeNames: { '#f0': 'category', '#f1': 'brand' },
+      ExpressionAttributeValues: { ':f0': { S: 'mice' }, ':f1': { S: 'acme' } },
+      ProjectionExpression: undefined,
+    });
+  });
+
+  it('passes a raw condition / projection through and defaults topK to 10', async () => {
+    describeWith([embeddingIndex, { ...embeddingIndex, IndexName: 'Other' }]);
+    ddbMock.on(SearchVectorsCommand).resolves({ SearchResults: [{}] });
+    const out = await explorer.searchVectors('catalog', {
+      indexName: 'Other', vector: [0, 1],
+      searchConditionExpression: 'category = :c', expressionAttributeValues: { ':c': 'mice' },
+      projectionExpression: 'productId',
+    }, 'eu-west-1');
+    expect(out.results).toEqual([{ item: {}, score: 0 }]);
+    const input = ddbMock.commandCalls(SearchVectorsCommand)[0].args[0].input;
+    expect(input).toMatchObject({
+      IndexName: 'Other', TopK: 10, SearchConditionExpression: 'category = :c',
+      ExpressionAttributeValues: { ':c': { S: 'mice' } }, ProjectionExpression: 'productId',
+    });
+  });
+
+  it('searches with an existing item\'s embedding, scoped to its partition, leaving the item out', async () => {
+    describeWith([embeddingIndex]);
+    ddbMock.on(GetItemCommand).resolves({ Item: marshall({ productId: 'p1', category: 'mice', embedding: [0.6, 0.8] }) });
+    ddbMock.on(SearchVectorsCommand).resolves({ SearchResults: [hit('p1', 0), hit('p2', 0.1), hit('p3', 0.2)] });
+    const out = await explorer.searchVectors('catalog', { similarTo: { productId: 'p1' }, topK: 1 });
+    expect(out.source).toBe('similarTo');
+    expect(out.results.map(r => r.item.productId)).toEqual(['p2']);
+    const input = ddbMock.commandCalls(SearchVectorsCommand)[0].args[0].input;
+    expect(input.TopK).toBe(2);
+    expect(input.SearchVector).toEqual([{ N: '0.6' }, { N: '0.8' }]);
+    expect(input.ExpressionAttributeValues).toEqual({ ':f0': { S: 'mice' } });
+  });
+
+  it('keeps an explicit partition filter / raw condition, and caps the extra slot at 100', async () => {
+    describeWith([{ ...embeddingIndex, SearchSchema: undefined }]);
+    ddbMock.on(GetItemCommand).resolves({ Item: marshall({ productId: 'p1', embedding: [1, 0] }) });
+    ddbMock.on(SearchVectorsCommand).resolves({});
+    const out = await explorer.searchVectors('catalog', { similarTo: { productId: 'p1' }, topK: 100 });
+    expect(out.results).toEqual([]);
+    expect(ddbMock.commandCalls(SearchVectorsCommand)[0].args[0].input.TopK).toBe(100);
+
+    describeWith([embeddingIndex]);
+    ddbMock.on(GetItemCommand).resolves({ Item: marshall({ productId: 'p1', embedding: [1, 0] }) });
+    await explorer.searchVectors('catalog', { similarTo: { productId: 'p1' }, filter: { category: 'pads' } });
+    expect(ddbMock.commandCalls(SearchVectorsCommand)[1].args[0].input.ExpressionAttributeValues).toEqual({ ':f0': { S: 'pads' } });
+    ddbMock.on(GetItemCommand).resolves({ Item: marshall({ productId: 'p1', category: 'mice', embedding: [1, 0] }) });
+    await explorer.searchVectors('catalog', {
+      similarTo: { productId: 'p1' }, searchConditionExpression: 'category = :c', expressionAttributeValues: { ':c': 'pads' },
+    });
+    expect(ddbMock.commandCalls(SearchVectorsCommand)[2].args[0].input.SearchConditionExpression).toBe('category = :c');
+  });
+
+  it.each([
+    [undefined, {}, 'Table catalog has no vector index'],
+    [[embeddingIndex], { indexName: 'Nope', vector: [1, 0] }, 'Table catalog has no vector index named Nope (vector indexes: ProductEmbeddingIndex)'],
+    [[embeddingIndex, { ...embeddingIndex, IndexName: 'B' }], { vector: [1, 0] }, 'several vector indexes — pass indexName (one of: ProductEmbeddingIndex, B)'],
+    [[embeddingIndex], {}, 'Pass exactly one of vector or similarTo'],
+    [[embeddingIndex], { vector: [1], similarTo: { productId: 'p' } }, 'Pass exactly one of vector or similarTo'],
+    [[embeddingIndex], { vector: [1, 0], filter: {}, searchConditionExpression: 'x' }, 'Pass either filter or searchConditionExpression'],
+    [[embeddingIndex], { vector: [1, 0], topK: 0 }, 'topK must be an integer between 1 and 100'],
+    [[embeddingIndex], { vector: [1, 0], topK: 101 }, 'topK must be an integer between 1 and 100'],
+    [[embeddingIndex], { vector: [1, 0], topK: 2.5 }, 'topK must be an integer between 1 and 100'],
+    [[embeddingIndex], { vector: 'nope' }, 'vector must be an array of finite numbers'],
+    [[embeddingIndex], { vector: [1, Infinity] }, 'vector must be an array of finite numbers'],
+    [[embeddingIndex], { vector: [1, '0'] }, 'vector must be an array of finite numbers'],
+  ])('rejects bad input (%#)', async (indexes, input, message) => {
+    describeWith(indexes as unknown[] | undefined);
+    await expect(explorer.searchVectors('catalog', input as never)).rejects.toThrow(message);
+    expect(ddbMock.commandCalls(SearchVectorsCommand)).toHaveLength(0);
+  });
+
+  it('reports a missing similarTo item or one without an embedding', async () => {
+    describeWith([embeddingIndex]);
+    ddbMock.on(GetItemCommand).resolves({});
+    await expect(explorer.searchVectors('catalog', { similarTo: { productId: 'x' } })).rejects.toThrow('similarTo: item not found');
+    ddbMock.on(GetItemCommand).resolves({ Item: marshall({ productId: 'x', embedding: ['a'] }) });
+    await expect(explorer.searchVectors('catalog', { similarTo: { productId: 'x' } })).rejects.toThrow('the item has no embedding embedding');
+    ddbMock.on(GetItemCommand).resolves({ Item: marshall({ productId: 'x' }) });
+    await expect(explorer.searchVectors('catalog', { similarTo: { productId: 'x' } })).rejects.toThrow('has no embedding');
+  });
+
+  it('tolerates a description without a key schema', async () => {
+    ddbMock.on(DescribeTableCommand).resolves({ Table: { VectorIndexes: [embeddingIndex] } });
+    ddbMock.on(GetItemCommand).resolves({ Item: marshall({ productId: 'x', category: 'mice', embedding: [1, 0] }) });
+    ddbMock.on(SearchVectorsCommand).resolves({ SearchResults: [hit('y', 0.5)] });
+    // Without a key schema every item fingerprints alike, so the self-filter drops all.
+    expect((await explorer.searchVectors('catalog', { similarTo: { productId: 'x' } })).results).toEqual([]);
   });
 });

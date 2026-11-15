@@ -5,6 +5,8 @@ import type {
   ScanQueryInput,
   ScanQueryOutput,
   TtlInfo,
+  VectorSearchInput,
+  VectorSearchOutput,
 } from '../types';
 
 export interface DynamoApi {
@@ -14,6 +16,8 @@ export interface DynamoApi {
   setTtl(name: string, enabled: boolean, attributeName?: string, region?: string): Promise<TtlInfo>;
   scan(name: string, input?: ScanQueryInput, region?: string): Promise<ScanQueryOutput>;
   query(name: string, input: ScanQueryInput, region?: string): Promise<ScanQueryOutput>;
+  // Similarity search over a vector index (DynamoDB SearchVectors).
+  searchVectors(name: string, input: VectorSearchInput, region?: string): Promise<VectorSearchOutput>;
   getItem(name: string, key: Record<string, unknown>, region?: string): Promise<{ item: Record<string, unknown> | null }>;
   putItem(name: string, item: Record<string, unknown>, region?: string): Promise<{ success: true }>;
   deleteItem(name: string, key: Record<string, unknown>, region?: string): Promise<{ success: true }>;
@@ -35,6 +39,8 @@ export function createDynamoApi(http: Http, defaultRegion?: string): DynamoApi {
       http.json('POST', `${table(name)}/scan`, { body: input ?? {}, query: { region: reg(r) } }),
     query: (name, input, r) =>
       http.json('POST', `${table(name)}/query`, { body: input, query: { region: reg(r) } }),
+    searchVectors: (name, input, r) =>
+      http.json('POST', `${table(name)}/vector-search`, { body: input, query: { region: reg(r) } }),
     getItem: (name, key, r) =>
       http.json('POST', `${table(name)}/items/get`, { body: { key }, query: { region: reg(r) } }),
     putItem: (name, item, r) =>

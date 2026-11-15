@@ -50,6 +50,19 @@ export interface DynamoDBResource {
     Projection: { ProjectionType: string };
     [key: string]: unknown;
   }>;
+  // AWS::DynamoDB::Table.VectorIndexes (DynamoDB vector search, GA
+  // 2026-08-05) — passed to CreateTable as-is, and applied to an existing
+  // table one UpdateTable per missing index.
+  vectorIndexes?: DynamoDBVectorIndex[];
+}
+
+export interface DynamoDBVectorIndex {
+  IndexName: string;
+  VectorAttribute: { AttributeName: string };
+  SearchSchema?: Array<{ AttributeName: string; SearchSchemaElementType: string }>;
+  Projection?: { ProjectionType: string; NonKeyAttributes?: string[] };
+  Dimensions: number;
+  DistanceFunction: string;
 }
 
 export interface SQSResource {
@@ -579,6 +592,18 @@ export class CloudFormationParser {
     }
     if (ttlSpec?.AttributeName) {
       parsed.ttl = { attributeName: ttlSpec.AttributeName, enabled: ttlSpec.Enabled !== false };
+    }
+    if (Array.isArray(props.VectorIndexes) && props.VectorIndexes.length > 0) {
+      parsed.vectorIndexes = (props.VectorIndexes as DynamoDBVectorIndex[]).map((index) => {
+        // Intrinsics are already resolved by the static pass (cfn-intrinsics),
+        // but a Ref to a String parameter leaves "1536" — the CreateTable
+        // contract wants an integer, so coerce a numeric string.
+        const dimensions: unknown = index.Dimensions;
+        return {
+          ...index,
+          Dimensions: typeof dimensions === 'string' && /^\d+$/.test(dimensions) ? Number(dimensions) : index.Dimensions,
+        };
+      });
     }
     return parsed;
   }

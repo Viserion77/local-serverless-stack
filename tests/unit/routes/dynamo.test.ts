@@ -226,6 +226,36 @@ describe('POST /api/dynamo/tables/:name/query', () => {
   });
 });
 
+describe('POST /api/dynamo/tables/:name/vector-search', () => {
+  it('runs the search with the body and the region', async () => {
+    const out = { indexName: 'idx', source: 'vector', results: [{ item: { id: '1' }, score: 0.1 }] };
+    const spy = jest.spyOn(explorer, 'searchVectors').mockResolvedValue(out as never);
+    const res = await request(appWith())
+      .post('/api/dynamo/tables/catalog/vector-search?region=eu-west-1')
+      .send({ vector: [1, 0], topK: 3 });
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(out);
+    expect(spy).toHaveBeenCalledWith('catalog', { vector: [1, 0], topK: 3 }, 'eu-west-1');
+  });
+
+  it('defaults a missing body to {} (and lets the explorer explain what is missing)', async () => {
+    const spy = jest.spyOn(explorer, 'searchVectors').mockRejectedValue(new Error('Pass exactly one of vector or similarTo'));
+    const res = await request(appNoBody()).post('/api/dynamo/tables/catalog/vector-search');
+    expect(res.status).toBe(400);
+    expect(res.body).toEqual({ error: 'Pass exactly one of vector or similarTo' });
+    expect(spy).toHaveBeenCalledWith('catalog', {}, undefined);
+  });
+
+  it('rejects an array body and an invalid table name', async () => {
+    const arr = await request(appWith()).post('/api/dynamo/tables/catalog/vector-search').send([1, 2]);
+    expect(arr.status).toBe(400);
+    expect(arr.body).toEqual({ error: 'body must be a JSON object' });
+    const bad = await request(appWith()).post('/api/dynamo/tables/..%2F/vector-search').send({});
+    expect(bad.status).toBe(400);
+    expect(bad.body).toEqual({ error: 'Invalid table name' });
+  });
+});
+
 describe('POST /api/dynamo/tables/:name/items/get', () => {
   it('returns the item', async () => {
     const spy = jest.spyOn(explorer, 'getItem').mockResolvedValue({ id: '1' } as never);
