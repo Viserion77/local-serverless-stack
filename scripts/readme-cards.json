@@ -1,0 +1,36 @@
+{
+  "$comment": "README link cards. `npm run readme:cards` writes docs/readme/cards/<id>-{dark,light}.svg; tests/unit/docs/readme-cards.test.ts fails when a card is stale, missing from the README, or links nowhere. Icons: `aws` names a vendored AWS mark (src/ui/src/icons/aws), `glyph` a TreeUI Branchline icon.",
+  "groups": [
+    {
+      "id": "start",
+      "title": "Start here",
+      "cards": [
+        { "id": "quick-start", "title": "Quick start", "subtitle": "npx lss start", "href": "#quick-start", "icon": { "glyph": "rocket" } },
+        { "id": "cli", "title": "CLI", "subtitle": "start · register · seed", "href": "#cli-1", "icon": { "glyph": "terminal" } },
+        { "id": "configuration", "title": "Configuration", "subtitle": "lss.config.json", "href": "docs/CONFIGURATION.md", "icon": { "glyph": "sliders-horizontal" } },
+        { "id": "self-engine", "title": "Self engine", "subtitle": "in-process AWS, no Docker", "href": "docs/SELF_ENGINE.md", "icon": { "glyph": "cpu" } },
+        { "id": "features", "title": "Feature inventory", "subtitle": "docs/FEATURES.md", "href": "docs/FEATURES.md", "icon": { "glyph": "list-checks" } },
+        { "id": "mcp", "title": "MCP server", "subtitle": "lss mcp", "href": "docs/MCP.md", "icon": { "glyph": "bot" } },
+        { "id": "migration", "title": "Migrating to 1.x", "subtitle": "from 0.x and LocalStack", "href": "docs/MIGRATION-v1.md", "icon": { "glyph": "git-branch" } },
+        { "id": "releasing", "title": "Releasing", "subtitle": "docs/RELEASE.md", "href": "docs/RELEASE.md", "icon": { "glyph": "package" } },
+        { "id": "stack-map", "title": "Stack map", "subtitle": "dashboard · /stack", "href": "#stack-map", "icon": { "glyph": "network" } }
+      ]
+    },
+    {
+      "id": "engine",
+      "title": "What the engine emulates",
+      "cards": [
+        { "id": "engine-dynamodb", "title": "DynamoDB", "subtitle": "streams · TTL · GSIs", "href": "#engine-dynamodb", "icon": { "aws": "aws-dynamodb" } },
+        { "id": "engine-lambda", "title": "Lambda", "subtitle": "Invoke · ESMs · runtime", "href": "#engine-lambda", "icon": { "aws": "aws-lambda" } },
+        { "id": "engine-api-gateway", "title": "API Gateway", "subtitle": "HTTP · REST · authorizers", "href": "#engine-api-gateway", "icon": { "aws": "aws-api-gateway" } },
+        { "id": "engine-sqs", "title": "SQS", "subtitle": "FIFO · DLQ redrive", "href": "#engine-sqs", "icon": { "aws": "aws-sqs" } },
+        { "id": "engine-sns", "title": "SNS", "subtitle": "topics · publish", "href": "#engine-sns", "icon": { "aws": "aws-sns" } },
+        { "id": "engine-s3", "title": "S3", "subtitle": "presigned POST · CORS", "href": "#engine-s3", "icon": { "aws": "aws-s3" } },
+        { "id": "engine-eventbridge", "title": "EventBridge", "subtitle": "rules · schedules", "href": "#engine-eventbridge", "icon": { "aws": "aws-eventbridge" } },
+        { "id": "engine-secrets-manager", "title": "Secrets Manager", "subtitle": "version stages", "href": "#engine-secrets-manager", "icon": { "aws": "aws-secrets-manager" } },
+        { "id": "engine-ssm", "title": "SSM Parameter Store", "subtitle": "versions · SecureString", "href": "#engine-ssm", "icon": { "aws": "aws-systems-manager" } },
+        { "id": "engine-opensearch", "title": "OpenSearch Serverless", "subtitle": "collections · query DSL", "href": "#engine-opensearch", "icon": { "aws": "aws-opensearch" } }
+      ]
+    }
+  ]
+}

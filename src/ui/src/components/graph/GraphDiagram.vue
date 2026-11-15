@@ -79,9 +79,12 @@ onMounted(() => {
 });
 onBeforeUnmount(() => stopTheme?.());
 
+// The export is the DECLARED architecture: no live counters (a snapshot of one
+// session's traffic would date the file the moment it is saved) and no
+// "collapse" hint (nothing in a file can be clicked).
 function download(): void {
   if (!layout.value || !palette.value) return;
-  downloadSvg(renderGraphSvg(layout.value, palette.value, text.value, props.title), props.filename);
+  downloadSvg(renderGraphSvg(layout.value, palette.value, createGraphText(t, new Map(), false), props.title), props.filename);
 }
 
 // The accessible equivalent: every connector, in words.

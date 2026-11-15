@@ -51,6 +51,7 @@
     "ui:dev": "cd src/ui && npm run dev",
     "ui:build": "cd src/ui && npm run build",
     "icons:aws": "node scripts/generate-aws-icons.mjs",
+    "readme:cards": "node scripts/readme-cards.mjs",
     "dev": "concurrently \"npm run server:dev\" \"npm run ui:dev\"",
     "setup": "npm install && cd src/ui && npm install",
     "prepublishOnly": "npm run build",
