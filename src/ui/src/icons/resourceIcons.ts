@@ -63,6 +63,9 @@ export const resourceTypeIcons: Readonly<Record<ServiceResource['type'], TIconNa
  */
 export const graphNodeIcons: Readonly<Record<GraphNodeKind, TIconName>> = {
   lambda: 'aws-lambda',
+  // A Lambda Web Function is a Lambda function type: same service, same mark —
+  // its card says "Web" in words.
+  'web-function': 'aws-lambda',
   dynamodb: 'aws-dynamodb',
   sqs: 'aws-sqs',
   sns: 'aws-sns',
@@ -71,8 +74,13 @@ export const graphNodeIcons: Readonly<Record<GraphNodeKind, TIconName>> = {
   'event-rule': 'aws-eventbridge',
   opensearch: 'aws-opensearch',
   secret: 'aws-secrets-manager',
+  ssm: 'aws-systems-manager',
   route: 'aws-api-gateway',
+  api: 'aws-api-gateway',
   'iam-role': 'aws-iam',
+  // A whole service drawn collapsed on the stack map is one CloudFormation
+  // stack — the unit AWS itself draws it as.
+  service: 'aws-cloudformation',
   external: 'external-link',
 };
 

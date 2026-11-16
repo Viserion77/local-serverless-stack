@@ -91,6 +91,7 @@ const menuItems = computed<TDropdownItem[]>(() => [
 const navItems = computed<TNavMenuItem[]>(() => [
   { label: t('nav.overview'), value: '/', icon: 'layout-dashboard' },
   { label: t('nav.services'), value: '/services', icon: 'boxes' },
+  { label: t('nav.stack'), value: '/stack', icon: 'network' },
   { label: t('nav.lambdas'), value: '/lambdas', icon: 'aws-lambda' },
   { label: t('nav.apis'), value: '/apis', icon: 'aws-api-gateway' },
   // Same AWS service as APIs, so the brand mark would make two identical tiles

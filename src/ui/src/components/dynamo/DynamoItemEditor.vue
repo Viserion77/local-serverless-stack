@@ -128,7 +128,7 @@ function formatDraft() {
         v-model="draft"
         :rows="18"
         :readonly="readOnly"
-        spellcheck="false"
+        :spellcheck="false"
         family="mono"
         @blur="tryParse"
       />

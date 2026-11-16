@@ -14,10 +14,18 @@
 // Teaches TypeScript about the application-supplied icons registered by
 // `registerAwsIcons()`, so `<TIcon name="aws-lambda" />` and every other
 // `TIconInput` prop in TreeUI typecheck. The `export {}` is required: without
-// it this becomes an ambient module that SHADOWS the real @treeui/icons.
+// it this becomes an ambient module that SHADOWS the real package.
+//
+// The augmentation targets `@treeui/vue`, which re-exports `TIconRegistry`,
+// and NOT `@treeui/icons`, where the interface is declared. Since
+// `@treeui/vue` 0.34 npm nests `@treeui/icons` under the library's own
+// `node_modules`, so the dashboard can no longer resolve that specifier: an
+// augmentation of a module that does not resolve merges into nothing, and every
+// `aws-*` name stopped typechecking. The package the app actually depends on
+// is the one it can always resolve.
 export {};
 
-declare module '@treeui/icons' {
+declare module '@treeui/vue' {
   interface TIconRegistry {
     'aws-acm': true;
     'aws-amplify': true;

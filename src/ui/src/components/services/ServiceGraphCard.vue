@@ -11,20 +11,20 @@
 // useful to sighted users too, because "which links exist" is easier to read as
 // a list than to trace as a curve.
 //
-// The drawing itself lives in `../graph/graphCanvas.ts`. Nothing in this file
-// touches the canvas API, for the ESLint reason documented there.
-import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue';
+// The drawing itself is `../graph/GraphDiagram.vue` (TreeUI's TCanvasSurface,
+// shared with the stack map page). It also carries the same connections as a
+// table inside the canvas, for assistive technology.
+import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   TAlert, TBadge, TCard, TCheckbox, TEmptyState, TIcon, TSpinner, TStack, TTab,
-  TTabList, TTabPanel, TTable, TTabs, TTag, TText,
+  TTabList, TTabPanel, TTable, TTabs, TText,
 } from '@treeui/vue';
 import { api } from '../../services/api';
 import type { GraphEdgeKind, GraphNode, ServiceGraph } from '../../services/api';
 import { graphNodeIcons } from '../../icons/resourceIcons';
 import { useI18n } from '../../i18n';
-import type { GraphCanvas, GraphSurface } from '../graph/graphCanvas';
-import { createGraphSurface } from '../graph/graphCanvas';
+import GraphDiagram from '../graph/GraphDiagram.vue';
 
 const props = defineProps<{ serviceName: string }>();
 const router = useRouter();
@@ -34,11 +34,6 @@ const graph = ref<ServiceGraph | null>(null);
 const loading = ref(true);
 const error = ref<string | null>(null);
 const tab = ref('diagram');
-const hovered = ref<GraphNode | null>(null);
-const canvasRef = ref<GraphCanvas | null>(null);
-// shallowRef: the surface owns DOM listeners and observers, and making it deeply
-// reactive would have Vue walk a canvas element on every mutation.
-const surface = shallowRef<GraphSurface | null>(null);
 
 // Every edge kind starts visible. Hiding one is a user action, so the diagram
 // never opens having silently dropped something — the lesson TREEUX-017 records
@@ -58,6 +53,7 @@ const kindLabels = computed<Record<GraphEdgeKind, string>>(() => ({
   redrive: t('services.graphKindRedrive'),
   iam: t('services.graphKindIam'),
   env: t('services.graphKindEnv'),
+  'cross-service': t('graph.kindCrossService'),
 }));
 
 const nodesById = computed(() => new Map((graph.value?.nodes ?? []).map(node => [node.id, node])));
@@ -93,12 +89,14 @@ const visibleEdgeCount = computed(() => rows.value.length);
 function routeFor(node: GraphNode): string | null {
   switch (node.kind) {
     case 'lambda': return `/lambdas/${encodeURIComponent(node.label)}`;
+    case 'web-function': return `/lambdas/web/${encodeURIComponent(props.serviceName)}/${encodeURIComponent(node.label)}`;
     case 'dynamodb': return `/dynamo/${encodeURIComponent(node.label)}`;
     case 'sqs': return `/queues/${encodeURIComponent(node.label)}`;
     case 's3': return `/buckets/${encodeURIComponent(node.label)}`;
     case 'opensearch': return `/opensearch/${encodeURIComponent(node.label)}`;
     case 'secret': return '/secrets';
-    case 'route': return '/apis';
+    case 'route':
+    case 'api': return '/apis';
     default: return null;
   }
 }
@@ -128,31 +126,12 @@ async function load(): Promise<void> {
   }
 }
 
-// One effect drives the surface: it is created when the canvas first exists
-// (which is only after the diagram tab has rendered), and re-rendered whenever
-// the data, the filters or the language change.
-watch([canvasRef, graph, hiddenKinds], () => {
-  const canvas = canvasRef.value;
-  if (!canvas) {
-    surface.value?.destroy();
-    surface.value = null;
-    return;
-  }
-  if (!surface.value) {
-    surface.value = createGraphSurface(canvas, {
-      onActivate: activate,
-      onHover: node => { hovered.value = node; },
-    });
-  }
-  surface.value.render(graph.value, hiddenKinds.value);
-}, { flush: 'post' });
+// What the diagram draws: the payload minus the kinds the user switched off.
+const drawn = computed(() => (graph.value
+  ? { nodes: graph.value.nodes, edges: graph.value.edges.filter(edge => !hiddenKinds.value.has(edge.kind)) }
+  : null));
 
 watch(() => props.serviceName, load, { immediate: true });
-
-onBeforeUnmount(() => {
-  surface.value?.destroy();
-  surface.value = null;
-});
 
 defineExpose({ reload: load });
 </script>
@@ -227,39 +206,14 @@ defineExpose({ reload: load });
           </TTabList>
 
           <TTabPanel value="diagram">
-            <TStack direction="vertical" gap="0.5rem">
-              <!--
-                `role="img"` plus a name that states the shape of the picture:
-                the canvas is one image to assistive tech, and the Connections
-                tab beside it is the equivalent it points at.
-              -->
-              <div>
-                <canvas
-                  ref="canvasRef"
-                  role="img"
-                  :aria-label="t('services.graphAriaLabel', {
-                    name: serviceName,
-                    nodes: graph.nodes.length,
-                    edges: visibleEdgeCount,
-                  })"
-                ></canvas>
-              </div>
-              <TStack direction="horizontal" gap="0.5rem" align="center" wrap>
-                <template v-if="hovered">
-                  <TTag size="sm" variant="soft">
-                    <template #icon><TIcon :name="graphNodeIcons[hovered.kind]" /></template>
-                    {{ hovered.label }}
-                  </TTag>
-                  <TText v-if="hovered.handler || hovered.arn" size="sm" tone="muted" family="mono">
-                    {{ hovered.handler || hovered.arn }}
-                  </TText>
-                  <TBadge v-if="hovered.kind === 'external'" tone="warning" variant="soft">
-                    {{ t('services.graphExternal') }}
-                  </TBadge>
-                </template>
-                <TText v-else size="sm" tone="muted">{{ t('services.graphHint') }}</TText>
-              </TStack>
-            </TStack>
+            <GraphDiagram
+              :graph="drawn"
+              :title="t('services.graphAriaLabel', { name: serviceName, nodes: graph.nodes.length, edges: visibleEdgeCount })"
+              :filename="`${serviceName}-wiring.svg`"
+              :height="560"
+              :hint="t('graph.hint')"
+              @activate="activate"
+            />
           </TTabPanel>
 
           <TTabPanel value="table">
