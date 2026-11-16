@@ -58,6 +58,11 @@ jobs:
       - name: Install dependencies (catalog-service example)
         run: npm ci --prefix examples/self-hosted/catalog-service
 
+      # web-functions.test.ts packages and runs examples/self-hosted/orders-service
+      # (osls for `serverless package`, the AWS SDK for the orders-web app).
+      - name: Install dependencies (self-hosted orders-service example)
+        run: npm ci --prefix examples/self-hosted/orders-service
+
       - name: Build project
         run: npm run build
 

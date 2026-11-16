@@ -10,6 +10,7 @@ import net from 'net';
 import http from 'http';
 import { spawn } from 'child_process';
 import AdmZip from 'adm-zip';
+import { pathToFileURL } from 'url';
 import { ConfigManager } from '../../../src/server/services/config-manager';
 import {
   WebFunctionManager,
@@ -137,24 +138,33 @@ describe('web-function-runtime helpers', () => {
     expect(own.AWS_LAMBDA_NODEJS_ENTRYPOINT).toBe('dist/index.js');
   });
 
+  // Hermetic: every loader is a stub package in a temp dir with no node_modules
+  // above it, so the answer never depends on what this machine has installed.
   it('picks TypeScript preloads in the worker order, service first', () => {
-    expect(typescriptPreloadArgs('/a/server.js', [REPO], false)).toEqual([]);
-    expect(typescriptPreloadArgs('/a/server.ts', [REPO], true)).toEqual([]);
-    const tsx = typescriptPreloadArgs('/a/server.mts', [path.join(REPO, 'package.json')], false);
-    expect(tsx[0]).toBe('--import');
-    expect(tsx[1]).toMatch(/^file:.*tsx/);
-    const withEsbuild = path.join(REPO, 'tests/integration/fixtures/apigw-raw/users-service/noop.js');
-    expect(typescriptPreloadArgs('/a/server.ts', [withEsbuild], false)).toEqual(['--require', expect.stringContaining('esbuild-register')]);
-
     const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'lss-ts-'));
-    const tsNode = path.join(tmp, 'node_modules', 'ts-node', 'register');
-    fs.mkdirSync(tsNode, { recursive: true });
-    fs.writeFileSync(path.join(tsNode, 'transpile-only.js'), '');
-    expect(typescriptPreloadArgs('/a/server.cts', [path.join(tmp, 'noop.js')], false)).toEqual(['--require', path.join(tsNode, 'transpile-only.js')]);
-    const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'lss-ts-empty-'));
-    expect(() => typescriptPreloadArgs('/a/server.ts', [path.join(empty, 'noop.js')], false)).toThrow(/no TS loader/);
+    function stub(dir: string, id: string, file: string, exportsField?: string): string {
+      const pkg = path.join(tmp, dir, 'node_modules', id.split('/')[0]);
+      const target = path.join(pkg, file);
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, '');
+      if (exportsField) fs.writeFileSync(path.join(pkg, 'package.json'), JSON.stringify({ name: id, exports: { '.': exportsField } }));
+      return target;
+    }
+    const base = (dir: string) => path.join(tmp, dir, 'noop.js');
+    const esbuild = stub('all', 'esbuild-register', 'register.js', './register.js');
+    stub('all', 'tsx', 'dist/loader.mjs', './dist/loader.mjs');
+    const tsx = stub('tsx-only', 'tsx', 'dist/loader.mjs', './dist/loader.mjs');
+    const tsNode = stub('ts-node-only', 'ts-node', 'register/transpile-only.js');
+
+    expect(typescriptPreloadArgs('/a/server.js', [base('all')], false)).toEqual([]);
+    expect(typescriptPreloadArgs('/a/server.ts', [base('all')], true)).toEqual([]);
+    // esbuild-register wins over tsx in the same location, like the worker.
+    expect(typescriptPreloadArgs('/a/server.ts', [base('all')], false)).toEqual(['--require', esbuild]);
+    // The service location is tried before LSS's own.
+    expect(typescriptPreloadArgs('/a/server.mts', [base('tsx-only'), base('all')], false)).toEqual(['--import', pathToFileURL(tsx).href]);
+    expect(typescriptPreloadArgs('/a/server.cts', [base('empty'), base('ts-node-only')], false)).toEqual(['--require', tsNode]);
+    expect(() => typescriptPreloadArgs('/a/server.ts', [base('empty')], false)).toThrow(/no TS loader/);
     fs.rmSync(tmp, { recursive: true, force: true });
-    fs.rmSync(empty, { recursive: true, force: true });
   });
 
   it('detects native type stripping', () => {
