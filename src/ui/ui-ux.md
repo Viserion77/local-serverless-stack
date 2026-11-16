@@ -11,9 +11,10 @@ to the library and solved there. The consuming app must **not** silently impleme
 of those gaps.
 
 > Repository context: LSS has **one** frontend (`src/ui/`). TreeUI lives in **another repository**
-> and is consumed through `@treeui/vue@0.29.0` (`@treeui/icons@0.29.0`, `@treeui/utils@0.29.0`,
-> `@treeui/tokens@0.28.0`) — **upgraded 0.25.0 → 0.27.0 → 0.28.0 → 0.29.0 between 2026-08-05 and
-> 06**, which in turn came from 0.14.0 on 2026-07-21. The library exposes **95 components** and a
+> and is consumed through `@treeui/vue@0.34.3` (`@treeui/icons@0.32.0`, `@treeui/utils@0.34.1`,
+> `@treeui/tokens@0.34.1`) — **upgraded 0.31.0 → 0.34.3 on 2026-11-15** for `TCanvasSurface`,
+> after 0.25.0 → 0.27.0 → 0.28.0 → 0.29.0 (2026-08-05/06) → 0.31.0, which in turn came from 0.14.0 on
+> 2026-07-21. The library exposes **95 components** and a
 > **Branchline catalogue of 364 icons**. Since 2026-07-31 that catalogue is extended **by the app**:
 > 64 official AWS service marks (`aws-*`) enter the same registry through `registerAwsIcons()` — the
 > registry stopped being TreeUI-only, its catalogue has not (see rule 3).
@@ -80,17 +81,18 @@ it and turns into silent local CSS — precisely what rule 2 forbids.
 | # | Surface | What it is | Reason | Owner | Removal condition |
 |---|---|---|---|---|---|
 | 1 | `pages/OverviewPage.vue` — `<style scoped> .overview-hero { background: linear-gradient(…) }` | The decorative gradient of the Overview hero | The last remnant of pre-migration CSS. 0.27's `THero` is a candidate, but it is a **`<section>` band with no card border** while the current hero is a `TCard variant="outline"` — swapping changes both appearance and container semantics | human (a design decision, not a refactor) | An explicit decision to adopt `THero` (or to keep the `TCard` and ask TreeUI for a decorative background axis) |
-| 2 | `components/graph/graphCanvas.ts` — `canvas.style.width/height`, `host.style.overflowX/maxWidth`, `canvas.style.cursor` | Sizing the connection diagram's `<canvas>` (5 declarations, all **imperative and on an element the module creates and owns** — no stylesheet, no class, no `:deep`, no `t-*` selector) | TreeUI 0.29.0 **has no node-and-edge primitive** (`TChart` is categorical `number[]` aligned to `labels` with no slot inside the SVG; `TSpanLanes` is a 1-D bar inside a lane; `TTreeView` is a DOM list) and **no component has a prop that stretches a child**: `height` exists only on `TChart`/`TPane`/`TSkeleton`/`TEmptyState`/`TCodeBlock`/`TTag`. `useDecorativeCanvas` **measures** (`getBoundingClientRect`) but never sizes, is contractually `pointer-events: none`, exposes no `requestRedraw()` and is gated on `(pointer: coarse)`/reduced-motion — on a tablet it draws **one** frame and never repaints. A diagram whose nodes are click targets and whose data is refetched needs the opposite of all three. `cursor` is the one case where the affordance **cannot** come from CSS: the sensitive area is a rectangle inside the canvas and no stylesheet knows where it is | the LSS dashboard agent | TreeUI shipping a **node-and-edge primitive** — or an interactive canvas host with a height axis, `requestRedraw()` and hit-testing. Once the official API is adopted, this file loses the 5 declarations and the row leaves the table |
 
-**Those are the two live exceptions.** The first is a pending design decision; the second is an API
-gap, with an open item and a removal condition tied to it. Outside these two rows `src/ui/` has
-**zero** inline `style` and **zero** `<style>` block — the product no longer writes CSS.
+**That is the one live exception**, and it is a pending design decision, not an API gap. Outside this
+row `src/ui/` has **zero** inline `style` and **zero** `<style>` block — the product no longer writes
+CSS. (The canvas row left on 2026-11-15 — see *Left the table* below.)
 
 > **Why the canvas did not become a silent fallback.** Rule 1 allows a local component when it is a
-> **domain composition**; `ServiceGraphCard.vue` is exactly that — `TCard`, `TTabs`, `TTable`,
-> `TCheckbox`, `TBadge`, `TAlert`, `TEmptyState`, `TSpinner`, `TTag`, `TIcon`, and **not one** line
-> of CSS. What the library does not have is only the **drawing surface**, and that stayed confined
-> to two `.ts` modules (`graphLayout.ts`, pure; `graphCanvas.ts`, with the DOM), with the colours
+> **domain composition**; `ServiceGraphCard.vue`, `GraphDiagram.vue` and `StackMapPage.vue` are exactly
+> that — `TCard`, `TTabs`, `TTable`, `TCheckbox`, `TBadge`, `TAlert`, `TEmptyState`, `TSpinner`, `TTag`,
+> `TIcon`, `TButton`, `TCanvasSurface`, and **not one** line of CSS. What the library does not draw is
+> only the **picture** — cards, frames, connectors — and that stays confined to pure `.ts` modules
+> (`graphLayout.ts`, `graphPaint.ts`, `graphText.ts`, `graphSvg.ts`) plus `graphCanvas.ts`, which paints
+> into the context `TCanvasSurface` hands it and sets no `style` at all, with the colours
 > read from the `--tree-*` tokens through `getComputedStyle` — so the theme, `branding.colors` and
 > the theme toggle still hold inside the drawing. The AWS marks are the vendored artwork, reproduced
 > **unmodified** (uniform scaling only), as rule 3 and `NOTICE.md` require; the functional glyph
@@ -98,10 +100,11 @@ gap, with an open item and a removal condition tied to it. Outside these two row
 > iconised, on the canvas.
 >
 > **Accessibility got no exception.** A canvas is opaque to a screen reader, and rule 6 puts that on
-> the component. `TChart` solves it by emitting a visually hidden table; hiding one would require CSS
-> the product cannot write, so the table became a **sibling tab** (`Connections`), carrying the same
-> data in a `TTable`, translated into all three languages — and the `<canvas>` carries `role="img"`
-> with an accessible name pointing at it.
+> the component. `TCanvasSurface`'s default slot is rendered inside the `<canvas>` — exposed to
+> assistive technology, never painted — so the connections live there as a `TTable`, translated into
+> all three languages; the surface takes no `aria-label` on purpose (with one it becomes `role="img"`,
+> whose children are presentational). The canvas is focusable: arrow keys walk the cards, Enter opens
+> one. The service card keeps its visible `Connections` tab for sighted users who prefer a list.
 
 *Left the table:*
 
@@ -112,7 +115,13 @@ gap, with an open item and a removal condition tied to it. Outside these two row
   `style="cursor:pointer;…"` row affordances (`SecretsList`, `OpenSearchCollectionsList`), thanks to
   `rowTo`/`rowActivatable` in `0.29.0` (TREEUX-004).
 
-An exception leaves here when the API arrives — over three rounds the table went from four rows to
+- **2026-11-15** — the **five** canvas declarations in `graphCanvas.ts` (`canvas.style.width/height`,
+  `host.style.overflowX/maxWidth`, `canvas.style.cursor`), thanks to `TCanvasSurface` /
+  `useCanvasSurface` in `0.34`: the surface owns the box (`height` prop, `inline-size: 100%`), the
+  device-pixel ratio, coalesced `redraw()`, `point()` hit-testing and a `cursor` prop; pan and zoom are
+  a transform **inside** the drawing, so the host no longer scrolls and needs no overflow.
+
+An exception leaves here when the API arrives — over four rounds the table went from four rows to
 one, and none of them left by giving up. That is the proof it is a commitment and not a dumping
 ground.
 
@@ -430,6 +439,23 @@ decision, not an API gap.
 **Three rounds, one scoreboard:** 79 inline `style`s in 18 files → **zero**; one decorative
 `<style scoped>`; no typography classes; and a backlog that went from 10 items to 4, none of them
 closed by giving up.
+
+## Adoption — `@treeui/vue` 0.34.3: the diagrams move onto `TCanvasSurface` (2026-11-15)
+
+- **The canvas exception is gone.** Both wiring diagrams (the service card and the new **Stack map**
+  page) render through `GraphDiagram.vue` on `TCanvasSurface`. `graphCanvas.ts` paints into the
+  context the surface hands it and owns the view transform; it writes no `style`, inserts nothing into
+  the document and binds no listener (the `.vue` binds the surface's pointer, wheel and key events).
+- **Two breaking changes absorbed.** npm now nests `@treeui/icons` under `@treeui/vue`, so the app's
+  `TIconRegistry` augmentation (`icons/aws/registry.generated.d.ts`, emitted by
+  `scripts/generate-aws-icons.mjs`) targets the re-exporting `@treeui/vue` module — augmenting the
+  unresolvable `@treeui/icons` specifier silently merged into nothing and every `aws-*` name stopped
+  typechecking. And `TTextarea`'s `spellcheck` became a typed boolean prop (`:spellcheck="false"`).
+- **Brand vs function on the canvas, unchanged.** Cards carry the vendored AWS marks verbatim; a
+  third-party HTTP host (no brand) gets a lettered tile, not a hand-drawn `external-link` glyph; the
+  toolbar uses TreeUI's `minus` / `plus` / `maximize-2` / `download` and the nav entry `network`.
+- **No new debt:** zero `<style>`, zero inline `style`, zero strings outside `t()` (the drawing modules
+  receive translated text), zero gaps taken to TreeUI.
 
 ## Flow for new requests
 

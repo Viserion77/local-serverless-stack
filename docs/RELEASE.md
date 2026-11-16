@@ -81,6 +81,8 @@ Before bumping version:
 - [ ] Code built successfully (`npm run build`)
 - [ ] CHANGELOG.md updated with changes
 - [ ] README.md updated if needed
+- [ ] README cards regenerated if `scripts/readme-cards.json` changed (`npm run readme:cards`; the guard test fails otherwise)
+- [ ] `docs/readme/stack-map-{light,dark}.svg` re-exported if `examples/self-hosted` changed (dashboard → Stack map → Download SVG, once per theme)
 - [ ] Breaking changes documented
 - [ ] Commits follow conventional commits format
 

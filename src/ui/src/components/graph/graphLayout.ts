@@ -506,7 +506,7 @@ export function layoutGraph(graph: GraphInput): GraphLayout {
     const trayOrder = orderGroups(tray.map(card => card.group), nodeGroups, edges);
     const rank = new Map(trayOrder.map((group, index) => [group, index]));
     tray.sort((a, b) => rank.get(a.group)! - rank.get(b.group)!);
-    tray.forEach((card, index) => { card.column = index % trayColumns; });
+    tray.forEach((card, index) => { card.column = index % trayColumns; card.order = index; });
   }
 
   // Cells: (band, column) → cards in order. The tray is one band.
@@ -521,6 +521,10 @@ export function layoutGraph(graph: GraphInput): GraphLayout {
     const list = cells.get(key) ?? [];
     list.push(card);
     cells.set(key, list);
+  }
+  // The tray keeps its flow order down each column, not the alphabetical one.
+  for (const [key, list] of cells) {
+    if (key.startsWith(`${TRAY}\u0000`)) list.sort((a, b) => a.order - b.order);
   }
   const renumber = () => {
     for (const list of cells.values()) list.forEach((card, index) => { card.order = index; });

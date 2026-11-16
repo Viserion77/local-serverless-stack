@@ -45,6 +45,10 @@ const COUNT_KEYS: Readonly<Partial<Record<GraphNodeKind, string>>> = {
   ssm: 'graph.countParameter',
 };
 
+// The catalogue has a `…One` key next to each counted phrase: "1 tables" is
+// the kind of copy that makes a diagram look machine-made.
+const plural = (key: string, n: number): string => (n === 1 ? `${key}One` : key);
+
 const num = (value: unknown): number | null => (typeof value === 'number' ? value : null);
 const str = (value: unknown): string | null => (typeof value === 'string' && value ? value : null);
 
@@ -100,11 +104,11 @@ export function nodeSubtitle(node: GraphNode, t: Translate): string {
       if (str(facts.type)) parts.push(String(facts.type));
       break;
     case 'api':
-      parts.push(t('graph.api', { protocol: str(facts.protocol) ?? 'HTTP', n: num(facts.routes) ?? 0 }));
+      parts.push(t(plural('graph.api', num(facts.routes) ?? 0), { protocol: str(facts.protocol) ?? 'HTTP', n: num(facts.routes) ?? 0 }));
       if (str(facts.authorizers)) parts.push(t('graph.authorizers', { names: String(facts.authorizers) }));
       break;
     case 'iam-role':
-      parts.push(t('graph.role', { n: num(facts.functions) ?? 0 }));
+      parts.push(t(plural('graph.role', num(facts.functions) ?? 0), { n: num(facts.functions) ?? 0 }));
       break;
     case 'route':
       parts.push(t('graph.route'));
@@ -112,7 +116,7 @@ export function nodeSubtitle(node: GraphNode, t: Translate): string {
     case 'service':
       for (const kind of COUNT_ORDER) {
         const value = num(facts[kind]);
-        if (value) parts.push(t(COUNT_KEYS[kind]!, { n: value }));
+        if (value) parts.push(t(plural(COUNT_KEYS[kind]!, value), { n: value }));
       }
       if (!parts.length) parts.push(t('graph.serviceEmpty'));
       break;

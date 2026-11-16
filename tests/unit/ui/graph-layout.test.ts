@@ -384,7 +384,7 @@ describe('graph text', () => {
     expect(subtitle({ kind: 'service', facts: { lambda: 58, dynamodb: 9, sqs: 6 } })).toBe('58 functions · 9 tables · 6 queues');
     expect(subtitle({ kind: 'service', facts: {} })).toBe('nothing cached');
     expect(subtitle({ kind: 'external', service: 'http' })).toBe('third-party HTTP');
-    expect(subtitle({ kind: 'external', service: 'sqs' })).toBe('sqs · outside the stack');
+    expect(subtitle({ kind: 'external', service: 'sqs' })).toBe('sqs · declared elsewhere');
   });
 
   it('colours verbs by family', () => {

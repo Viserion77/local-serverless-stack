@@ -67,11 +67,11 @@ async function loadCounters(): Promise<void> {
       const entry = calls.get(`${node.group}\u0000${node.label}`);
       if (!entry) continue;
       next.set(node.id, entry.errors
-        ? { text: t('graph.counterErrors', { n: entry.errors }), tone: 'danger' }
-        : { text: t('graph.counterInvocations', { n: entry.calls }), tone: 'muted' });
+        ? { text: t(entry.errors === 1 ? 'graph.counterErrorsOne' : 'graph.counterErrors', { n: entry.errors }), tone: 'danger' }
+        : { text: t(entry.calls === 1 ? 'graph.counterInvocationsOne' : 'graph.counterInvocations', { n: entry.calls }), tone: 'muted' });
     } else if (node.kind === 'sqs') {
       const queued = depth.get(node.label);
-      if (queued) next.set(node.id, { text: t('graph.counterQueued', { n: queued }), tone: 'muted' });
+      if (queued) next.set(node.id, { text: t(queued === 1 ? 'graph.counterQueuedOne' : 'graph.counterQueued', { n: queued }), tone: 'muted' });
     }
   }
   counters.value = next;
