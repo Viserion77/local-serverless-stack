@@ -162,6 +162,47 @@ export const TOOLS: ToolDefinition[] = [
     run: (a, http) => http('GET', `/api/lambdas/${name(a)}/logs`),
   },
   {
+    name: 'lss_web_functions',
+    description:
+      'Lambda Web Functions (HTTP servers run as functions): each with its endpoints and their local URLs '
+      + '(`url`, and `domainName` — what Fn::GetAtt <Endpoint>.DomainName resolves to), auth type, revision '
+      + 'weights, and per-revision environment state (cold/starting/ready/error, pid, in-flight requests, code source). '
+      + 'Nothing runs until a URL is hit, so `cold` is the normal resting state.',
+    inputSchema: { type: 'object', properties: {} },
+    run: (_a, http) => http('GET', '/api/lambdas/web'),
+  },
+  {
+    name: 'lss_web_request',
+    description:
+      'MUTATES. Send one HTTP request to a Lambda Web Function endpoint and return status, headers (including '
+      + 'lambda-web-request-id, and lambda-web-error-type when LSS answered for the app) and body (text, capped at 64 KiB). '
+      + 'Runs the real app — starting it on a cold start — against the real local AWS state.',
+    mutates: true,
+    inputSchema: {
+      type: 'object',
+      properties: {
+        service: str('Service name, as listed by lss_web_functions.'),
+        name: str('Web function name (FunctionName), as listed by lss_web_functions.'),
+        method: str('HTTP method. Defaults to GET.'),
+        path: str('Path and query, e.g. "/api/orders/42". Defaults to "/".'),
+        headers: obj('Request headers. Optional.'),
+        body: { description: 'Request body: a string, or JSON (sent serialized). Ignored for GET/HEAD.' },
+        endpoint: str('Endpoint name, when the function has several. Defaults to the first served one.'),
+        revision: str('Pin a revision (its revision id or logical id) instead of the weighted pick. Optional.'),
+      },
+      required: ['service', 'name'],
+    },
+    run: (a, http) =>
+      http('POST', `/api/lambdas/web/${name(a, 'service')}/${name(a)}/request`, {
+        method: a.method,
+        path: a.path,
+        headers: a.headers,
+        body: a.body,
+        endpoint: a.endpoint,
+        revision: a.revision,
+      }),
+  },
+  {
     name: 'lss_invoke',
     description:
       'MUTATES. Invoke a Lambda with a JSON payload and return its result plus captured logs. '

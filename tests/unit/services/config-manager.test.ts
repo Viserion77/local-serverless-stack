@@ -5,6 +5,7 @@
 // re-require to construct a fresh singleton under those conditions.
 import path from 'path';
 import { projectCacheSegment } from '../../../src/server/services/project-scope';
+import { parsePortRange } from '../../../src/server/services/config-manager';
 
 jest.mock('fs');
 const fs = require('fs') as jest.Mocked<typeof import('fs')>;
@@ -910,6 +911,55 @@ describe('getWorkerOverridesForService', () => {
   });
 });
 
+describe('webFunctions config', () => {
+  function cmWith(config: Record<string, unknown>): CM {
+    const cwdFile = path.join(process.cwd(), 'lss.config.json');
+    fs.existsSync.mockImplementation((p) => p === cwdFile);
+    fs.readFileSync.mockReturnValue(JSON.stringify(config));
+    return freshConfigManager();
+  }
+
+  it('defaults to a zero-config setup', () => {
+    const cm = freshConfigManager();
+    expect(cm.getWebFunctionPortRange()).toEqual([15000, 15999]);
+    expect(cm.isWebFunctionHttpsRewrite()).toBe(true);
+    expect(cm.getWebFunctionQueueFactor()).toBe(4);
+    expect(cm.getWebEndpointPortOverride('/abs/orders', 'orders-web', 'live')).toBeUndefined();
+  });
+
+  it('reads the block and the per-endpoint port pins', () => {
+    const cm = cmWith({
+      webFunctions: { portRange: ' 15200 - 15299 ', rewriteHttpsInEnv: false, queueFactor: 2 },
+      serviceRuntime: { orders: { webFunctions: { 'orders-web': { live: { port: 15250 }, beta: { port: 70000 }, junk: 'x' } } } },
+    });
+    expect(cm.getWebFunctionPortRange()).toEqual([15200, 15299]);
+    expect(cm.isWebFunctionHttpsRewrite()).toBe(false);
+    expect(cm.getWebFunctionQueueFactor()).toBe(2);
+    expect(cm.getWebEndpointPortOverride('/abs/orders', 'orders-web', 'live')).toBe(15250);
+    expect(cm.getWebEndpointPortOverride('/abs/orders', 'orders-web', 'beta')).toBeUndefined();
+    expect(cm.getWebEndpointPortOverride('/abs/orders', 'orders-web', 'junk')).toBeUndefined();
+    expect(cm.getWebEndpointPortOverride('/abs/orders', 'other', 'live')).toBeUndefined();
+  });
+
+  it('reads malformed hand-edited values as the defaults', () => {
+    const cm = cmWith({
+      webFunctions: { portRange: '16000-15000', queueFactor: 0 },
+      serviceRuntime: { orders: { webFunctions: 'none' } },
+    });
+    expect(cm.getWebFunctionPortRange()).toEqual([15000, 15999]);
+    expect(cm.getWebFunctionQueueFactor()).toBe(4);
+    expect(cm.getWebEndpointPortOverride('/abs/orders', 'orders-web', 'live')).toBeUndefined();
+  });
+
+  it('parses port ranges strictly', () => {
+    expect(parsePortRange('1-65535')).toEqual([1, 65535]);
+    expect(parsePortRange('0-10')).toBeNull();
+    expect(parsePortRange('10-70000')).toBeNull();
+    expect(parsePortRange('abc')).toBeNull();
+    expect(parsePortRange(15000)).toBeNull();
+  });
+});
+
 describe('printSummary', () => {
   it('prints a full summary with dynamo proxy + auto package + config file', () => {
     const cwdFile = path.join(process.cwd(), 'lss.config.json');
@@ -1334,6 +1384,24 @@ describe('updateConfig', () => {
     }
     throw new Error('expected updateConfig to throw');
   }
+
+  it('validates and writes the webFunctions block and the per-endpoint pins', () => {
+    const cm = setupFile({ serviceRuntime: { orders: { apiPort: 3001 } } });
+    expect(updateErr(cm, { webFunctions: { portRange: '9-8' } }).details[0]).toContain('port range');
+    expect(updateErr(cm, { webFunctions: { queueFactor: 0 } }).details[0]).toContain('positive integer');
+    expect(updateErr(cm, { serviceRuntime: { orders: { webFunctions: { web: { live: { port: 0 } } } } } }).details[0])
+      .toContain('serviceRuntime.orders.webFunctions.web.live.port');
+    expect(updateErr(cm, { serviceRuntime: { orders: { webFunctions: { web: 'x' } } } }).details[0]).toContain('must be an object');
+    cm.updateConfig({
+      webFunctions: { portRange: '15200-15299', rewriteHttpsInEnv: false },
+      serviceRuntime: { orders: { webFunctions: { web: { live: { port: 15201 } }, gone: null } } },
+    });
+    expect(written()).toMatchObject({
+      webFunctions: { portRange: '15200-15299', rewriteHttpsInEnv: false },
+      serviceRuntime: { orders: { apiPort: 3001, webFunctions: { web: { live: { port: 15201 } } } } },
+    });
+    expect(cm.getWebEndpointPortOverride('/abs/orders', 'web', 'live')).toBe(15201);
+  });
 
   it('rejects a non-object patch', () => {
     const err = updateErr(setupFile({}), ['not', 'an', 'object']);

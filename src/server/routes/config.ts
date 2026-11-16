@@ -99,6 +99,11 @@ function buildConfigSnapshot(cm: ConfigManager) {
       maxWarmWorkers: cm.getLambdaMaxWarmWorkers(),
     },
     serviceRuntime: redactServiceRuntime(raw.serviceRuntime ?? {}),
+    webFunctions: {
+      portRange: cm.getWebFunctionPortRange().join('-'),
+      rewriteHttpsInEnv: cm.isWebFunctionHttpsRewrite(),
+      queueFactor: cm.getWebFunctionQueueFactor(),
+    },
     secretSeedCount: Object.keys(cm.getSecretSeeds()).length,
     // Keys whose file value is masked by an env var right now — the UI flags
     // these fields so an edit that "doesn't stick" is explained.
@@ -178,7 +183,7 @@ router.get('/ports', (_req: Request, res: Response) => {
   const cm = ConfigManager.getInstance();
   const ports: Array<{
     name: string;
-    kind: 'orchestrator' | 'engine' | 'proxy' | 'service-api' | 'service-invoke';
+    kind: 'orchestrator' | 'engine' | 'proxy' | 'service-api' | 'service-invoke' | 'web-function';
     port: number;
     url: string;
     description: string;
@@ -229,6 +234,18 @@ router.get('/ports', (_req: Request, res: Response) => {
         url: `http://localhost:${service.invokePort}`,
         description: 'Lambda invoke listener (AWS SDK Invoke)',
       });
+    }
+    for (const fn of service.webFunctions) {
+      for (const endpoint of fn.endpoints) {
+        if (endpoint.port === undefined) continue;
+        ports.push({
+          name: `${service.name}/${fn.name}/${endpoint.name}`,
+          kind: 'web-function',
+          port: endpoint.port,
+          url: `http://localhost:${endpoint.port}`,
+          description: 'Lambda Web Function endpoint',
+        });
+      }
     }
   }
 

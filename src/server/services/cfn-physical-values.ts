@@ -43,6 +43,10 @@ export interface RuntimeAttributes {
   // may repeat) — their engine-minted ids are keyed by LOGICAL id instead.
   usagePlanIds: Map<string, string>;
   apiKeyIds: Map<string, string>;
+  // The stable local port of each AWS::Lambda::WebFunctionEndpoint, keyed by
+  // LOGICAL id — allocated at registration (web-function-ports.ts), it is the
+  // whole of the endpoint's `DomainName` locally.
+  webEndpointPorts: Map<string, number>;
 }
 
 export function emptyRuntimeAttributes(): RuntimeAttributes {
@@ -53,6 +57,7 @@ export function emptyRuntimeAttributes(): RuntimeAttributes {
     collections: new Map(),
     usagePlanIds: new Map(),
     apiKeyIds: new Map(),
+    webEndpointPorts: new Map(),
   };
 }
 
@@ -74,6 +79,19 @@ function ruleBusSegment(rule: EventRuleResource, byLogicalId: Map<string, Resour
   if (bus?.type === 'eventbus') return `${bus.name}/`;
   const name = ref.startsWith('arn:') ? ref.slice(ref.lastIndexOf('/') + 1) : ref;
   return name === 'default' ? '' : `${name}/`;
+}
+
+// The ARN of the web function a revision/endpoint belongs to. FunctionName is
+// a same-template WebFunction (by logical id), a web-function ARN, or a plain
+// function name — the three spellings CloudFormation accepts.
+function webFunctionArn(
+  functionRef: string,
+  byLogicalId: Map<string, Resource>,
+  prefix: string,
+): string {
+  const owner = byLogicalId.get(functionRef);
+  if (owner?.type === 'web-function') return `${prefix}${owner.name}`;
+  return functionRef.startsWith('arn:') ? functionRef : `${prefix}${functionRef}`;
 }
 
 /**
@@ -160,6 +178,39 @@ export function physicalValue(
     case 'apigw-api-key':
       // Ref and GetAtt APIKeyId are the key id (never the key VALUE).
       return attr === 'Ref' || attr === 'APIKeyId' ? runtime.apiKeyIds.get(resource.logicalId) : undefined;
+    // Lambda Web Functions. A local resource exists the moment it is
+    // registered, so `State` is always the steady state AWS reports.
+    case 'web-function': {
+      const arn = `arn:${partition}:lambda:${region}:${account}:web-function/${resource.name}`;
+      return ({ Ref: arn, FunctionArn: arn, State: 'Active' } as Record<string, string>)[attr];
+    }
+    case 'web-function-revision': {
+      const functionArn = webFunctionArn(resource.functionRef, byLogicalId, `arn:${partition}:lambda:${region}:${account}:web-function/`);
+      const arn = `${functionArn}/revision/${resource.revisionId}`;
+      return ({
+        Ref: arn,
+        RevisionArn: arn,
+        RevisionId: resource.revisionId,
+        FunctionArn: functionArn,
+        State: 'Active',
+      } as Record<string, string>)[attr];
+    }
+    case 'web-function-endpoint': {
+      const functionArn = webFunctionArn(resource.functionRef, byLogicalId, `arn:${partition}:lambda:${region}:${account}:web-function/`);
+      const arn = `${functionArn}/endpoint/${resource.name}`;
+      // DomainName is what a sibling's env builds the URL from
+      // (`!Sub 'https://${Endpoint.DomainName}'`). Locally it is the endpoint's
+      // stable listener — unknown (and so left unresolved, with a warning)
+      // until a port has been allocated.
+      const port = runtime.webEndpointPorts.get(resource.logicalId);
+      return ({
+        Ref: arn,
+        EndpointArn: arn,
+        FunctionArn: functionArn,
+        DomainName: port === undefined ? undefined : `localhost:${port}`,
+        State: 'Active',
+      } as Record<string, string | undefined>)[attr];
+    }
     default:
       return undefined;
   }

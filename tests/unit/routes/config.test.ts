@@ -310,6 +310,10 @@ describe('GET /api/config/ports', () => {
       stage: 'offline',
       routes: [],
       authorizers: [],
+      webFunctions: [{
+        name: 'orders-web',
+        endpoints: [{ name: 'live', port: 15000 }, { name: 'unserved' }],
+      }],
     } as never);
     FunctionRegistry.getInstance().registerService({
       name: 'svc-b',
@@ -328,6 +332,7 @@ describe('GET /api/config/ports', () => {
       ['proxy', 'DynamoDB proxy', 8000],
       ['service-api', 'svc-a', 3001],
       ['service-invoke', 'svc-a', 13001],
+      ['web-function', 'svc-a/orders-web/live', 15000],
     ]);
     expect(res.body.ports[1].url).toBe('http://localhost:14566');
   });

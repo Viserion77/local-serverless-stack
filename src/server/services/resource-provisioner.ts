@@ -329,6 +329,13 @@ export class ResourceProvisioner {
             await this.createOpenSearchCollection(resource);
             provisionedCount++;
             break;
+          // Lambda Web Functions create nothing in the engine: the registrar
+          // hands them to the web-function manager and gateway, which run the
+          // app and serve its endpoints (web-function-manager.ts).
+          case 'web-function':
+          case 'web-function-revision':
+          case 'web-function-endpoint':
+            break;
         }
       } catch (error: any) {
         if (!error.message?.includes('already exists')) {
@@ -1911,6 +1918,12 @@ export const handler = async (event, context) => {
           case 'event-source':
             await this.deleteEventSourceMapping(serviceName, resource.functionName);
             cleaned++;
+            break;
+          // Nothing of theirs lives in the engine — the registrar's deactivate
+          // stops their processes and closes their endpoints.
+          case 'web-function':
+          case 'web-function-revision':
+          case 'web-function-endpoint':
             break;
         }
       } catch (error) {

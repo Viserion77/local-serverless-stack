@@ -568,7 +568,12 @@ Both files should contain valid JSON with the following optional properties:
     `lss.config.json` by hand.
   - `functions.<name>.env`: per-function env, keyed by the short function name (or
     the full `service-stage-fn` name). Precedence: `functions.<fn>.env` > `env` >
-    the template's environment.
+    the template's environment. A Lambda Web Function's `FunctionName` works here
+    too (applied when its server process starts).
+  - `webFunctions.<FunctionName>.<EndpointName>.port`: pins the local port — and so
+    the URL, `http://localhost:<port>` — of one Lambda Web Function endpoint.
+    Without it the endpoint keeps the port it had at its previous registration, or
+    gets the next free one of [`webFunctions.portRange`](#webfunctions).
   - Example:
     ```jsonc
     "serviceRuntime": {
@@ -577,9 +582,38 @@ Both files should contain valid JSON with the following optional properties:
       "orders": {
         "env": { "LOG_LEVEL": "debug" },
         "execArgv": ["--enable-source-maps", "--inspect=127.0.0.1:9230"],
-        "functions": { "processOrder": { "env": { "TABLE_NAME": "orders-local" } } }
+        "functions": { "processOrder": { "env": { "TABLE_NAME": "orders-local" } } },
+        "webFunctions": { "orders-web": { "live": { "port": 15080 } } }
       }
     }
+    ```
+
+- <a id="webfunctions"></a>**webFunctions** (object, default:
+  `{ "portRange": "15000-15999", "rewriteHttpsInEnv": true, "queueFactor": 4 }`) —
+  Lambda Web Functions (`AWS::Lambda::WebFunction*`). Zero-config services work with
+  the defaults; nothing here is needed to serve one.
+  - `portRange` (string `"<from>-<to>"`): where an endpoint without a pinned port
+    gets its listener. The default sits clear of the orchestrator (14566), the 30xx
+    API ports, the 130xx invoke ports and Linux's ephemeral range (32768+). The port
+    an endpoint got is remembered in the service cache, so its URL survives restarts
+    and re-registrations; ports other services' endpoints hold are never reused.
+  - `rewriteHttpsInEnv` (boolean, default `true`): rewrite `https://localhost:<web
+    port>` to `http://` inside function environment values. A template builds a
+    sibling's URL as `!Sub 'https://${Endpoint.DomainName}'` — right on AWS, where the
+    endpoint terminates TLS, and a TLS handshake against a plain-HTTP socket locally.
+    Only ports that are web function endpoints are touched.
+  - `queueFactor` (positive integer, default `4`): locally ONE process serves a
+    revision (AWS would add environments), so requests past
+    `MaxConcurrencyPerEnvironment` queue; up to `queueFactor` × that cap may wait,
+    beyond which the endpoint answers 429 (`Platform.EndpointMaxEnvThrottle`).
+  - Not configured here, but shared with event functions: `lambdaRuntime.idleTimeoutMs`
+    (a web function's process is stopped after that long without a request),
+    `lambdaRuntime.enabled` / `serviceRuntime.<svc>.enabled` (master switch),
+    `lambdaRuntime.execution` (artifact vs source code location) and
+    `serviceRuntime.<svc>.env` / `execArgv`.
+  - Example:
+    ```jsonc
+    "webFunctions": { "portRange": "15200-15299", "queueFactor": 2 }
     ```
 
 - **branding** (object, optional — dashboard look & feel, purely cosmetic)

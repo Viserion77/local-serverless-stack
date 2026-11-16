@@ -10,6 +10,7 @@ import type { LambdaSummary } from '../../services/api';
 import { toLambdaTriggers } from './triggerIcons';
 import type { LambdaTrigger } from './triggerIcons';
 import { useI18n } from '../../i18n';
+import WebFunctionsSection from './WebFunctionsSection.vue';
 
 const { t } = useI18n();
 
@@ -124,6 +125,11 @@ onBeforeUnmount(() => {
     <TAlert v-if="error" variant="danger" dismissible @dismiss="error = null">
       {{ error }}
     </TAlert>
+
+    <!-- Lambda Web Functions sit above the event functions: a stack has a
+         handful of them next to dozens of handlers, and their URLs are what a
+         developer comes here to open. Renders nothing when there are none. -->
+    <WebFunctionsSection />
 
     <TCard variant="outline">
       <template #header>

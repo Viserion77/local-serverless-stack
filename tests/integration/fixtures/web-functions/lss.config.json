@@ -1,0 +1,22 @@
+{
+  "serverPort": 14593,
+  "selfEngine": { "port": 14593 },
+  "stateDir": "tests/.lss-web-functions",
+  "persistence": false,
+  "region": "us-west-2",
+  "autoPackage": true,
+  "packageCommand": "npx serverless package",
+  "packageTimeoutMs": 300000,
+  "lambdaRuntime": { "execution": "source", "watch": false },
+  "webFunctions": { "portRange": "15990-15999" },
+  "serviceRuntime": {
+    "orders-service": {
+      "apiPort": 3693,
+      "invokePort": 13693,
+      "env": {
+        "AWS_ENDPOINT": "http://localhost:14593",
+        "ORDERS_QUEUE_URL": "http://localhost:14593/000000000000/orders-to-process"
+      }
+    }
+  }
+}

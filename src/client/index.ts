@@ -85,6 +85,14 @@ export type {
   InvokeLambdaInput,
   InvokeLambdaResult,
   LambdaInvocationRecord,
+  WebFunctionsApi,
+  WebFunctionState,
+  WebFunctionSummary,
+  WebFunctionDetail,
+  WebFunctionEndpointInfo,
+  WebFunctionRevisionInfo,
+  WebFunctionRequestRecord,
+  WebFunctionLogLine,
 } from './namespaces/lambdas';
 export type {
   ApisApi,

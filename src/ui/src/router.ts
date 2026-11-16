@@ -34,6 +34,16 @@ const routes: RouteRecordRaw[] = [
     meta: { title: 'Lambdas' },
   },
   {
+    // Lambda Web Functions are addressed by service + FunctionName: unlike an
+    // event function's short name, nothing makes a FunctionName unique across
+    // services locally.
+    path: '/lambdas/web/:service/:name',
+    name: 'web-function-detail',
+    component: () => import('./pages/WebFunctionDetailPage.vue'),
+    props: route => ({ service: String(route.params.service), name: String(route.params.name) }),
+    meta: { title: 'Web function' },
+  },
+  {
     path: '/lambdas/:name',
     name: 'lambda-detail',
     component: () => import('./pages/LambdaDetailPage.vue'),

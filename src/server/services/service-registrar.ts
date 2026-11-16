@@ -27,6 +27,11 @@ import { GatewayManager } from './gateway-manager.js';
 import { SourceWatcher } from './source-watcher.js';
 import { runServerlessPackage, ServerlessPackageError } from './serverless-packager.js';
 import { detectStaleArtifact, formatStaleArtifactWarning } from './artifact-staleness.js';
+import { assembleWebFunctions, type StateWebApps } from './web-function-assembler.js';
+import { allocateWebPorts, assignedPorts, rewriteWebHttps } from './web-function-ports.js';
+import { WebFunctionManager } from './web-function-manager.js';
+import { WebFunctionGateway } from './web-function-gateway.js';
+import type { WebFunctionRevisionResource } from './cloudformation-parser.js';
 
 export interface RegisterInput {
   servicePath: string;
@@ -45,6 +50,7 @@ export interface RegisterResult {
   resources: Resource[];
   functionsCount: number;
   routesCount: number;
+  webFunctionsCount: number;
   warnings: string[];
 }
 
@@ -243,6 +249,41 @@ export class ServiceRegistrar {
       );
     }
 
+    // Lambda Web Functions: the three AWS::Lambda::WebFunction* types folded
+    // into one entry per function, each endpoint given its stable local port
+    // BEFORE the environment pass below — `Fn::GetAtt Endpoint.DomainName` in
+    // a sibling's env is `localhost:<that port>`. A port this endpoint held at
+    // its previous registration is kept; ports other services hold are off
+    // limits.
+    const previousMetadata = await cache.getMetadata(serviceName);
+    const stateService = (state?.service ?? {}) as { webApps?: StateWebApps };
+    const webFunctions = assembleWebFunctions({
+      service: serviceName,
+      root: resolvedPath,
+      region: effectiveRegion,
+      resources,
+      executionMode: runtimeConfig.execution,
+      stateWebApps: stateService.webApps,
+      warnings,
+    });
+    const otherWebPorts = new Set(
+      (await cache.listServices())
+        .filter(other => other.name !== serviceName)
+        .flatMap(other => [...assignedPorts(other.webFunctions).values()]),
+    );
+    const webEndpointPorts = await allocateWebPorts({
+      functions: webFunctions,
+      pinned: (fn, endpoint) => configManager.getWebEndpointPortOverride(resolvedPath, fn, endpoint),
+      previous: previousMetadata?.root === resolvedPath ? assignedPorts(previousMetadata.webFunctions) : new Map(),
+      taken: otherWebPorts,
+      range: configManager.getWebFunctionPortRange(),
+      warnings,
+    });
+    if (webFunctions.length > 0) {
+      const urls = webFunctions.flatMap(fn => fn.endpoints.map(ep => `${fn.name}/${ep.name} → ${ep.port ? `http://localhost:${ep.port}` : '—'}`));
+      console.log(`   Web functions: ${urls.join(' · ')}`);
+    }
+
     // 0.5.x keyed the cache by directory basename. When the real service name
     // differs, migrate: drop the legacy entry for this same root (data plane +
     // cache) so re-registration doesn't leave a ghost service behind.
@@ -268,6 +309,7 @@ export class ServiceRegistrar {
       functions,
       routes,
       authorizers,
+      webFunctions,
     };
     // The RESOLVED template is what gets cached: every later reader (the
     // resource listing, the service graph, cleanup on delete) re-parses it
@@ -288,21 +330,42 @@ export class ServiceRegistrar {
     // the value AWS would inject (table name, queue URL, stream ARN, …). Done
     // after provisioning because some of those only exist now. The template's
     // env wins over serverless-state's for the same key, as before.
+    const runtimeAttributes = await ResourceProvisioner.getInstance().lookupRuntimeAttributes(resources, serviceName);
+    runtimeAttributes.webEndpointPorts = webEndpointPorts;
     const envResolver = new EnvironmentResolver({
       template,
       ...templateContext,
       resources,
-      runtime: await ResourceProvisioner.getInstance().lookupRuntimeAttributes(resources, serviceName),
+      runtime: runtimeAttributes,
       exports: this.exportMap,
       warnings,
     });
+    // `https://localhost:<web port>` → `http://` (webFunctions.rewriteHttpsInEnv):
+    // the template's scheme is right for AWS and wrong for the local listener.
+    // Every web port of the stack counts, so a sibling in ANOTHER service that
+    // imported the URL is rewritten too.
+    const webPorts = configManager.isWebFunctionHttpsRewrite()
+      ? new Set([...otherWebPorts, ...webEndpointPorts.values()])
+      : new Set<number>();
     functions = functions.map(fn => {
       const cfn = cfnLambdas.find(l => l.name === fn.fullName);
       const raw = { ...(parsed?.rawEnvironment[fn.name] ?? fn.environment), ...(cfn?.environment ?? {}) };
-      return { ...fn, environment: envResolver.resolve(raw) };
+      return { ...fn, environment: rewriteWebHttps(envResolver.resolve(raw), webPorts) };
     });
+    const revisionResources = new Map(
+      resources
+        .filter((r): r is WebFunctionRevisionResource => r.type === 'web-function-revision')
+        .map(r => [r.logicalId, r]),
+    );
+    for (const fn of webFunctions) {
+      for (const revision of fn.revisions) {
+        const raw = revisionResources.get(revision.logicalId)?.environment ?? {};
+        revision.environment = rewriteWebHttps(envResolver.resolve(raw), webPorts);
+      }
+    }
     metadata.functions = functions;
-    await cache.updateMetadata(serviceName, { functions });
+    metadata.webFunctions = webFunctions;
+    await cache.updateMetadata(serviceName, { functions, webFunctions });
 
     // Record this stack's exports so a later service's Fn::ImportValue resolves
     // — to a Lambda ARN, and now to any physical value (table name, queue URL).
@@ -326,6 +389,7 @@ export class ServiceRegistrar {
       resources,
       functionsCount: functions.length,
       routesCount: routes?.length ?? 0,
+      webFunctionsCount: webFunctions.length,
       warnings,
     };
   }
@@ -363,12 +427,25 @@ export class ServiceRegistrar {
     await runtime.syncService(entry);
     await gateway.syncService(entry, runtimeConfig.enabled);
 
+    // Lambda Web Functions: definitions to the manager (nothing starts until a
+    // URL is hit), one listener per endpoint to the gateway. The runtime master
+    // switch governs them like it governs event functions.
+    const webFunctions = runtimeConfig.enabled ? (metadata.webFunctions ?? []) : [];
+    await WebFunctionManager.getInstance().syncService(
+      { name: metadata.name, root: metadata.root, region: metadata.region },
+      webFunctions,
+    );
+    await WebFunctionGateway.getInstance().syncService(metadata.name, webFunctions, runtimeConfig.enabled);
+
     // Watch default depends on how handlers are loaded: source mode reloads are
     // cheap (worker restart), artifact mode would need a re-package per save.
-    const resolvedMode = runtime.getRuntimeInfo(metadata.name).resolvedMode;
+    // A service with only web functions has no event runtime to ask, so its
+    // web revisions' code source decides.
+    const resolvedMode = runtime.getRuntimeInfo(metadata.name).resolvedMode
+      ?? (webFunctions.some(fn => fn.revisions.some(rev => rev.code.source !== 'artifact')) ? 'source' : undefined);
     const watchEnabled = runtimeConfig.enabled
       && (runtimeConfig.watch ?? resolvedMode === 'source')
-      && (metadata.functions?.length ?? 0) > 0;
+      && ((metadata.functions?.length ?? 0) > 0 || webFunctions.length > 0);
     if (watchEnabled) {
       watcher.watch(metadata.name, metadata.root);
     } else {
@@ -435,6 +512,8 @@ export class ServiceRegistrar {
     SourceWatcher.getInstance().unwatch(serviceName);
     await LambdaRuntimeManager.getInstance().stopRuntime(serviceName);
     await GatewayManager.getInstance().removeService(serviceName);
+    await WebFunctionGateway.getInstance().removeService(serviceName);
+    await WebFunctionManager.getInstance().removeService(serviceName);
     FunctionRegistry.getInstance().removeService(serviceName);
   }
 

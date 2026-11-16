@@ -4,6 +4,7 @@ import os from 'os';
 import { ConfigManager } from './config-manager.js';
 import { projectCacheSegment } from './project-scope.js';
 import type { RegisteredFunction, HttpRoute, AuthorizerConfig } from './serverless-state-parser.js';
+import type { RegisteredWebFunction } from './web-function-assembler.js';
 
 // Re-exported for the existing importers (the segment itself now lives in
 // project-scope.ts, which config-manager can import without a cycle).
@@ -36,6 +37,10 @@ export interface ServiceMetadata {
   functions?: RegisteredFunction[];
   routes?: HttpRoute[];
   authorizers?: AuthorizerConfig[];
+  // Lambda Web Functions, assembled at registration. Their endpoint ports live
+  // here too, which is what keeps a web function's URL stable across
+  // orchestrator restarts and re-registrations.
+  webFunctions?: RegisteredWebFunction[];
 }
 
 export class CacheManager {

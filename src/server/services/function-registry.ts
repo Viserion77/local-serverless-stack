@@ -6,6 +6,7 @@
 
 import { CacheManager, ServiceMetadata } from './cache-manager.js';
 import type { RegisteredFunction, HttpRoute, AuthorizerConfig } from './serverless-state-parser.js';
+import type { RegisteredWebFunction } from './web-function-assembler.js';
 
 export interface ServiceEntry {
   name: string;
@@ -17,6 +18,7 @@ export interface ServiceEntry {
   functions: RegisteredFunction[];
   routes: HttpRoute[];
   authorizers: AuthorizerConfig[];
+  webFunctions: RegisteredWebFunction[];
 }
 
 export interface FunctionRef {
@@ -56,6 +58,7 @@ export class FunctionRegistry {
       functions: metadata.functions || [],
       routes: metadata.routes || [],
       authorizers: metadata.authorizers || [],
+      webFunctions: metadata.webFunctions || [],
     };
     this.services.set(metadata.name, entry);
     return entry;

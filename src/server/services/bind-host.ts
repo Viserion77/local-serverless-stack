@@ -16,6 +16,9 @@
 //     (`services/gateway-manager.ts`) — the invoke port runs any registered
 //     handler with the request body as the event, and `FunctionRegistry.resolve()`
 //     falls back to the global registry, so one port reaches every service;
+//   - per Lambda Web Function endpoint, the listener that fronts the app's own
+//     HTTP server (`services/web-function-gateway.ts`) — any request it accepts
+//     reaches the app, and starting the app spawns a process;
 //   - the self engine's own front door when `serverPort` and `selfEngine.port`
 //     differ (`engine/backends/self-backend.ts`) — read/write access to every
 //     table, queue, topic, bucket and secret;

@@ -1471,6 +1471,7 @@ describe('listener bind host (network exposure)', () => {
     return {
       name,
       root: `/proj/${name}`,
+      webFunctions: [],
       stage: 'dev',
       apiPort,
       invokePort,

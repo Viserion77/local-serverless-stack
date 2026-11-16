@@ -59,6 +59,22 @@ functions:
           path: /orders
           method: get
 
+  # GET /orders/web-check — an event function calling the orders-web web
+  # function (below) through the URL CloudFormation would hand it on AWS.
+  checkWebApp:
+    handler: src/handlers/checkWebApp.handler
+    environment:
+      # `!Sub 'https://${OrdersWebEndpoint.DomainName}'` is the usual spelling;
+      # osls would read that `${…}` as one of its own variables, so the same
+      # value is built with Fn::Join. LSS resolves DomainName to the endpoint's
+      # stable local port and rewrites https → http (webFunctions.rewriteHttpsInEnv).
+      ORDERS_WEB_URL:
+        Fn::Join: ['', ['https://', Fn::GetAtt: [OrdersWebEndpoint, DomainName]]]
+    events:
+      - httpApi:
+          path: /orders/web-check
+          method: get
+
 resources:
   Resources:
     OrdersTable:
@@ -97,3 +113,85 @@ resources:
         # Poison messages are kept for a day so they can be inspected in the
         # dashboard's Queues tab (AWS's default is 4 days).
         MessageRetentionPeriod: 86400
+
+    # --- orders-web: a Lambda Web Function -----------------------------------
+    # An ordinary HTTP server (src/web/server.js, plain node:http) run as a
+    # function. osls 4.0.0 has no `webApps:` key, so the three resources are
+    # declared directly; osls passes them through and LSS reads them from the
+    # packaged template. Nothing runs until the endpoint's URL is hit.
+    OrdersWebFunction:
+      Type: AWS::Lambda::WebFunction
+      Properties:
+        FunctionName: orders-web
+
+    # Two revisions of the same code, split 90/10 by the endpoint — a canary.
+    # Send `x-lss-web-revision: <RevisionId>` to pin one (the dashboard lists
+    # the ids). Each revision is its own execution environment (process).
+    OrdersWebRevision:
+      Type: AWS::Lambda::WebFunctionRevision
+      Properties:
+        FunctionName:
+          Ref: OrdersWebFunction
+        Description: Orders status page, JSON API and SSE feed (stable)
+        BuildConfig:
+          CodeConfig:
+            # On AWS: the versioned zip you uploaded. Locally (execution
+            # "source" in lss.config.json) the code runs straight from this
+            # service, entry AWS_LAMBDA_NODEJS_ENTRYPOINT.
+            S3Object:
+              Bucket:
+                Ref: ServerlessDeploymentBucket
+              Key: orders-service.zip
+          RuntimeConfig:
+            Runtime: nodejs24.x
+        ServiceConfig:
+          TimeoutSeconds: 10
+          MaxConcurrencyPerEnvironment: 32
+          EnvironmentVariables:
+            AWS_LAMBDA_NODEJS_ENTRYPOINT: src/web/server.js
+            ORDERS_TABLE:
+              Ref: OrdersTable
+            APP_TITLE: Acme Orders
+            RELEASE_CHANNEL: stable
+
+    OrdersWebRevisionCanary:
+      Type: AWS::Lambda::WebFunctionRevision
+      Properties:
+        FunctionName:
+          Ref: OrdersWebFunction
+        Description: Same code, canary channel
+        BuildConfig:
+          CodeConfig:
+            S3Object:
+              Bucket:
+                Ref: ServerlessDeploymentBucket
+              Key: orders-service-canary.zip
+          RuntimeConfig:
+            Runtime: nodejs24.x
+        ServiceConfig:
+          TimeoutSeconds: 10
+          MaxConcurrencyPerEnvironment: 32
+          EnvironmentVariables:
+            AWS_LAMBDA_NODEJS_ENTRYPOINT: src/web/server.js
+            ORDERS_TABLE:
+              Ref: OrdersTable
+            APP_TITLE: Acme Orders
+            RELEASE_CHANNEL: canary
+
+    # The HTTPS URL. Locally: http://localhost:<port>, the port taken from
+    # webFunctions.portRange (15000-15999) and kept across restarts.
+    OrdersWebEndpoint:
+      Type: AWS::Lambda::WebFunctionEndpoint
+      Properties:
+        FunctionName:
+          Ref: OrdersWebFunction
+        EndpointName: live
+        EndpointType: HomeRegion
+        AuthType: ApplicationManaged
+        RevisionWeights:
+          - RevisionId:
+              Fn::GetAtt: [OrdersWebRevision, RevisionId]
+            Weight: 90
+          - RevisionId:
+              Fn::GetAtt: [OrdersWebRevisionCanary, RevisionId]
+            Weight: 10
