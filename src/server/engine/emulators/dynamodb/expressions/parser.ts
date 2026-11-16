@@ -397,6 +397,22 @@ class Parser {
     return parsed;
   }
 
+  // SearchVectors' SearchConditionExpression shares the key-condition grammar
+  // (top-level names, AND-joined, parentheses, no OR/NOT) but allows only `=`
+  // and any number of terms; the emulator core checks them against the vector
+  // index's SearchSchema. Error texts carry the SearchConditionExpression
+  // label through `this.label`.
+  parseSearchCondition(): Array<{ name: string; value: AttributeValue }> {
+    const terms = this.parseKeyTermGroup();
+    this.expectEnd();
+    return terms.map((term) => {
+      if (term.operator !== '=') {
+        throw validationError(`Invalid operator used in ${this.label}: ${term.operator}`);
+      }
+      return { name: term.name, value: term.values[0] };
+    });
+  }
+
   private parseKeyTermGroup(): KeyTerm[] {
     const terms: KeyTerm[] = [];
     for (;;) {
@@ -413,7 +429,7 @@ class Parser {
         continue;
       }
       if (isKeyword(token, 'OR') || isKeyword(token, 'NOT')) {
-        throw validationError(`Invalid operator used in KeyConditionExpression: ${token.text.toUpperCase()}`);
+        throw validationError(`Invalid operator used in ${this.label}: ${token.text.toUpperCase()}`);
       }
       return terms;
     }
@@ -422,12 +438,12 @@ class Parser {
   private parseKeyTerm(): KeyTerm {
     const token = this.peek();
     if (isKeyword(token, 'NOT')) {
-      throw validationError('Invalid operator used in KeyConditionExpression: NOT');
+      throw validationError(`Invalid operator used in ${this.label}: NOT`);
     }
     if (token.type === 'ident' && this.peek(1).type === 'lparen') {
       if (token.text !== 'begins_with') {
         if (CONDITION_FUNCTIONS.has(token.text) || token.text === 'size') {
-          throw validationError(`Invalid operator used in KeyConditionExpression: ${token.text}`);
+          throw validationError(`Invalid operator used in ${this.label}: ${token.text}`);
         }
         this.failFunction(token.text);
       }
@@ -442,7 +458,7 @@ class Parser {
     const name = this.parseKeyAttrName();
     const opToken = this.peek();
     if (opToken.type === 'ne') {
-      throw validationError('Invalid operator used in KeyConditionExpression: <>');
+      throw validationError(`Invalid operator used in ${this.label}: <>`);
     }
     if (COMPARATORS.has(opToken.type)) {
       this.next();
@@ -609,6 +625,13 @@ export function parseConditionExpression(expression: string, ctx: ExpressionCont
 
 export function parseKeyConditionExpression(expression: string, ctx: ExpressionContext): ParsedKeyCondition {
   return new Parser(expression, 'KeyConditionExpression', ctx).parseKeyCondition();
+}
+
+export function parseSearchConditionExpression(
+  expression: string,
+  ctx: ExpressionContext,
+): Array<{ name: string; value: AttributeValue }> {
+  return new Parser(expression, 'SearchConditionExpression', ctx).parseSearchCondition();
 }
 
 export function parseUpdateExpression(expression: string, ctx: ExpressionContext): ParsedUpdate {

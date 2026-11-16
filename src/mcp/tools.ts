@@ -225,6 +225,35 @@ export const TOOLS: ToolDefinition[] = [
     run: (a, http) => http('POST', `/api/dynamo/tables/${name(a, 'table')}/query${region(a)}`, a.input ?? {}),
   },
   {
+    name: 'lss_dynamo_vector_search',
+    description:
+      'Similarity search over a DynamoDB vector index (SearchVectors): the topK nearest items with their Score. '
+      + 'Give `vector` (the query embedding) or `similarTo` (the key of an item whose embedding to reuse — the item '
+      + 'itself is left out). `filter` holds equality filters on the index SearchSchema attributes (the HASH one is '
+      + 'required by a partitioned index, defaulted from the `similarTo` item). Use it to check that embeddings '
+      + 'actually retrieve what you expect.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        table: str('Table name.'),
+        index: str('Vector index name. Optional when the table has exactly one.'),
+        vector: { type: 'array', items: { type: 'number' }, description: 'Query embedding (its length must equal the index Dimensions).' },
+        similarTo: obj('Plain key of an existing item, e.g. {"productId": "p-1"}.'),
+        topK: num('Number of results, 1..100 (default 10).'),
+        filter: obj('SearchSchema attribute → value equality filters, e.g. {"category": "peripherals"}.'),
+        ...REGION_PROP,
+      },
+      required: ['table'],
+    },
+    run: (a, http) => http('POST', `/api/dynamo/tables/${name(a, 'table')}/vector-search${region(a)}`, {
+      indexName: a.index,
+      vector: a.vector,
+      similarTo: a.similarTo,
+      topK: a.topK,
+      filter: a.filter,
+    }),
+  },
+  {
     name: 'lss_dynamo_put_item',
     description: 'MUTATES. Write one item into a DynamoDB table. `item` is a plain JSON object (not AttributeValue-typed).',
     mutates: true,

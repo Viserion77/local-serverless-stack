@@ -1,7 +1,9 @@
 // Table metadata for the DynamoDB emulator: CreateTable validation into a
 // persisted TableRecord, key extraction/validation against the schema, the
-// canonical item-key encoding used by the ItemTable, ARN builders and the
-// AWS-style item size estimate that backs the 400 KB limit.
+// canonical item-key encoding used by the ItemTable, ARN builders, the
+// AWS-style item size estimate that backs the 400 KB limit, and the vector
+// index definitions (CreateTable.VectorIndexes / UpdateTable.VectorIndexUpdates)
+// with the validation AWS applies to them.
 
 import crypto from 'crypto';
 import type { AttributeMap, AttributeValue } from '../../types.js';
@@ -32,6 +34,25 @@ export interface IndexRecord {
   projection: ProjectionRecord;
 }
 
+export type VectorDistanceFunction = 'COSINE' | 'EUCLIDEAN' | 'DOT_PRODUCT';
+
+// One vector index (DynamoDB vector search, GA 2026-08-05). The embedding is
+// an ordinary item attribute — an L of N — named by `vectorAttribute`; the
+// optional SearchSchema splits into at most one partitioning HASH attribute
+// (mandatory in every SearchVectors condition) and up to 18 inline filters
+// (optional equality filters). Both are typed through AttributeDefinitions,
+// exactly like a GSI key.
+export interface VectorIndexRecord {
+  indexName: string;
+  vectorAttribute: string;
+  dimensions: number;
+  distanceFunction: VectorDistanceFunction;
+  hashAttribute?: KeyAttribute;
+  inlineFilters: KeyAttribute[];
+  projection: ProjectionRecord;
+  createdAtMs: number;
+}
+
 export interface TableRecord {
   tableName: string;
   tableId: string;
@@ -46,6 +67,10 @@ export interface TableRecord {
   streamSpecification?: { StreamEnabled: boolean; StreamViewType: StreamViewType };
   latestStreamLabel?: string;
   ttl?: { attributeName: string; enabled: boolean };
+  // Optional on purpose: catalogs persisted by 1.2.x carry no such field and
+  // must load unchanged — every reader treats "missing" as "no vector index"
+  // (see vectorIndexesOf), so no store-format migration is needed.
+  vectorIndexes?: VectorIndexRecord[];
 }
 
 export interface KeyAttribute {
@@ -59,6 +84,16 @@ const INVALID_NAME_MESSAGE =
   "and may contain only the characters a-z, A-Z, 0-9, '_' (underscore), '-' (dash), and '.' (dot)";
 const STREAM_VIEW_TYPES: StreamViewType[] = ['KEYS_ONLY', 'NEW_IMAGE', 'OLD_IMAGE', 'NEW_AND_OLD_IMAGES'];
 const MAX_ITEM_BYTES = 400 * 1024;
+
+// Vector index quotas (DynamoDB Developer Guide, *Quotas → Vector indexes*).
+// The per-table count is adjustable to 20 on AWS through a quota request; the
+// emulator enforces the default every account starts with. Vector indexes
+// also count toward the 20-GSI-per-table quota.
+export const MAX_VECTOR_INDEXES_PER_TABLE = 5;
+const MAX_GSI_PLUS_VECTOR_INDEXES = 20;
+export const MAX_VECTOR_DIMENSIONS = 4096;
+const MAX_INLINE_FILTERS = 18;
+const DISTANCE_FUNCTIONS: VectorDistanceFunction[] = ['COSINE', 'EUCLIDEAN', 'DOT_PRODUCT'];
 
 // ---------------------------------------------------------------------------
 // ARNs
@@ -85,6 +120,7 @@ interface CreateTableWireInput {
   GlobalSecondaryIndexes?: unknown;
   LocalSecondaryIndexes?: unknown;
   StreamSpecification?: { StreamEnabled?: unknown; StreamViewType?: unknown };
+  VectorIndexes?: unknown;
 }
 
 function parseAttributeDefinitions(raw: unknown): AttributeDefinition[] {
@@ -213,6 +249,21 @@ export function buildTableRecord(input: Record<string, unknown>): TableRecord {
     localSecondaryIndexes,
   };
 
+  if (wire.VectorIndexes !== undefined) {
+    if (!Array.isArray(wire.VectorIndexes)) {
+      throw validationError('One or more parameter values were invalid: VectorIndexes must be a list');
+    }
+    // Validated one by one against the record as it grows, so the count and
+    // name-uniqueness rules see the indexes declared before each one — the
+    // same rules UpdateTable applies to a single Create later on.
+    const vectorIndexes: VectorIndexRecord[] = [];
+    record.vectorIndexes = vectorIndexes;
+    for (const definition of wire.VectorIndexes) {
+      vectorIndexes.push(validateVectorIndex(definition, record));
+    }
+    if (vectorIndexes.length === 0) delete record.vectorIndexes;
+  }
+
   if (wire.StreamSpecification?.StreamEnabled === true) {
     const viewType = wire.StreamSpecification.StreamViewType;
     if (typeof viewType !== 'string' || !STREAM_VIEW_TYPES.includes(viewType as StreamViewType)) {
@@ -223,6 +274,178 @@ export function buildTableRecord(input: Record<string, unknown>): TableRecord {
     record.latestStreamLabel = new Date().toISOString().replace(/Z$/, '');
   }
   return record;
+}
+
+// ---------------------------------------------------------------------------
+// Vector indexes
+// ---------------------------------------------------------------------------
+
+// Every reader goes through this: a record persisted before vector indexes
+// existed has no `vectorIndexes` field at all.
+export function vectorIndexesOf(record: TableRecord): VectorIndexRecord[] {
+  return record.vectorIndexes ?? [];
+}
+
+export function vectorIndexArnFor(account: string, region: string, tableName: string, indexName: string): string {
+  return `${tableArnFor(account, region, tableName)}/index/${indexName}`;
+}
+
+// Index names share one namespace per table across GSIs, LSIs and vector
+// indexes (AWS rejects a vector index named like an existing GSI).
+export function indexNamesOf(record: TableRecord): string[] {
+  return [
+    ...record.globalSecondaryIndexes.map((index) => index.indexName),
+    ...record.localSecondaryIndexes.map((index) => index.indexName),
+    ...vectorIndexesOf(record).map((index) => index.indexName),
+  ];
+}
+
+interface VectorIndexWire {
+  IndexName?: unknown;
+  VectorAttribute?: { AttributeName?: unknown };
+  SearchSchema?: unknown;
+  Projection?: unknown;
+  Dimensions?: unknown;
+  DistanceFunction?: unknown;
+}
+
+function invalidVector(message: string): never {
+  throw validationError(`One or more parameter values were invalid: ${message}`);
+}
+
+/**
+ * Validate one vector index definition (the `VectorIndex` shape of
+ * CreateTable, also the `Create` action of UpdateTable.VectorIndexUpdates)
+ * against the table it would join, and turn it into a VectorIndexRecord.
+ * Throws the AWS-shaped ValidationException for every rule AWS enforces:
+ * on-demand tables only, the per-table count (and the shared GSI quota),
+ * 1..4096 dimensions, a known distance function, at most one HASH and 18
+ * INLINE_FILTER elements, SearchSchema attributes typed in
+ * AttributeDefinitions, and an index name unique across GSI/LSI/vector.
+ */
+export function validateVectorIndex(raw: unknown, table: TableRecord): VectorIndexRecord {
+  const wire = (raw ?? {}) as VectorIndexWire;
+  const indexName = wire.IndexName;
+  if (typeof indexName !== 'string' || !NAME_PATTERN.test(indexName)) {
+    throw validationError(INVALID_NAME_MESSAGE);
+  }
+  if (table.billingMode !== 'PAY_PER_REQUEST') {
+    invalidVector(`Vector indexes are only supported on tables with BillingMode PAY_PER_REQUEST; table ${table.tableName} is PROVISIONED`);
+  }
+  const existing = vectorIndexesOf(table);
+  if (existing.length >= MAX_VECTOR_INDEXES_PER_TABLE) {
+    invalidVector(`VectorIndex count exceeds the per-table limit of ${MAX_VECTOR_INDEXES_PER_TABLE}`);
+  }
+  if (existing.length + table.globalSecondaryIndexes.length >= MAX_GSI_PLUS_VECTOR_INDEXES) {
+    invalidVector(`GlobalSecondaryIndex count (vector indexes included) exceeds the per-table limit of ${MAX_GSI_PLUS_VECTOR_INDEXES}`);
+  }
+  if (indexNamesOf(table).includes(indexName)) {
+    invalidVector(`Duplicate index name: ${indexName}`);
+  }
+
+  const vectorAttribute = wire.VectorAttribute?.AttributeName;
+  if (typeof vectorAttribute !== 'string' || vectorAttribute.length === 0) {
+    invalidVector(`VectorAttribute.AttributeName is required for vector index ${indexName}`);
+  }
+  if (table.keySchema.some((el) => el.AttributeName === vectorAttribute)) {
+    invalidVector(`The vector attribute ${vectorAttribute} cannot be a key attribute of the table`);
+  }
+
+  const dimensions = wire.Dimensions;
+  if (typeof dimensions !== 'number' || !Number.isInteger(dimensions) || dimensions < 1 || dimensions > MAX_VECTOR_DIMENSIONS) {
+    invalidVector(`Dimensions must be an integer between 1 and ${MAX_VECTOR_DIMENSIONS} for vector index ${indexName}`);
+  }
+  const distanceFunction = wire.DistanceFunction;
+  if (typeof distanceFunction !== 'string' || !DISTANCE_FUNCTIONS.includes(distanceFunction as VectorDistanceFunction)) {
+    invalidVector(`DistanceFunction must be one of ${DISTANCE_FUNCTIONS.join(', ')} for vector index ${indexName}`);
+  }
+
+  const defined = new Map(table.attributeDefinitions.map((d) => [d.AttributeName, d.AttributeType]));
+  let hashAttribute: KeyAttribute | undefined;
+  const inlineFilters: KeyAttribute[] = [];
+  if (wire.SearchSchema !== undefined) {
+    if (!Array.isArray(wire.SearchSchema)) invalidVector(`SearchSchema must be a list for vector index ${indexName}`);
+    const seen = new Set<string>();
+    for (const element of wire.SearchSchema as Array<{ AttributeName?: unknown; SearchSchemaElementType?: unknown }>) {
+      const name = element?.AttributeName;
+      const kind = element?.SearchSchemaElementType;
+      if (typeof name !== 'string' || name.length === 0) {
+        invalidVector(`SearchSchema elements require an AttributeName for vector index ${indexName}`);
+      }
+      if (kind !== 'HASH' && kind !== 'INLINE_FILTER') {
+        invalidVector('SearchSchemaElementType must be one of HASH, INLINE_FILTER');
+      }
+      if (seen.has(name) || name === vectorAttribute) {
+        invalidVector(`Duplicate attribute in the SearchSchema of vector index ${indexName}: ${name}`);
+      }
+      seen.add(name);
+      const type = defined.get(name);
+      if (type === undefined) {
+        invalidVector(
+          'Some index key attributes are not defined in AttributeDefinitions. ' +
+          `Keys: [${name}], AttributeDefinitions: [${[...defined.keys()].join(', ')}]`,
+        );
+      }
+      if (kind === 'HASH') {
+        if (hashAttribute) invalidVector(`A vector index SearchSchema can contain at most one HASH element (index ${indexName})`);
+        hashAttribute = { name, type };
+      } else {
+        inlineFilters.push({ name, type });
+      }
+    }
+    if (inlineFilters.length > MAX_INLINE_FILTERS) {
+      invalidVector(`A vector index SearchSchema can contain at most ${MAX_INLINE_FILTERS} INLINE_FILTER elements (index ${indexName})`);
+    }
+  }
+
+  const record: VectorIndexRecord = {
+    indexName,
+    vectorAttribute,
+    dimensions,
+    distanceFunction: distanceFunction as VectorDistanceFunction,
+    inlineFilters,
+    projection: parseProjection(wire.Projection),
+    createdAtMs: Date.now(),
+  };
+  if (hashAttribute) record.hashAttribute = hashAttribute;
+  return record;
+}
+
+// UpdateTable's AttributeDefinitions: the attributes a vector index Create
+// references, merged into the table's. Redefining an existing attribute with
+// another type is refused (it would retype a key or a live index attribute).
+export function mergeAttributeDefinitions(current: AttributeDefinition[], raw: unknown): AttributeDefinition[] {
+  if (raw === undefined) return current;
+  const merged = [...current];
+  for (const definition of parseAttributeDefinitions(raw)) {
+    const existing = merged.find((d) => d.AttributeName === definition.AttributeName);
+    if (!existing) {
+      merged.push(definition);
+    } else if (existing.AttributeType !== definition.AttributeType) {
+      invalidVector(
+        `Cannot change the type of attribute ${definition.AttributeName} from ${existing.AttributeType} to ${definition.AttributeType}`,
+      );
+    }
+  }
+  return merged;
+}
+
+// The wire shape DescribeTable / CreateTable / UpdateTable report back
+// (VectorIndexDescription minus the live statistics the emulator adds).
+export function vectorIndexDefinition(index: VectorIndexRecord): Record<string, unknown> {
+  const definition: Record<string, unknown> = {
+    IndexName: index.indexName,
+    VectorAttribute: { AttributeName: index.vectorAttribute },
+    Dimensions: index.dimensions,
+    DistanceFunction: index.distanceFunction,
+    Projection: index.projection,
+  };
+  const searchSchema = [
+    ...(index.hashAttribute ? [{ AttributeName: index.hashAttribute.name, SearchSchemaElementType: 'HASH' }] : []),
+    ...index.inlineFilters.map((filter) => ({ AttributeName: filter.name, SearchSchemaElementType: 'INLINE_FILTER' })),
+  ];
+  if (searchSchema.length > 0) definition.SearchSchema = searchSchema;
+  return definition;
 }
 
 // ---------------------------------------------------------------------------

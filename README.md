@@ -23,7 +23,7 @@ flowchart LR
 
 Every feature LSS ships, grouped by area. Each one expands into **how it works** (the real
 mechanism and defaults), **where it lives** (the files that own it) and **why it exists** (the
-problem it solves). 95 features in nine areas — start with [Quick Start](#quick-start) if you just
+problem it solves). 97 features in nine areas — start with [Quick Start](#quick-start) if you just
 want it running.
 
 > **⚠️ Keep this inventory alive.** A new capability MUST be added here **and** to
@@ -290,6 +290,17 @@ npx [-y|--yes]…   serverless|sls|osls[@version]   package   [args…]
 </details>
 
 <details>
+<summary><b>DynamoDB vector indexes</b> — <code>VectorIndexes</code> in the template become searchable indexes, added to existing tables on re-register</summary>
+
+**How it works.** `parseDynamoDB` reads `AWS::DynamoDB::Table.VectorIndexes` (a numeric-string `Dimensions` left by a resolved String parameter is coerced to an integer) and `CreateTable` carries them, with every `SearchSchema` attribute added to `AttributeDefinitions` the way GSI keys are. When the table already exists, the provisioner describes it and applies each declared index it lacks with **one `UpdateTable` per index** (AWS creates one index per table at a time). The policy is additive: an index the template stopped declaring is reported as a warning, never deleted. A table declaring vector indexes without `BillingMode: PAY_PER_REQUEST` (vector indexes are on-demand only) is created **without** them plus an actionable warning, and a vector index the engine rejects for any other reason triggers a retry without it — the table, and the boot, survive either way.
+
+**Where it lives.** `src/server/services/cloudformation-parser.ts` — `parseDynamoDB` / `DynamoDBVectorIndex`. `src/server/services/resource-provisioner.ts` — `createDynamoDBTable` and `syncVectorIndexes`.
+
+**Why it exists.** A service that adopts DynamoDB vector search declares the index in CloudFormation and calls `SearchVectors` from its handlers; without the index locally it could not run at all.
+
+</details>
+
+<details>
 <summary><b>SQS queues — FIFO, retention and redrive to a DLQ</b> — queue attributes survive the trip from CloudFormation to the running queue</summary>
 
 **How it works.** `CreateQueue` receives only the attributes the template declares: `VisibilityTimeout`, `MessageRetentionPeriod`, `FifoQueue` (plus `ContentBasedDeduplication`) and `RedrivePolicy`. Redrive is the interesting one: CFN declares it as an object, the SQS API wants a JSON *string*, and `deadLetterTargetArn` is usually `Fn::GetAtt [OrdersDlq, Arn]`. The parser reduces that to `OrdersDlq::Arn`, and the provisioner resolves the logical id through the template map into `arn:aws:sqs:<region>:000000000000:<queueName>` — so a DLQ declared *after* the queue that points at it still resolves, because nothing is looked up on the live engine. A redrive target that isn't an SQS queue in the same template is dropped with a warning and the queue is still created. Because `CreateQueue` cannot change an existing queue's attributes, a queue that already exists gets the policy pushed separately via `SetQueueAttributes`.
@@ -529,6 +540,17 @@ npx [-y|--yes]…   serverless|sls|osls[@version]   package   [args…]
 </details>
 
 <details>
+<summary><b>DynamoDB vector search</b> — vector indexes and <code>SearchVectors</code> with AWS ranking, scores, filters and errors</summary>
+
+**How it works.** `CreateTable.VectorIndexes`, `DescribeTable.Table.VectorIndexes` and the `VectorIndexUpdates` subset of `UpdateTable` are implemented with AWS validation (on-demand tables only, 5 per table and the shared 20-GSI quota, 1–4096 `Dimensions`, ≤ 1 `HASH` / ≤ 18 `INLINE_FILTER`, one index operation per call → `LimitExceededException`). Writes are validated in the same place items are committed: wrong dimensions or a mistyped `HASH` reject the write, a missing `HASH` leaves the item silently unindexed. `SearchVectors` (the SDK's `search-ddb` host is overridden by a configured endpoint, so it arrives on the normal route) runs an **exact** k-NN: `COSINE` (cosine distance, ascending), `EUCLIDEAN` (ascending) or `DOT_PRODUCT` (descending), with the `HASH` mandatory in `SearchConditionExpression`, `=`-only inline filters, projection rules (the vector is returned only when projected) and a deterministic tie-break. A per-index cache of parsed f32 vectors is built on the first search, kept in step by the write funnel (put, update, delete, TTL, batch, transactions) and rebuilt after a restart. `Query`/`Scan` against a vector index are refused, as on AWS.
+
+**Where it lives.** `src/server/engine/emulators/dynamodb/vector.ts` — scoring, cache, top-K, request parsing. `src/server/engine/emulators/dynamodb/schema.ts` — `validateVectorIndex`. `src/server/engine/emulators/dynamodb/index.ts` — `searchVectors`, `updateTable`, `recordChange`.
+
+**Why it exists.** Developers need to see that their embeddings retrieve what they expect before shipping, and an exact search can never fail a test that passes against AWS's approximate one.
+
+</details>
+
+<details>
 <summary><b>SQS</b> — queues with real visibility timeouts, FIFO ordering, dedup and dead-letter redrive</summary>
 
 **How it works.** Served over AWS JSON 1.0 (`X-Amz-Target: AmazonSQS.*`). Queue *attributes* persist in the `sqs/<region>/queues` catalog and are read back with AWS defaults applied — `VisibilityTimeout 30`, `DelaySeconds 0`, `MessageRetentionPeriod 345600`, `ReceiveMessageWaitTimeSeconds 0`, `MaximumMessageSize 262144`. *Messages* are memory-only: a state machine per queue tracks delay deadlines, in-flight visibility, FIFO group serialization and a 5-minute deduplication window, driven by **one unref'd timer per queue** armed to the nearest deadline. Every message that becomes visible emits `sqs:message-visible` on the bus, which is what wakes the delivery loops instead of polling. Receipt handles behave like AWS's: the most recent handle still deletes a message after its visibility lapsed, until someone receives it again — a consumer that finishes just past its timeout deletes what it processed instead of getting a 200 while the message redelivers — and `VisibilityTimeout: 0` makes the message visible again at once, so peeking at a DLQ never misses it. A `RedrivePolicy` whose `deadLetterTargetArn` resolves to a live queue moves a message to the DLQ on the receive that would push its receive count past `maxReceiveCount` (not the instant its visibility lapses), preserving `MessageId` and body; an unresolvable target logs one warning and disables redrive. `ListDeadLetterSourceQueues` answers the reverse question, `ListQueues` pages with `MaxResults`/`NextToken`, `MaximumMessageSize` is enforced on the body plus its attributes, and batch operations enforce the AWS caps (max 10 entries, distinct `Id`s). On graceful shutdown the messages are snapshotted to `sqs-messages.snapshot.json` in the data dir and restored before the delivery loops start.
@@ -711,7 +733,7 @@ npx [-y|--yes]…   serverless|sls|osls[@version]   package   [args…]
 
 **How it works.** `GET /api/dynamo/tables` follows `LastEvaluatedTableName` through the 100-names-per-page `ListTables` limit, then describes each table in parallel: key schema, attribute definitions, GSI/LSI presence, stream flag, item count, size, billing mode (defaulting to `PROVISIONED`) and a `warnings` array that flags `TTL not configured`. `POST /tables/:name/scan` and `/query` accept filter/key-condition/projection expressions, `indexName`, `limit`, `exclusiveStartKey` and `scanIndexForward`, marshalling plain JSON values into `AttributeValue` and unmarshalling items and `lastEvaluatedKey` back, so callers never touch the wire format. Items are read/written/deleted through `/items/get`, `/items` and `/items/delete`, and TTL is inspected and toggled via `GET`/`PUT /tables/:name/ttl` (enabling requires `attributeName`; disabling reuses the current one, falling back to `ttl`).
 
-**Where it lives.** `src/server/services/dynamo-explorer.ts` — the singleton: pagination, marshalling and TTL handling. `src/server/routes/dynamo.ts` — `/api/dynamo/*`, name anti-traversal validation, 400 on bad expressions. `src/mcp/tools.ts` — `lss_dynamo_tables`, `lss_dynamo_scan`, `lss_dynamo_query`, `lss_dynamo_put_item`.
+**Where it lives.** `src/server/services/dynamo-explorer.ts` — the singleton: pagination, marshalling and TTL handling. `src/server/routes/dynamo.ts` — `/api/dynamo/*`, name anti-traversal validation, 400 on bad expressions. `src/mcp/tools.ts` — `lss_dynamo_tables`, `lss_dynamo_scan`, `lss_dynamo_query`, `lss_dynamo_vector_search`, `lss_dynamo_put_item`. Vector search: `POST /api/dynamo/tables/:name/vector-search` (`vector` or `similarTo` an item, `topK`, `filter`), `client.dynamo.searchVectors()`, and the dashboard's *Vector search* tab with ranked results and scores.
 
 **Why it exists.** The AWS console's table browser is the thing people miss most when they go local, and `aws dynamodb scan --endpoint-url …` returns raw `AttributeValue` JSON. Forty services with ten tables each also blow straight past the 100-table page limit, which is exactly where a naïve explorer silently shows a quarter of the stack.
 
@@ -1042,7 +1064,7 @@ red/green are 4.4 ΔE apart under deuteranopia.
 <details>
 <summary><b>MCP server (`lss mcp`) — 28 tools</b> — hands an AI coding agent read and write access to the running stack.</summary>
 
-**How it works.** `lss mcp` dynamic-imports the ESM build at `dist/mcp/server.js` and speaks newline-delimited JSON-RPC 2.0 on stdin/stdout — protocol revision `2024-11-05`, advertising `capabilities.tools.listChanged: false`. It implements `initialize`, `ping`, `tools/list` and `tools/call`; unimplemented *notifications* are silently accepted per spec, while a request for an unknown method gets `-32601`. Incoming lines are processed through a promise chain so responses come back in arrival order, and stdout carries protocol frames only (diagnostics go to stderr). The 26 tools are thin wrappers over the same REST API the client uses — no AWS SDK in the process — and five of them are flagged `MUTATES` in their description because the MCP client shows that text to a human before approving: `lss_register_service`, `lss_invoke`, `lss_dynamo_put_item`, `lss_queue_send`, `lss_seed_run`. A failing tool answers a text result with `isError: true` (a normal outcome the model reads and reacts to) rather than a transport-level JSON-RPC error, and every result is pretty-printed JSON text. The HTTP layer here uses a 130 s timeout — deliberately above `lss_queue_await_idle`'s 120 s server-side clamp — and treats 408 as a result, not a failure.
+**How it works.** `lss mcp` dynamic-imports the ESM build at `dist/mcp/server.js` and speaks newline-delimited JSON-RPC 2.0 on stdin/stdout — protocol revision `2024-11-05`, advertising `capabilities.tools.listChanged: false`. It implements `initialize`, `ping`, `tools/list` and `tools/call`; unimplemented *notifications* are silently accepted per spec, while a request for an unknown method gets `-32601`. Incoming lines are processed through a promise chain so responses come back in arrival order, and stdout carries protocol frames only (diagnostics go to stderr). The 29 tools are thin wrappers over the same REST API the client uses — no AWS SDK in the process — and five of them are flagged `MUTATES` in their description because the MCP client shows that text to a human before approving: `lss_register_service`, `lss_invoke`, `lss_dynamo_put_item`, `lss_queue_send`, `lss_seed_run`. A failing tool answers a text result with `isError: true` (a normal outcome the model reads and reacts to) rather than a transport-level JSON-RPC error, and every result is pretty-printed JSON text. The HTTP layer here uses a 130 s timeout — deliberately above `lss_queue_await_idle`'s 120 s server-side clamp — and treats 408 as a result, not a failure.
 
 **Where it lives.** `src/mcp/tools.ts` — the 26 tool definitions, their JSON schemas and the HTTP call each makes. `src/mcp/protocol.ts` — hand-rolled JSON-RPC dispatch (`handleMessage`/`handleLine`), pure and testable. `src/mcp/server.ts` — the stdio seam: readline in, `JSON.stringify` frames out. `src/mcp/http.ts` — base-URL resolution and the fetch caller with `LssUnreachableError`.
 

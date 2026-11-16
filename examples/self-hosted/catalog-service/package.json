@@ -2,7 +2,7 @@
   "name": "catalog-service-example",
   "version": "0.0.0",
   "private": true,
-  "description": "POST /products indexes into OpenSearch; GET /search runs full-text + filtered queries; GET /stats aggregates. Port 3634 (invoke 13634). No runtime dependencies \u2014 the handlers speak the OpenSearch REST API with Node's global fetch.",
+  "description": "POST /products indexes into OpenSearch; GET /search runs full-text + filtered queries; GET /stats aggregates; PUT /products/{id}/embedding + GET /products/{id}/similar run DynamoDB vector search (SearchVectors). Port 3634 (invoke 13634). The OpenSearch handlers speak the REST API with Node's global fetch; the vector handlers use @aws-sdk v3 resolved from the repository root.",
   "scripts": {
     "package": "serverless package"
   },

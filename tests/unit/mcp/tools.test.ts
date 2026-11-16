@@ -122,6 +122,21 @@ describe('dynamo tools', () => {
     await expectCall('lss_dynamo_query', { table: 'Orders' }, ['POST', '/api/dynamo/tables/Orders/query', {}]);
   });
 
+  it('vector_search maps its arguments onto the explorer body', async () => {
+    await expectCall(
+      'lss_dynamo_vector_search',
+      { table: 'catalog-embeddings', index: 'ProductEmbeddingIndex', vector: [1, 0], topK: 3, filter: { category: 'mice' }, region: 'us-west-2' },
+      ['POST', '/api/dynamo/tables/catalog-embeddings/vector-search?region=us-west-2', {
+        indexName: 'ProductEmbeddingIndex', vector: [1, 0], similarTo: undefined, topK: 3, filter: { category: 'mice' },
+      }],
+    );
+    await expectCall(
+      'lss_dynamo_vector_search',
+      { table: 'catalog-embeddings', similarTo: { productId: 'p-1' } },
+      ['POST', '/api/dynamo/tables/catalog-embeddings/vector-search', { similarTo: { productId: 'p-1' } }],
+    );
+  });
+
   it('put_item wraps the plain item the API expects', async () => {
     await expectCall(
       'lss_dynamo_put_item',

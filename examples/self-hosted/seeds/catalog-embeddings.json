@@ -1,0 +1,130 @@
+[
+  {
+    "productId": "p-100",
+    "category": "peripherals",
+    "name": "Wireless Mouse",
+    "description": "wireless optical mouse with usb receiver",
+    "embedding": [
+      -0.316228,
+      0.632456,
+      0,
+      -0.316228,
+      0.632456,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "productId": "p-101",
+    "category": "peripherals",
+    "name": "Silent Wireless Mouse",
+    "description": "silent wireless optical mouse with usb receiver",
+    "embedding": [
+      -0.408248,
+      0.816497,
+      0,
+      -0.408248,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "productId": "p-102",
+    "category": "peripherals",
+    "name": "Mechanical Keyboard",
+    "description": "mechanical keyboard with tactile switches",
+    "embedding": [
+      0,
+      -0.301511,
+      -0.603023,
+      0.301511,
+      -0.603023,
+      0.301511,
+      0,
+      0
+    ]
+  },
+  {
+    "productId": "p-103",
+    "category": "peripherals",
+    "name": "Compact Mechanical Keyboard",
+    "description": "compact mechanical keyboard with linear switches",
+    "embedding": [
+      0.258199,
+      -0.258199,
+      -0.516398,
+      0,
+      -0.516398,
+      0.258199,
+      -0.516398,
+      0
+    ]
+  },
+  {
+    "productId": "p-104",
+    "category": "peripherals",
+    "name": "USB-C Hub",
+    "description": "usb c hub with hdmi and ethernet",
+    "embedding": [
+      0,
+      0.267261,
+      -0.534522,
+      0,
+      0.534522,
+      0,
+      0.534522,
+      0.267261
+    ]
+  },
+  {
+    "productId": "p-200",
+    "category": "audio",
+    "name": "Noise Cancelling Headphones",
+    "description": "over ear noise cancelling headphones",
+    "embedding": [
+      0,
+      -0.471405,
+      0,
+      -0.707107,
+      0,
+      0,
+      0.471405,
+      -0.235702
+    ]
+  },
+  {
+    "productId": "p-201",
+    "category": "audio",
+    "name": "Wireless Earbuds",
+    "description": "wireless earbuds with charging case",
+    "embedding": [
+      0,
+      0.666667,
+      -0.333333,
+      0.666667,
+      0,
+      0,
+      0,
+      0
+    ]
+  },
+  {
+    "productId": "p-202",
+    "category": "audio",
+    "name": "Studio Headphones",
+    "description": "closed back studio headphones",
+    "embedding": [
+      0,
+      0,
+      -0.316228,
+      0.632456,
+      0,
+      -0.316228,
+      0.632456,
+      0
+    ]
+  }
+]

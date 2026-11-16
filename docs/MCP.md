@@ -86,6 +86,7 @@ that text before asking a human to approve the call.
 | `lss_invoke` | **MUTATES.** Run a handler with a JSON event, sync or `Event` |
 | `lss_apis` | HTTP routes per service, with authorizer and listener status |
 | `lss_dynamo_tables` / `lss_dynamo_scan` / `lss_dynamo_query` | Table metadata and reads (full AWS expression language) |
+| `lss_dynamo_vector_search` | Similarity search over a vector index (`SearchVectors`): `vector` or `similarTo` an item, `topK`, `filter` — ranked items with scores |
 | `lss_dynamo_put_item` | **MUTATES.** Write one plain-JSON item |
 | `lss_queues` / `lss_queue_send` / `lss_queue_await_idle` | Queue metrics and consumers; send; block until drained |
 | `lss_buckets` / `lss_bucket_objects` | S3 buckets and object listings (prefix/delimiter) |

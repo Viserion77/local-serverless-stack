@@ -53,6 +53,11 @@ jobs:
       - name: Install dependencies (sample-microservice fixture)
         run: npm ci --prefix tests/integration/fixtures/sample-microservice
 
+      # tests/integration/vector-search.test.ts registers the catalog example,
+      # which packages with its own osls dev dependency.
+      - name: Install dependencies (catalog-service example)
+        run: npm ci --prefix examples/self-hosted/catalog-service
+
       - name: Build project
         run: npm run build
 

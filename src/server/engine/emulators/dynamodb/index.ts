@@ -1,6 +1,7 @@
-// DynamoDB emulator core: control plane (tables, TTL), item CRUD with
-// condition expressions, Query/Scan (query.ts), batch ops, TTL expiration
-// (lazy on read plus a background sweep) and change streams (streams.ts). All AWS-shaped failures are
+// DynamoDB emulator core: control plane (tables, TTL, the vector-index subset
+// of UpdateTable), item CRUD with condition expressions, Query/Scan
+// (query.ts), SearchVectors (vector.ts), batch ops, TTL expiration (lazy on
+// read plus a background sweep) and change streams (streams.ts). All AWS-shaped failures are
 // thrown as AwsError with the exact error names the provisioner's idempotency
 // and the SDK's error mapping depend on (PRD RF2.4/RF3).
 
@@ -12,16 +13,24 @@ import { AwsError, dynamoError, notImplementedOperation, validationError } from 
 import {
   applyProjection, applyUpdate, assertPlaceholdersUsed, attributeValuesEqual, compileCondition,
 } from './expressions/index.js';
-import { parseUpdateExpression } from './expressions/parser.js';
+import {
+  parseProjectionExpression, parseSearchConditionExpression, parseUpdateExpression,
+} from './expressions/parser.js';
 import type { ExpressionContext } from './expressions/expression-types.js';
 import type { TableRecord } from './schema.js';
 import {
-  assertItemSize, buildTableRecord, canonicalKey, itemSizeBytes, keyMapOf, rejectLegacyParams,
-  streamArnFor, tableArnFor, validateItemKey, validateProvidedKey,
+  assertItemSize, buildTableRecord, canonicalKey, itemSizeBytes, keyMapOf, mergeAttributeDefinitions,
+  rejectLegacyParams, streamArnFor, tableArnFor, validateItemKey, validateProvidedKey, validateVectorIndex,
+  vectorIndexArnFor, vectorIndexDefinition, vectorIndexesOf,
 } from './schema.js';
 import { executeQuery, executeScan, indexHasItem } from './query.js';
 import type { PageResult } from './query.js';
 import { DynamoStreams } from './streams.js';
+import type { StreamAppendInput } from './streams.js';
+import {
+  defaultResultItem, isIndexed, parseSearchVector, parseTopK, projectedNames, resolveSearchCondition,
+  validateVectorAttributes, VectorIndexCache,
+} from './vector.js';
 import {
   parseTransactGetItems, parseTransactWriteItems, TransactTokenCache,
 } from './transactions.js';
@@ -32,6 +41,9 @@ const TTL_USER_IDENTITY = { type: 'Service', principalId: 'dynamodb.amazonaws.co
 const DEFAULT_LIST_TABLES_LIMIT = 100;
 const MAX_BATCH_WRITE_ITEMS = 25;
 const MAX_BATCH_GET_KEYS = 100;
+// The UpdateTable fields the emulator implements (PRD §4.4); anything else is
+// refused by name.
+const UPDATE_TABLE_FIELDS = new Set(['TableName', 'VectorIndexUpdates', 'AttributeDefinitions']);
 // How often the background TTL deleter runs. AWS deletes expired items
 // "typically within a few days"; a dev loop wants to see the TTL-driven
 // stream REMOVE (and the Lambda behind it) within seconds, not days.
@@ -57,6 +69,9 @@ export class DynamoDbEmulator implements TargetEmulator {
   private readonly streams: DynamoStreams;
   private readonly catalogs = new Map<string, CatalogStore<TableRecord>>();
   private readonly transactTokens = new TransactTokenCache();
+  // Derived, memory-only vector caches (see vector.ts): built on the first
+  // SearchVectors of an index, fed by recordChange, rebuilt after a restart.
+  private readonly vectors = new VectorIndexCache();
   private ttlTimer: NodeJS.Timeout | null = null;
   private ttlSweep: Promise<number> | null = null;
   // Per table (region + name): the earliest TTL instant (ms) among its live
@@ -76,6 +91,7 @@ export class DynamoDbEmulator implements TargetEmulator {
       case 'CreateTable': return this.createTable(region, input);
       case 'DescribeTable': return this.describeTable(region, input);
       case 'DeleteTable': return this.deleteTable(region, input);
+      case 'UpdateTable': return this.updateTable(region, input);
       case 'ListTables': return this.listTables(region, input);
       case 'UpdateTimeToLive': return this.updateTimeToLive(region, input);
       case 'DescribeTimeToLive': return this.describeTimeToLive(region, input);
@@ -85,6 +101,7 @@ export class DynamoDbEmulator implements TargetEmulator {
       case 'UpdateItem': return this.updateItem(region, input);
       case 'Query': return this.query(region, input);
       case 'Scan': return this.scan(region, input);
+      case 'SearchVectors': return this.searchVectors(region, input);
       case 'BatchGetItem': return this.batchGetItem(region, input);
       case 'BatchWriteItem': return this.batchWriteItem(region, input);
       case 'TransactWriteItems': return this.transactWriteItems(region, input);
@@ -188,6 +205,20 @@ export class DynamoDbEmulator implements TargetEmulator {
     }
   }
 
+  // The single write funnel: every committed change of one item — put,
+  // update, delete, TTL expiry, batch and transaction writes — lands here,
+  // which produces the stream record AND keeps the vector caches in step.
+  // Hooking one place instead of each operation is what makes the cache
+  // incrementality impossible to forget for the next write path.
+  private recordChange(region: string, record: TableRecord, change: StreamAppendInput): void {
+    this.streams.append(region, record.tableName, change);
+    if (vectorIndexesOf(record).length > 0) {
+      this.vectors.applyChange(
+        region, record, canonicalKey(record, change.keys), change.newImage, (item) => this.expiresAtMs(record, item),
+      );
+    }
+  }
+
   // -- TTL -------------------------------------------------------------------
 
   // The TTL attribute is epoch SECONDS in an N; anything else (missing, S,
@@ -279,7 +310,7 @@ export class DynamoDbEmulator implements TargetEmulator {
 
   private removeExpired(region: string, record: TableRecord, items: ItemTable, key: string, item: AttributeMap): void {
     items.delete(key);
-    this.streams.append(region, record.tableName, {
+    this.recordChange(region, record, {
       eventName: 'REMOVE',
       keys: keyMapOf(record, item),
       oldImage: structuredClone(item),
@@ -338,6 +369,7 @@ export class DynamoDbEmulator implements TargetEmulator {
     await items.destroy();
     this.streams.unregister(region, record.tableName);
     this.invalidateTtlMark(region, record.tableName);
+    this.vectors.dropTable(region, record.tableName);
     const catalog = await this.catalogFor(region);
     catalog.delete(record.tableName);
     return {
@@ -348,6 +380,56 @@ export class DynamoDbEmulator implements TargetEmulator {
         TableId: record.tableId,
       },
     };
+  }
+
+  // UpdateTable — the vector-index subset only (PRD §4.4). Every other
+  // mutable field is refused BY NAME, so nobody mistakes a silent no-op for a
+  // billing-mode or stream change that never happened. Index operations
+  // complete synchronously: the response already describes the index ACTIVE.
+  private async updateTable(region: string, input: Record<string, unknown>): Promise<object> {
+    const record = await this.requireTable(region, input.TableName, 'named');
+    const unsupported = Object.keys(input)
+      .filter((field) => input[field] !== undefined && !UPDATE_TABLE_FIELDS.has(field));
+    if (unsupported.length > 0) {
+      throw validationError(
+        'UpdateTable on the LSS self engine supports only VectorIndexUpdates (with the AttributeDefinitions a Create ' +
+        `needs); unsupported parameter(s): ${unsupported.join(', ')}`,
+      );
+    }
+    const updates = input.VectorIndexUpdates;
+    if (!Array.isArray(updates) || updates.length === 0) {
+      throw validationError('One or more parameter values were invalid: VectorIndexUpdates must contain one Create or Delete action');
+    }
+    // AWS creates or deletes one index per table at a time — and that limit
+    // is also checked within a single call, so two actions in one request fail.
+    if (updates.length > 1) {
+      throw dynamoError(
+        'LimitExceededException',
+        'Subscriber limit exceeded: Only 1 online index can be created or deleted simultaneously per table',
+      );
+    }
+    const update = (updates[0] ?? {}) as { Create?: unknown; Delete?: { IndexName?: unknown } };
+    if ((update.Create === undefined) === (update.Delete === undefined)) {
+      throw validationError('One or more parameter values were invalid: A VectorIndexUpdate must contain exactly one of Create or Delete');
+    }
+    if (update.Create !== undefined) {
+      const attributeDefinitions = mergeAttributeDefinitions(record.attributeDefinitions, input.AttributeDefinitions);
+      const index = validateVectorIndex(update.Create, { ...record, attributeDefinitions });
+      record.attributeDefinitions = attributeDefinitions;
+      record.vectorIndexes = [...vectorIndexesOf(record), index];
+    } else {
+      const indexName = update.Delete!.IndexName;
+      const remaining = vectorIndexesOf(record).filter((index) => index.indexName !== indexName);
+      if (remaining.length === vectorIndexesOf(record).length) {
+        throw dynamoError('ResourceNotFoundException', `Requested resource not found: Vector index: ${String(indexName)} not found`);
+      }
+      if (remaining.length > 0) record.vectorIndexes = remaining;
+      else delete record.vectorIndexes;
+      this.vectors.dropIndex(region, record.tableName, String(indexName));
+    }
+    (await this.catalogFor(region)).set(record.tableName, record);
+    const items = await this.itemsFor(region, record.tableName);
+    return { TableDescription: this.tableDescription(region, record, items) };
   }
 
   private async listTables(region: string, input: Record<string, unknown>): Promise<object> {
@@ -379,6 +461,8 @@ export class DynamoDbEmulator implements TargetEmulator {
     if (!spec.Enabled && !currentlyEnabled) throw validationError('TimeToLive is already disabled');
     record.ttl = { attributeName: spec.AttributeName, enabled: spec.Enabled };
     this.invalidateTtlMark(region, record.tableName);
+    // Cache entries carry each item's expiry under the old TTL settings.
+    this.vectors.dropTable(region, record.tableName);
     (await this.catalogFor(region)).set(record.tableName, record);
     return { TimeToLiveSpecification: { AttributeName: spec.AttributeName, Enabled: spec.Enabled } };
   }
@@ -401,6 +485,9 @@ export class DynamoDbEmulator implements TargetEmulator {
     const indexStats = new Map<string, { count: number; size: number }>();
     const allIndexes = [...record.globalSecondaryIndexes, ...record.localSecondaryIndexes];
     for (const index of allIndexes) indexStats.set(index.indexName, { count: 0, size: 0 });
+    const vectorIndexes = vectorIndexesOf(record);
+    const vectorProjections = vectorIndexes.map((index) => projectedNames(record, index));
+    for (const index of vectorIndexes) indexStats.set(index.indexName, { count: 0, size: 0 });
     for (const [, value] of items.entries()) {
       const item = value as AttributeMap;
       const size = itemSizeBytes(item);
@@ -413,6 +500,19 @@ export class DynamoDbEmulator implements TargetEmulator {
           stats.size += size;
         }
       }
+      vectorIndexes.forEach((index, position) => {
+        if (!isIndexed(index, item)) return;
+        const stats = indexStats.get(index.indexName)!;
+        stats.count++;
+        // ≈ the f32 vector plus the projected attributes (what the index
+        // stores); the base-table decimal text of the vector is not counted.
+        stats.size += index.dimensions * 4;
+        const projected = vectorProjections[position];
+        for (const [name, attribute] of Object.entries(item)) {
+          if (name === index.vectorAttribute || (projected && !projected.has(name))) continue;
+          stats.size += itemSizeBytes({ [name]: attribute });
+        }
+      });
     }
     const epochSeconds = record.createdAtMs / 1000;
     const provisionedThroughput = {
@@ -461,6 +561,18 @@ export class DynamoDbEmulator implements TargetEmulator {
         IndexSizeBytes: indexStats.get(index.indexName)!.size,
       }));
     }
+    if (vectorIndexes.length > 0) {
+      // Index operations complete synchronously in the emulator, so every
+      // vector index is ACTIVE and never Backfilling (a documented divergence:
+      // on AWS a new index goes CREATING → Backfilling → ACTIVE).
+      description.VectorIndexes = vectorIndexes.map((index) => ({
+        ...vectorIndexDefinition(index),
+        IndexStatus: 'ACTIVE',
+        IndexArn: vectorIndexArnFor(account, region, record.tableName, index.indexName),
+        ItemCount: indexStats.get(index.indexName)!.count,
+        IndexSizeBytes: indexStats.get(index.indexName)!.size,
+      }));
+    }
     if (record.streamSpecification?.StreamEnabled) {
       description.StreamSpecification = record.streamSpecification;
       description.LatestStreamLabel = record.latestStreamLabel;
@@ -480,6 +592,7 @@ export class DynamoDbEmulator implements TargetEmulator {
     }
     validateItemKey(record, item);
     assertItemSize(item);
+    validateVectorAttributes(record, item);
     const returnValues = this.readReturnValues(input.ReturnValues, ['NONE', 'ALL_OLD']);
     const ctx = this.expressionContext(input);
     assertPlaceholdersUsed([input.ConditionExpression as string | undefined], ctx);
@@ -490,7 +603,7 @@ export class DynamoDbEmulator implements TargetEmulator {
     const stored = structuredClone(item);
     items.put(key, stored);
     this.invalidateTtlMark(region, record.tableName);
-    this.streams.append(region, record.tableName, {
+    this.recordChange(region, record, {
       eventName: old ? 'MODIFY' : 'INSERT',
       keys: keyMapOf(record, stored),
       oldImage: old,
@@ -534,7 +647,7 @@ export class DynamoDbEmulator implements TargetEmulator {
     this.checkCondition(input, ctx, old);
     if (old) {
       items.delete(key);
-      this.streams.append(region, record.tableName, {
+      this.recordChange(region, record, {
         eventName: 'REMOVE',
         keys: keyMapOf(record, old),
         oldImage: old,
@@ -576,9 +689,10 @@ export class DynamoDbEmulator implements TargetEmulator {
     }
     this.assertKeyUnchanged(record, updated, keyInput);
     assertItemSize(updated);
+    validateVectorAttributes(record, updated);
     items.put(key, updated);
     this.invalidateTtlMark(region, record.tableName);
-    this.streams.append(region, record.tableName, {
+    this.recordChange(region, record, {
       eventName: old ? 'MODIFY' : 'INSERT',
       keys: keyMapOf(record, updated),
       oldImage: old,
@@ -639,6 +753,71 @@ export class DynamoDbEmulator implements TargetEmulator {
   private async scan(region: string, input: Record<string, unknown>): Promise<object> {
     rejectLegacyParams(input, ['ScanFilter', 'ConditionalOperator', 'AttributesToGet']);
     return this.page(region, input, executeScan);
+  }
+
+  // SearchVectors (X-Amz-Target DynamoDB_20120810.SearchVectors). Real SDKs
+  // route it to a dedicated `search-ddb` host, but a configured endpoint
+  // overrides that, so it arrives here on the ordinary JSON 1.0 route.
+  private async searchVectors(region: string, input: Record<string, unknown>): Promise<object> {
+    const record = await this.requireTable(region, input.TableName);
+    const index = vectorIndexesOf(record).find((candidate) => candidate.indexName === input.IndexName);
+    if (!index) {
+      throw validationError(`The table does not have the specified index: ${String(input.IndexName)}`);
+    }
+    const query = parseSearchVector(input.SearchVector, index);
+    const topK = parseTopK(input.TopK);
+    const ctx = this.expressionContext(input);
+    const condition = typeof input.SearchConditionExpression === 'string' ? input.SearchConditionExpression : undefined;
+    const projection = typeof input.ProjectionExpression === 'string' ? input.ProjectionExpression : undefined;
+    assertPlaceholdersUsed([condition, projection], ctx);
+    const { hash, filters } = resolveSearchCondition(
+      index,
+      condition === undefined ? [] : parseSearchConditionExpression(condition, ctx),
+    );
+
+    // Only projected attributes can be returned; asking for anything else is
+    // an error rather than a silently missing field.
+    const projected = projectedNames(record, index);
+    if (projection !== undefined && projected) {
+      for (const path of parseProjectionExpression(projection, ctx)) {
+        const name = (path[0] as { attr: string }).attr;
+        if (!projected.has(name)) {
+          throw validationError(
+            `One or more parameter values were invalid: ProjectionExpression references ${name}, ` +
+            `which is not projected into vector index ${index.indexName}`,
+          );
+        }
+      }
+    }
+
+    const items = await this.itemsFor(region, record.tableName);
+    const outcome = this.vectors.search(
+      region, record, index, items.entries(), (item) => this.expiresAtMs(record, item),
+      { query, topK, hash, filters, nowMs: Date.now() },
+    );
+    // Expired items were skipped by the ranking; purging them through the
+    // normal read path emits the TTL REMOVE record and evicts them from the
+    // cache, exactly as a GetItem on them would.
+    for (const key of outcome.expired) this.liveItem(region, record, items, key);
+
+    const response: Record<string, unknown> = {
+      SearchResults: outcome.results.map(({ key, score }) => {
+        const item = items.get(key) as AttributeMap;
+        return {
+          Item: projection === undefined
+            ? defaultResultItem(item, projected, index.vectorAttribute)
+            : applyProjection(projection, structuredClone(item), ctx),
+          Score: score,
+        };
+      }),
+    };
+    const mode = input.ReturnConsumedCapacity;
+    if (mode === 'TOTAL' || mode === 'INDEXES') {
+      // An approximation: the f32 bytes of the search vector. AWS meters the
+      // bytes the search reads; nothing here throttles on it.
+      response.ConsumedCapacity = { VectorSearchRequestBytes: index.dimensions * 4 };
+    }
+    return response;
   }
 
   private async page(
@@ -705,12 +884,13 @@ export class DynamoDbEmulator implements TargetEmulator {
           if (!item) throw validationError('One or more parameter values were invalid: PutRequest must carry an Item');
           validateItemKey(record, item);
           assertItemSize(item);
+          validateVectorAttributes(record, item);
           const key = canonicalKey(record, item);
           const old = items.get(key) as AttributeMap | undefined;
           const stored = structuredClone(item);
           items.put(key, stored);
           this.invalidateTtlMark(region, tableName);
-          this.streams.append(region, tableName, {
+          this.recordChange(region, record, {
             eventName: old ? 'MODIFY' : 'INSERT',
             keys: keyMapOf(record, stored),
             oldImage: old,
@@ -722,7 +902,7 @@ export class DynamoDbEmulator implements TargetEmulator {
           const old = items.get(key) as AttributeMap | undefined;
           if (old) {
             items.delete(key);
-            this.streams.append(region, tableName, { eventName: 'REMOVE', keys: keyMapOf(record, old), oldImage: old });
+            this.recordChange(region, record, { eventName: 'REMOVE', keys: keyMapOf(record, old), oldImage: old });
           }
         } else {
           throw validationError('One or more parameter values were invalid: A request entry must carry a PutRequest or a DeleteRequest');
@@ -863,17 +1043,23 @@ export class DynamoDbEmulator implements TargetEmulator {
           return reason;
         }
       }
-      if (op.kind === 'Put') {
-        entry.stored = structuredClone(op.item!);
-      } else if (op.kind === 'Update') {
+      if (op.kind === 'Put' || op.kind === 'Update') {
         // Dry-run the update NOW so a failing op cancels the transaction
         // (AWS reports it as a ValidationError cancellation reason) instead
-        // of surfacing after earlier ops were already written.
+        // of surfacing after earlier ops were already written. A vector
+        // attribute that fails its index's rules cancels the same way, for a
+        // Put as well as an Update.
         try {
-          const base = entry.old ?? (structuredClone(keyInput) as AttributeMap);
-          const stored = applyUpdate(op.updateExpression!, base, op.ctx);
-          this.assertKeyUnchanged(record, stored, keyInput);
-          assertItemSize(stored);
+          let stored: AttributeMap;
+          if (op.kind === 'Put') {
+            stored = structuredClone(op.item!);
+          } else {
+            const base = entry.old ?? (structuredClone(keyInput) as AttributeMap);
+            stored = applyUpdate(op.updateExpression!, base, op.ctx);
+            this.assertKeyUnchanged(record, stored, keyInput);
+            assertItemSize(stored);
+          }
+          validateVectorAttributes(record, stored);
           entry.stored = stored;
         } catch (err) {
           if (err instanceof AwsError && err.code === 'ValidationException') {
@@ -900,7 +1086,7 @@ export class DynamoDbEmulator implements TargetEmulator {
       if (op.kind === 'Delete') {
         if (old) {
           items.delete(canonical);
-          this.streams.append(region, record.tableName, {
+          this.recordChange(region, record, {
             eventName: 'REMOVE',
             keys: keyMapOf(record, old),
             oldImage: old,
@@ -910,7 +1096,7 @@ export class DynamoDbEmulator implements TargetEmulator {
       }
       items.put(canonical, stored!);
       this.invalidateTtlMark(region, record.tableName);
-      this.streams.append(region, record.tableName, {
+      this.recordChange(region, record, {
         eventName: old ? 'MODIFY' : 'INSERT',
         keys: keyMapOf(record, stored!),
         oldImage: old,
