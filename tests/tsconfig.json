@@ -26,7 +26,12 @@
     "sourceMap": false
   },
   "include": [
-    "**/*.ts"
+    "**/*.ts",
+    // tests/unit/ui imports the dashboard's graph modules, which type their
+    // AWS marks through the app's `TIconRegistry` augmentation.
+    "../src/ui/src/icons/aws/registry.generated.d.ts",
+    // …and `services/api.ts` reads `import.meta.env` (Vite client types).
+    "../src/ui/src/vite-env.d.ts"
   ],
   "exclude": [
     "node_modules"

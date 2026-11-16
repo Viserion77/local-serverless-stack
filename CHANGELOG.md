@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-11-16
+
+### Added
+
+- **Stack map** — a new dashboard page (`/stack`, nav entry, en/pt-BR/es) draws every registered
+  service as one architecture diagram derived from the packaged CloudFormation templates and
+  `serverless-state.json`: APIs and rules on the left, each service in a frame, functions carrying their
+  routes as verb-coloured chips, the shared execution role, tables, buckets and queues (each DLQ tucked
+  under its queue) with read/write arrowheads, third-party HTTP hosts on the right, cross-service links
+  resolved between frames, right-angle connectors that never share a segment, a legend of only what is
+  drawn, and live counters LSS already serves (calls/errors, queue depth). Pan, zoom, fit, hover focus,
+  keyboard focus, per-service expand/collapse; past 8 services it opens collapsed.
+- **`GET /api/stack/graph`** (`?expand=a,b|*`) — the stack-wide graph: external stubs resolved into
+  `cross-service` edges (`via` keeps the evidence), collapsed services as `service` nodes with
+  aggregate counts and weighted edges. `client.stack.graph({ expand })` and the `lss_stack_graph` MCP
+  tool (32 tools). A unit benchmark pins the 40-service × 60-function × 10-table shape: collapsed
+  41 nodes / 120 edges, under 200 KB.
+- **Wiring graph v2** (additive): edge `access` (read/write/readwrite/invoke/publish/consume/trigger)
+  from an exported IAM classification table or the edge kind; node `group`, `facts` (runtime/timeout/
+  memory, key schema, GSIs, stream, TTL, vector-index count, FIFO, visibility, `maxReceiveCount`,
+  `dlqOf`…) and `routes`; new `api` and `ssm` node kinds; third-party HTTP hosts from env vars as
+  `external` nodes with `service: "http"`.
+- **`web-function` node kind** — Lambda Web Functions on the wiring graph and the stack map: one card
+  per function (Lambda mark, `WEB` chip with the local URL, runtime, revision count, endpoint names),
+  IAM edges from the revisions' execution role, environment edges from their variables, and an `invoke`
+  edge from an event function that references the endpoint's `DomainName` (`examples/self-hosted`:
+  `checkWebApp → orders-web`). Table cards show the vector-index count from the parsed
+  `VectorIndexes`.
+- **Layout v2** for both diagrams — zones, service frames, barycenter crossing reduction, DLQ under
+  queue, orthogonal routing with interval-coloured channels and corridors; deterministic for any input
+  order, under 50 ms for 600 cards / 1 500 connectors (unit-tested).
+- **Download SVG** on both graph screens — a self-contained SVG of the same layout;
+  `docs/readme/stack-map-{light,dark}.svg` is `examples/self-hosted` exported that way.
+- **README cards** — `npm run readme:cards` generates the "Start here" and "What the engine emulates"
+  (including **Web Functions** and **Vector search**) link cards (`docs/readme/cards/`, dark and light) from `scripts/readme-cards.json`; a guard test keeps
+  them byte-identical to the manifest and their links resolvable.
+
+### Changed
+
+- The service detail's wiring diagram is drawn on TreeUI's `TCanvasSurface` with the new layout and
+  cards; the canvas row of rule 2's exception table in `src/ui/ui-ux.md` is gone.
+- Dashboard on `@treeui/vue` 0.34.3 (from 0.31.0). npm now nests `@treeui/icons` under it, so the AWS
+  icon registry augmentation targets `@treeui/vue`; `TTextarea`'s `spellcheck` is now a boolean prop.
+- On a shared execution role, the statements osls writes for an event-source mapping no longer draw a
+  second role → queue/stream edge, and an env var naming a resource the shared role already grants is
+  no longer drawn as an inferred edge on top of the grant.
+- `examples/self-hosted`: the notifications and catalog services declare their IAM grants (catalog's
+  include the DynamoDB grants its vector handlers use on `catalog-embeddings`), and billing's
+  `processOrder` declares a third-party payments URL, so the stack map draws them.
+
+### Fixed
+
+- `parseResourceArn` kept only the first path segment of a Secrets Manager secret whose name contains
+  slashes (`secret:acme/orders/hmac-AbCdEf`), so such a grant never matched the declared secret.
+
 ## [1.4.0] - 2026-11-15
 
 ### Added
