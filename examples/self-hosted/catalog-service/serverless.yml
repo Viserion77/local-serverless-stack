@@ -17,6 +17,25 @@ provider:
     # DynamoDB vector search: the embeddings table and its vector index.
     EMBEDDINGS_TABLE: catalog-embeddings
     EMBEDDINGS_INDEX: ProductEmbeddingIndex
+  # Declaration, not enforcement: OpenSearch Serverless has one data-plane
+  # action, so the stack map draws this grant as read & write.
+  iam:
+    role:
+      statements:
+        - Effect: Allow
+          Action:
+            - aoss:APIAccessAll
+          Resource:
+            Fn::GetAtt: [ProductsCollection, Arn]
+        # The vector handlers: putEmbedding writes, similarProducts reads the
+        # source item and runs the vector search.
+        - Effect: Allow
+          Action:
+            - dynamodb:PutItem
+            - dynamodb:GetItem
+            - dynamodb:SearchVectors
+          Resource:
+            Fn::GetAtt: [CatalogEmbeddingsTable, Arn]
 
 custom:
   lss:

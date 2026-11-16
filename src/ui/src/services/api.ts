@@ -738,6 +738,7 @@ export interface ServiceDetail extends ServiceSummary {
  */
 export type GraphNodeKind =
   | 'lambda'
+  | 'web-function'
   | 'dynamodb'
   | 'sqs'
   | 'sns'
@@ -746,9 +747,18 @@ export type GraphNodeKind =
   | 'event-rule'
   | 'opensearch'
   | 'secret'
+  | 'ssm'
   | 'route'
+  | 'api'
   | 'iam-role'
+  // Stack graph only: a whole service drawn collapsed.
+  | 'service'
   | 'external';
+
+/** Which way data/control moves along an edge (graph model v2). */
+export type GraphEdgeAccess = 'read' | 'write' | 'readwrite' | 'invoke' | 'publish' | 'consume' | 'trigger';
+
+export type GraphFactValue = string | number | boolean;
 
 export interface GraphNode {
   id: string;
@@ -758,12 +768,21 @@ export interface GraphNode {
   // Route nodes.
   method?: string;
   path?: string;
+  // Route nodes: the `api` node serving the route.
+  api?: string;
   // Lambda nodes.
   fullName?: string;
   handler?: string;
-  // External nodes: referenced by this service, declared by another.
+  // Lambda nodes: the routes the function serves (its card's chips).
+  routes?: { method: string; path: string }[];
+  // External nodes: referenced by this service, declared by another. `service`
+  // is `http` for a third-party host found in an environment variable.
   arn?: string;
   service?: string;
+  // The owning service (a frame on the canvas), or `external`.
+  group?: string;
+  // Display-only card facts.
+  facts?: Record<string, GraphFactValue>;
 }
 
 /**
@@ -780,7 +799,9 @@ export type GraphEdgeKind =
   | 'sns-subscription'
   | 'redrive'
   | 'iam'
-  | 'env';
+  | 'env'
+  // Stack graph only: resolved into another service's resource.
+  | 'cross-service';
 
 export interface GraphEdge {
   id: string;
@@ -794,10 +815,32 @@ export interface GraphEdge {
   // The env var is identical on every function of the service, so it came from
   // `provider.environment` and says nothing about this one function.
   serviceWide?: boolean;
+  access?: GraphEdgeAccess;
+  // Stack graph only: the original kind of a `cross-service` edge, and how many
+  // edges an aggregated arrow between collapsed services stands for.
+  via?: GraphEdgeKind;
+  weight?: number;
 }
 
 export interface ServiceGraph {
   service: string;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  edgeKinds: GraphEdgeKind[];
+  warnings: string[];
+}
+
+/** One service of the stack map — `GET /api/stack/graph`. */
+export interface StackServiceSummary {
+  name: string;
+  expanded: boolean;
+  counts: Partial<Record<GraphNodeKind, number>>;
+  warnings: number;
+}
+
+export interface StackGraph {
+  services: StackServiceSummary[];
+  expanded: string[];
   nodes: GraphNode[];
   edges: GraphEdge[];
   edgeKinds: GraphEdgeKind[];
@@ -989,6 +1032,10 @@ export const api = {
   getService: (name: string) => request<ServiceDetail>(`/api/services/${encodeURIComponent(name)}`),
   getServiceGraph: (name: string) =>
     request<ServiceGraph>(`/api/services/${encodeURIComponent(name)}/graph`),
+  // `expand` undefined → the server default (everything up to 8 services);
+  // '*' → everything; a list (possibly empty) → exactly those.
+  getStackGraph: (expand?: readonly string[] | '*') =>
+    request<StackGraph>(`/api/stack/graph${expand === undefined ? '' : `?expand=${encodeURIComponent(expand === '*' ? '*' : expand.join(','))}`}`),
   registerService: (servicePath: string) =>
     request<RegisterServiceResult>('/api/services/register', {
       method: 'POST',

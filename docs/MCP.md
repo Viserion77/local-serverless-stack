@@ -79,6 +79,7 @@ that text before asking a human to approve the call.
 | `lss_ports` | Every local port: the stack's own (dashboard + API + AWS wire) plus each service's API and invoke listeners |
 | `lss_services` | Registered services: resources, routes, runtime status, `runtimeWarm` |
 | `lss_service_graph` | One service's declared wiring: nodes (resources, routes, shared IAM roles, cross-service references) and the edges between them, each with its evidence and `declared`/`inferred` confidence |
+| `lss_stack_graph` | The whole stack's declared wiring on one map: every service's graph with references to another service's resources resolved into `cross-service` edges (`via` = the evidence), edge `access` (read/write/…), and collapsed `service` nodes with weighted edges past 8 services; optional `expand` (comma-separated names, `*`, or empty) |
 | `lss_scan_services` | Serverless/osls services found under the project root, with installed/packaged/registered flags, effective ports and package command |
 | `lss_register_service` | **MUTATES.** Register a service by path — the orchestrator packages and resolves the rest |
 | `lss_resources` / `lss_resource_owners` | Provisioned resources, and which service declared each |

@@ -456,6 +456,7 @@ router.get('/:name/graph', async (req: Request, res: Response) => {
       functions: metadata.functions,
       routes: metadata.routes,
       authorizers: metadata.authorizers,
+      webFunctions: metadata.webFunctions,
     }));
   } catch (error) {
     console.error('Error building service graph:', error);

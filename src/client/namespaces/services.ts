@@ -72,10 +72,13 @@ export interface PrepareServiceResult {
  * What a node stands for. `route` and `iam-role` have no counterpart among the
  * provisioned resource types: a route is declared in `serverless-state.json`,
  * and a role is never provisioned. `external` is anything the service
- * references but does not declare — the cross-service links.
+ * references but does not declare — the cross-service links. `api` is the API
+ * a service's routes are served by; `ssm` an SSM parameter; `service` appears
+ * only in the stack graph, for a service drawn collapsed.
  */
 export type ServiceGraphNodeKind =
   | 'lambda'
+  | 'web-function'
   | 'dynamodb'
   | 'sqs'
   | 'sns'
@@ -84,9 +87,19 @@ export type ServiceGraphNodeKind =
   | 'event-rule'
   | 'opensearch'
   | 'secret'
+  | 'ssm'
   | 'route'
+  | 'api'
   | 'iam-role'
+  | 'service'
   | 'external';
+
+/**
+ * Which way data or control moves along an edge: a `read` flows from the store
+ * to the function, a `write` from the function to the store. Derived from the
+ * granted IAM actions (`iam` edges) or from the edge kind (structural edges).
+ */
+export type ServiceGraphEdgeAccess = 'read' | 'write' | 'readwrite' | 'invoke' | 'publish' | 'consume' | 'trigger';
 
 /**
  * How an edge was established. The distinction is the point of the payload:
@@ -102,7 +115,9 @@ export type ServiceGraphEdgeKind =
   | 'sns-subscription'
   | 'redrive'
   | 'iam'
-  | 'env';
+  | 'env'
+  // Stack graph only: resolved to a resource another service declares.
+  | 'cross-service';
 
 export interface ServiceGraphNode {
   // Stable within one graph: `<kind>:<logicalId>` for declared resources,
@@ -119,9 +134,18 @@ export interface ServiceGraphNode {
   fullName?: string;
   handler?: string;
   // External nodes only: the ARN (or bare name) that could not be attributed to
-  // anything this service declares, plus the AWS service it names.
+  // anything this service declares, plus the AWS service it names (`http` for a
+  // third-party host found in an environment variable).
   arn?: string;
   service?: string;
+  // The owning service, or `external`.
+  group?: string;
+  // Route nodes only: the id of the `api` node serving the route.
+  api?: string;
+  // Lambda nodes only: the routes the function serves.
+  routes?: Array<{ method: string; path: string }>;
+  // Display-only card facts (runtime, key schema, FIFO, counts…).
+  facts?: Record<string, string | number | boolean>;
 }
 
 export interface ServiceGraphEdge {
@@ -140,6 +164,11 @@ export interface ServiceGraphEdge {
   // from `provider.environment` and says nothing about this function in
   // particular, so a consumer should subordinate it.
   serviceWide?: boolean;
+  access?: ServiceGraphEdgeAccess;
+  // Stack graph only: the original kind of a `cross-service` edge, and how many
+  // edges an aggregated edge between collapsed services stands for.
+  via?: ServiceGraphEdgeKind;
+  weight?: number;
 }
 
 export interface ServiceGraph {
