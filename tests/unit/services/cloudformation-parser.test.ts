@@ -163,6 +163,34 @@ describe('parseDynamoDB', () => {
     expect(res.localSecondaryIndexes).toHaveLength(1);
   });
 
+  it('parses VectorIndexes, coercing a numeric-string Dimensions (a resolved String parameter)', () => {
+    const vectorIndex = (name: string, dimensions: unknown) => ({
+      IndexName: name,
+      VectorAttribute: { AttributeName: 'embedding' },
+      SearchSchema: [{ AttributeName: 'category', SearchSchemaElementType: 'HASH' }],
+      Projection: { ProjectionType: 'ALL' },
+      Dimensions: dimensions,
+      DistanceFunction: 'COSINE',
+    });
+    const [res, empty] = parser.parse({
+      Resources: {
+        T: {
+          Type: 'AWS::DynamoDB::Table',
+          Properties: {
+            TableName: 'catalog-embeddings',
+            BillingMode: 'PAY_PER_REQUEST',
+            VectorIndexes: [vectorIndex('ByNumber', 8), vectorIndex('ByString', '1536'), vectorIndex('Garbage', 'eight')],
+          },
+        },
+        Empty: { Type: 'AWS::DynamoDB::Table', Properties: { VectorIndexes: [] } },
+      },
+    } as never) as DynamoDBResource[];
+    expect(res.vectorIndexes!.map((index) => index.Dimensions)).toEqual([8, 1536, 'eight']);
+    expect(res.vectorIndexes![0]).toEqual(vectorIndex('ByNumber', 8));
+    // Garbage stays as declared: the engine answers the AWS ValidationException.
+    expect(empty.vectorIndexes).toBeUndefined();
+  });
+
   it('parses TimeToLiveSpecification enabled and disabled variants', () => {
     const resources = parser.parse({
       Resources: {

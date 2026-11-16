@@ -13,7 +13,9 @@ import {
 import { beginsWith } from './expressions/evaluate.js';
 import type { CompiledCondition, ExpressionContext, SortKeyOperator } from './expressions/expression-types.js';
 import type { IndexRecord, KeyAttribute, TableRecord } from './schema.js';
-import { canonicalKey, itemSizeBytes, tableKeyAttrs, validateProvidedKey, wireTypeOf } from './schema.js';
+import {
+  canonicalKey, itemSizeBytes, tableKeyAttrs, validateProvidedKey, vectorIndexesOf, wireTypeOf,
+} from './schema.js';
 
 // AWS caps one Query/Scan page at 1 MB of data READ — measured before the
 // FilterExpression runs, so a selective filter over big items can return few
@@ -62,6 +64,13 @@ function resolveView(table: TableRecord, indexName: unknown): View {
   const index = [...table.globalSecondaryIndexes, ...table.localSecondaryIndexes]
     .find((idx) => idx.indexName === indexName);
   if (!index) {
+    // A vector index answers SearchVectors only — AWS refuses Query, Scan
+    // and PartiQL against it.
+    if (vectorIndexesOf(table).some((candidate) => candidate.indexName === indexName)) {
+      throw validationError(
+        `The index ${String(indexName)} is a vector index: it can only be read with SearchVectors, not Query or Scan`,
+      );
+    }
     throw validationError(`The table does not have the specified index: ${String(indexName)}`);
   }
   const types = new Map(table.attributeDefinitions.map((d) => [d.AttributeName, d.AttributeType]));

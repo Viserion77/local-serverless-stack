@@ -121,6 +121,7 @@ export interface DynamoTableSummary {
   attributeDefinitions: DynamoAttrDef[];
   hasGsi: boolean;
   hasLsi: boolean;
+  hasVectorIndex: boolean;
   streamEnabled: boolean;
   ttl: DynamoTtlInfo;
   billingMode?: string;
@@ -137,10 +138,24 @@ export interface DynamoIndex {
   ItemCount?: number;
 }
 
+// DescribeTable's VectorIndexDescription (DynamoDB vector search).
+export interface DynamoVectorIndex {
+  IndexName?: string;
+  IndexStatus?: string;
+  VectorAttribute?: { AttributeName?: string };
+  SearchSchema?: { AttributeName?: string; SearchSchemaElementType?: 'HASH' | 'INLINE_FILTER' | string }[];
+  Projection?: { ProjectionType?: string; NonKeyAttributes?: string[] };
+  Dimensions?: number;
+  DistanceFunction?: 'COSINE' | 'EUCLIDEAN' | 'DOT_PRODUCT' | string;
+  ItemCount?: number;
+  IndexSizeBytes?: number;
+}
+
 export interface DynamoTableDetail extends DynamoTableSummary {
   arn?: string;
   gsis: DynamoIndex[];
   lsis: DynamoIndex[];
+  vectorIndexes: DynamoVectorIndex[];
   streamArn?: string;
   streamViewType?: string;
 }
@@ -162,6 +177,23 @@ export interface DynamoScanQueryOutput {
   count: number;
   scannedCount?: number;
   lastEvaluatedKey?: Record<string, unknown>;
+}
+
+// POST /api/dynamo/tables/:name/vector-search (mirrors the explorer's
+// VectorSearchInput / VectorSearchOutput).
+export interface DynamoVectorSearchInput {
+  indexName?: string;
+  vector?: number[];
+  similarTo?: Record<string, unknown>;
+  topK?: number;
+  filter?: Record<string, unknown>;
+}
+
+export interface DynamoVectorSearchOutput {
+  indexName: string;
+  distanceFunction?: string;
+  source: 'vector' | 'similarTo';
+  results: { item: Record<string, unknown>; score: number }[];
 }
 
 export interface SeedFileEntry {
@@ -1149,6 +1181,11 @@ export const api = {
     }),
   queryDynamoTable: (name: string, input: DynamoScanQueryInput) =>
     request<DynamoScanQueryOutput>(`/api/dynamo/tables/${encodeURIComponent(name)}/query`, {
+      method: 'POST',
+      body: JSON.stringify(input),
+    }),
+  searchDynamoVectors: (name: string, input: DynamoVectorSearchInput) =>
+    request<DynamoVectorSearchOutput>(`/api/dynamo/tables/${encodeURIComponent(name)}/vector-search`, {
       method: 'POST',
       body: JSON.stringify(input),
     }),

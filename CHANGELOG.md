@@ -42,6 +42,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `GET /orders/web-check`, an event function calling it through the resolved `DomainName`; the
   `example self-hosted: full demo` task drives it, and a new integration suite asserts it end to end.
 
+## [1.3.0] - 2026-11-15
+
+### Added
+
+- **DynamoDB vector indexes and `SearchVectors` on the self engine.** `CreateTable.VectorIndexes`,
+  `DescribeTable.Table.VectorIndexes` and the `VectorIndexUpdates` subset of `UpdateTable` with AWS
+  validation (on-demand tables only, 5 per table and the shared 20-GSI quota, 1–4096 dimensions, at
+  most one `HASH` and 18 `INLINE_FILTER` attributes, one index operation per call). Writes are
+  validated against every vector index (dimensions, `HASH` type). `SearchVectors` runs an exact
+  k-NN with AWS scores (`COSINE` distance, `EUCLIDEAN`, `DOT_PRODUCT`), `HASH`-scoped
+  `SearchConditionExpression` with inline filters, projection rules and AWS-shaped errors; a lazy
+  per-index cache is kept in step by every write path and rebuilt after a restart. `Query`/`Scan`
+  against a vector index are refused.
+- **`AWS::DynamoDB::Table.VectorIndexes` provisioning.** Tables come up with their vector indexes;
+  re-registering adds missing ones (one `UpdateTable` per index) and warns about undeclared ones
+  instead of deleting them; a table that is not `PAY_PER_REQUEST` is created without its vector
+  indexes plus an actionable warning.
+- **Vector search everywhere you inspect the stack.** `POST /api/dynamo/tables/:name/vector-search`
+  (`vector` or `similarTo` an item, `topK`, `filter`), `client.dynamo.searchVectors()`, the MCP tool
+  `lss_dynamo_vector_search`, and a dashboard *Vector search* tab plus vector-index cards on the
+  table page (en / pt-BR / es).
+- **Example:** `examples/self-hosted/catalog-service` gains a `catalog-embeddings` table with a
+  `ProductEmbeddingIndex`, `PUT /products/{id}/embedding` (deterministic toy embedding) and
+  `GET /products/{id}/similar`, seeded with products whose neighbours are obvious and asserted by a
+  new integration suite.
+
+### Changed
+
+- `@aws-sdk/client-dynamodb` and `@aws-sdk/lib-dynamodb` bumped to `3.1169.0` (the first releases
+  that serialize `VectorIndexes` and ship `SearchVectorsCommand`); `@aws-sdk/util-dynamodb` pinned to
+  `3.996.9`, its matching release.
+
 ## [1.2.2] - 2026-11-09
 
 ### Security

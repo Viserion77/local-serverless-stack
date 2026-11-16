@@ -30,6 +30,7 @@ coverage/
 tests/.lss-integration/
 tests/.lss-client-integration/
 tests/.lss-web-functions/
+tests/.lss-vectors-integration/
 
 # Cache
 .cache/

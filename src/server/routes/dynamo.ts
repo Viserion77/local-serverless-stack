@@ -90,6 +90,21 @@ router.post('/tables/:name/query', async (req: Request, res: Response) => {
   }
 });
 
+// Similarity search over a DynamoDB vector index (SearchVectors). Body: the
+// explorer's VectorSearchInput — `vector` or `similarTo` (an item key whose
+// embedding becomes the query), `topK`, `filter`, `indexName`.
+router.post('/tables/:name/vector-search', async (req: Request, res: Response) => {
+  const { name } = req.params;
+  if (!isValidName(name)) return fail(res, new Error('Invalid table name'), 400);
+  const body = req.body ?? {};
+  if (typeof body !== 'object' || Array.isArray(body)) return fail(res, new Error('body must be a JSON object'), 400);
+  try {
+    return res.json(await explorer.searchVectors(name, body, getRegion(req)));
+  } catch (error) {
+    return fail(res, error, 400);
+  }
+});
+
 router.post('/tables/:name/items/get', async (req: Request, res: Response) => {
   const { name } = req.params;
   if (!isValidName(name)) return fail(res, new Error('Invalid table name'), 400);

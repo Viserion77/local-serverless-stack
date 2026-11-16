@@ -138,6 +138,7 @@ export interface DynamoTableSummary {
   attributeDefinitions: unknown[];
   hasGsi: boolean;
   hasLsi: boolean;
+  hasVectorIndex: boolean;
   streamEnabled: boolean;
   ttl: TtlInfo;
   billingMode?: string;
@@ -148,6 +149,7 @@ export interface DynamoTableDetail extends DynamoTableSummary {
   arn?: string;
   gsis: unknown[];
   lsis: unknown[];
+  vectorIndexes: unknown[];
   streamArn?: string;
   streamViewType?: string;
 }
@@ -161,6 +163,25 @@ export interface ScanQueryInput {
   limit?: number;
   exclusiveStartKey?: Record<string, unknown>;
   scanIndexForward?: boolean;
+}
+// SearchVectors in the explorer's plain-JSON dialect (see VectorSearchInput
+// in dynamo-explorer.ts). Exactly one of `vector` / `similarTo`.
+export interface VectorSearchInput {
+  indexName?: string;
+  vector?: number[];
+  similarTo?: Record<string, unknown>;
+  topK?: number;
+  filter?: Record<string, unknown>;
+  searchConditionExpression?: string;
+  expressionAttributeNames?: Record<string, string>;
+  expressionAttributeValues?: Record<string, unknown>;
+  projectionExpression?: string;
+}
+export interface VectorSearchOutput {
+  indexName: string;
+  distanceFunction?: string;
+  source: 'vector' | 'similarTo';
+  results: Array<{ item: Record<string, unknown>; score: number }>;
 }
 export interface ScanQueryOutput {
   items: Record<string, unknown>[];

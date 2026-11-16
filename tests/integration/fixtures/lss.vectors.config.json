@@ -1,0 +1,19 @@
+{
+  "serverPort": 14597,
+  "engine": "self",
+  "selfEngine": {
+    "port": 14597
+  },
+  "stateDir": "tests/.lss-vectors-integration",
+  "persistence": false,
+  "region": "us-west-2",
+  "seedsDir": "examples/self-hosted/seeds",
+  "autoPackage": true,
+  "packageCommand": "npx serverless package",
+  "packageTimeoutMs": 300000,
+  "lambdaRuntime": {
+    "enabled": true,
+    "execution": "source",
+    "watch": false
+  }
+}
