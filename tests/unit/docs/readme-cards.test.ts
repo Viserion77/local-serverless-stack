@@ -11,7 +11,6 @@ import fs from 'fs';
 import path from 'path';
 
 // CommonJS on purpose (the .mjs generator loads it too); `allowJs` types it.
-// eslint-disable-next-line @typescript-eslint/no-require-imports
 const lib = require('../../../scripts/readme-cards-lib.js');
 
 const ROOT = path.resolve(__dirname, '../../..');
